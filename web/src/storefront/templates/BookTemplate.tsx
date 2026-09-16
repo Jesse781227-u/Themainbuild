@@ -1,0 +1,6 @@
+import { CategoryTabs, Shell } from './TemplateBase';
+import type { TemplateHomeData } from '@/storefront/template-library';
+
+export default function BookTemplate(data: TemplateHomeData) {
+  return <Shell data={data} className="max-w-3xl"><CategoryTabs data={data} /><section className="grid gap-3">{data.products.map(product => <button key={product.id} onClick={() => data.onProduct(product)} className="flex items-center gap-4 border p-4 text-left" style={{ borderColor: data.theme.colors.border, borderRadius: data.theme.radius.card }}><div className="h-16 w-16 shrink-0 overflow-hidden" style={{ background: data.theme.colors.surface, borderRadius: data.theme.radius.image }}>{(product.images?.[0] || product.image) && <img src={product.images?.[0] || product.image} alt="" className="h-full w-full object-cover" />}</div><span className="min-w-0 flex-1"><strong className="block">{product.name}</strong><small className="mt-1 block opacity-60">Available to book</small></span><strong style={{ color: data.theme.colors.accent }}>₦{Number(product.price).toLocaleString('en-NG')}</strong></button>)}</section></Shell>;
+}

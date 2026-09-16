@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ShoppingBag, X, Plus, Minus, Check } from 'lucide-react';
 import { themes } from '@/storefront/themes';
 
-export type StorefrontProduct = { id:string; name:string; description?:string; price:number; availability?:boolean; channels?:{web?:boolean}; image?:string; images?:string[]; category?:string; categoryId?:string };
+export type StorefrontProduct = { id:string; name:string; description?:string; price:number; inventoryQty?:number; availability?:boolean; channels?:{web?:boolean}; image?:string; images?:string[]; category?:string; categoryId?:string };
 type Props = { themeId:string; name:string; headline:string; description:string; products:StorefrontProduct[]; onCheckout?:(customer:{name:string;phone:string;address:string})=>Promise<void> };
 
 export function StorefrontRenderer({themeId,name,headline,description,products,onCheckout}:Props){
