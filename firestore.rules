@@ -4,7 +4,7 @@ service cloud.firestore {
     function member(businessId) {
       return request.auth != null && exists(/databases/$(database)/documents/businessMemberships/$(request.auth.uid + '_' + businessId));
     }
-    match /products/{id} { allow read: if resource.data.available == true || resource.data.availability == true || member(resource.data.businessId); allow create, update: if member(request.resource.data.businessId); allow delete: if member(resource.data.businessId); }
+    match /products/{id} { allow read: if resource.data.get('available', false) == true || resource.data.get('availability', false) == true || member(resource.data.businessId); allow create, update: if member(request.resource.data.businessId); allow delete: if member(resource.data.businessId); }
     match /categories/{id} { allow read: if member(resource.data.businessId); allow create, update: if member(request.resource.data.businessId); allow delete: if member(resource.data.businessId); }
     match /inventory/{id} { allow read: if member(resource.data.businessId); allow create, update: if member(request.resource.data.businessId); allow delete: if member(resource.data.businessId); }
     match /carts/{id} { allow read: if member(resource.data.businessId); allow create, update: if member(request.resource.data.businessId); allow delete: if member(resource.data.businessId); }

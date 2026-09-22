@@ -18,7 +18,7 @@ function load(){try{return JSON.parse(localStorage.getItem(STORE_KEY)||'{}')}cat
 function money(n:number){return `Ã¢â€šÂ¦${n.toLocaleString('en-NG')}`}
 
 export default function Shop(){
-  const [tab,setTab]=useState<'orders'|'inventory'|'storefront'|'whatsapp'>('orders');
+  const [tab,setTab]=useState<'orders'|'inventory'|'storefront'|'whatsapp'>(() => window.location.pathname.includes('/commerce/products') ? 'inventory' : 'orders');
   const [state,setState]=useState<any>(load); const [orderStatus,setOrderStatus]=useState('new'); const [search,setSearch]=useState(''); const [editing,setEditing]=useState<Product|null>(null); const [selectedProduct,setSelectedProduct]=useState<Product|null>(null); const [category,setCategory]=useState('All'); const [manageOpen,setManageOpen]=useState(false);
   useEffect(()=>localStorage.setItem(STORE_KEY,JSON.stringify(state)),[state]);
   useEffect(()=>{const businessId=currentBusinessId();if(!businessId)return;let active=true;void apiFetch(`/api/v1/businesses/${businessId}/products`).then(async response=>response.ok?response.json():null).then(payload=>{if(!active||!payload?.data)return;setState((current:any)=>payload.data.length?{...current,products:payload.data.map((product:any)=>({...product,category:product.category||product.categoryId||'Uncategorised',media:(product.images||[]).map((url:string,index:number)=>({url,name:`image-${index+1}`,type:'image'}))}))}:current)}).catch(error=>console.error(error));return()=>{active=false}},[]);

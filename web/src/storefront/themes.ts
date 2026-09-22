@@ -742,6 +742,20 @@ export const themesById: Record<string, StorefrontTheme> = Object.fromEntries(
   themes.map(t => [t.id, t])
 );
 
+/** Accept the compact template names used by older storefront records. */
+export const templateAliases: Record<string, string> = {
+  menu: "kitchen-table",
+  book: "soft-petals",
+  market: "runway",
+  drop: "sunset",
+  studio: "studio",
+  everyday: "clean-bright",
+};
+
+export function resolveThemeId(value?: string): string {
+  return templateAliases[value || ""] || value || themes[0].id;
+}
+
 /** Maps theme tokens to CSS custom properties for the commerce engine root. */
 export function cssVars(t: StorefrontTheme): Record<string, string> {
   return {

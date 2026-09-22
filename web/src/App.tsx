@@ -54,8 +54,12 @@ function AuthenticatedApp() {
       <Route path="/marketing" component={Marketing} />
       <Route path="/shop" component={Orders} />
       <Route path="/commerce" component={StoreOverview} />
+      <Route path="/commerce/products/new" component={Orders} />
+      <Route path="/commerce/products" component={Orders} />
+      <Route path="/commerce/orders" component={Orders} />
       <Route path="/ecommerce/storefront" component={StorefrontManagement} />
       <Route path="/ecommerce/storefront/:section" component={StorefrontManagement} />
+      <Route path="/commerce/templates" component={StorefrontManagement} />
       <Route path="/more" component={More} />
       <Route component={NotFound} />
     </Switch>
