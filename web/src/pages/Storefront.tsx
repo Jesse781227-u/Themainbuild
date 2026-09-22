@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import { ArrowLeft, Check, ChevronRight, Home, Menu, Minus, Plus, Search, ShoppingBag, User, X } from 'lucide-react';
-import { themes } from '@/storefront/themes';
+import { resolveThemeId, themes } from '@/storefront/themes';
 import { SelectedTemplateHome } from '@/storefront/template-library';
 import type { StorefrontProduct } from '@/components/storefront/StorefrontRenderer';
 
@@ -15,7 +15,7 @@ const slugify=(value:string)=>value.toLowerCase().trim().replace(/[^a-z0-9]+/g,'
 export default function Storefront(){
   const [,navigate]=useLocation(); const {businessSlug}=useParams<{businessSlug:string}>(); const slug=businessSlug?.trim()||''; const [products,setProducts]=useState<StorefrontProduct[]>([]); const [store,setStore]=useState<any>(null); const [storeCategories,setStoreCategories]=useState<any[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState('');
   const [search,setSearch]=useState(''); const [sort,setSort]=useState('popular'); const [category,setCategory]=useState(''); const [cart,setCart]=useState<CartLine[]>(()=>readCart(slug)); const [customer,setCustomer]=useState<Customer>({name:'',phone:'',email:'',address:'',notes:''}); const [notice,setNotice]=useState('');
-  const parts=window.location.pathname.split('/').filter(Boolean); const page=parts[2]||'home'; const param=parts[3]||''; const branding=store?.branding||{}; const baseTheme=themes.find(item=>item.id===(store?.templateId||store?.template))||themes[0]; const theme={...baseTheme,colors:{...baseTheme.colors,accent:branding.accentColor||branding.primaryColor||baseTheme.colors.accent}}; const businessName=store?.name||slug.replace(/[-_]/g,' ');
+  const parts=window.location.pathname.split('/').filter(Boolean); const page=parts[2]||'home'; const param=parts[3]||''; const branding=store?.branding||{}; const baseTheme=themes.find(item=>item.id===resolveThemeId(store?.templateId||store?.template))||themes[0]; const theme={...baseTheme,colors:{...baseTheme.colors,accent:branding.accentColor||branding.primaryColor||baseTheme.colors.accent}}; const businessName=store?.name||slug.replace(/[-_]/g,' ');
   useEffect(()=>{let alive=true;setLoading(true);setError('');fetch(`${API}/api/v1/storefronts/${encodeURIComponent(slug)}/products`).then(async response=>{if(!response.ok)throw new Error(response.status===404?'This storefront is not available yet.':'We could not load this storefront.');return response.json()}).then(payload=>{if(!alive)return;const categoryRows=payload.data.categories||[];const names=new Map(categoryRows.map((category:any)=>[category.id,category.name]));setStore(payload.data.storefront);setStoreCategories(categoryRows);setProducts((payload.data.products||[]).map((product:StorefrontProduct)=>({...product,category:product.category||names.get(product.categoryId)||product.categoryId})))}).catch(e=>alive&&setError(e instanceof Error?e.message:'We could not load this storefront. Try again.')).finally(()=>alive&&setLoading(false));return()=>{alive=false}},[slug]);
   useEffect(()=>{localStorage.setItem(`${CART_KEY}:${slug}`,JSON.stringify(cart))},[slug,cart]);
   const visible=products.filter(p=>p.availability!==false&&p.channels?.web!==false); const categories=Array.from(new Set(visible.map(p=>p.category||p.categoryId).filter(Boolean).concat(storeCategories.map(c=>c.name).filter(Boolean)))) as string[];
