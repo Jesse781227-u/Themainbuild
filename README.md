@@ -1,6 +1,6 @@
 # Relay
 
-Relay is a merchant operations platform for small and medium businesses in Nigeria. The codebase contains the web dashboard/storefront and an API that owns tenant authorization, catalogue, inventory, orders, customers, delivery, notifications, WhatsApp orchestration, social distribution, and campaigns.
+Relay is a merchant operations platform for small and medium businesses in Nigeria: e-commerce (web storefront and automated WhatsApp commerce) plus CRM and push advertising. The codebase contains the web dashboard/storefront and an API that owns tenant authorization, catalogue, inventory, orders, customers, delivery, notifications, WhatsApp orchestration, and push campaigns.
 
 ## Current architecture decisions
 
@@ -25,7 +25,7 @@ The API validates production environment requirements at startup. Development ma
 ## Repository structure
 
 - `web/` — React/Vite dashboard, onboarding, public storefront, PWA shell, push opt-in
-- `api/` — Express API, Firebase Admin, commerce, delivery, CRM, WhatsApp, social, campaigns
+- `api/` — Express API, Firebase Admin, commerce, delivery, CRM, WhatsApp, and push campaigns
 - `shared/` — shared domain types
 - `firestore.rules`, `storage.rules`, `firebase.json` — Firebase infrastructure configuration
 - `render.yaml` — separate Render web/API service definitions
