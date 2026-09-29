@@ -4,14 +4,14 @@ import {requireRole, requireTenant} from '../middleware/auth';
 import {adminDb} from '../services/firebase-admin';
 import {AppError} from '../lib/errors';
 
-const sectionIds = ['basic','social','branding','location','inventory','fulfillment'] as const;
+const sectionIds = ['basic','contact','branding','location','inventory','fulfillment'] as const;
 const sectionStatus = z.enum(['not_started','in_progress','completed','skipped']);
 const progressPatch = z.object({
   sections: z.record(z.enum(sectionIds), sectionStatus).optional(),
   lastPromptedAt: z.string().datetime().optional(),
   reminderScheduledFor: z.string().datetime().optional(),
 }).strict();
-const profilePatch=z.object({name:z.string().min(2).max(120).optional(),category:z.string().optional(),description:z.string().optional(),logo:z.string().optional(),banner:z.string().optional(),address:z.string().optional(),serviceArea:z.string().optional(),social:z.record(z.string()).optional(),fulfillment:z.array(z.string()).optional()}).strict();
+const profilePatch=z.object({name:z.string().min(2).max(120).optional(),category:z.string().optional(),description:z.string().optional(),logo:z.string().optional(),banner:z.string().optional(),address:z.string().optional(),serviceArea:z.string().optional(),whatsapp:z.string().optional(),website:z.string().optional(),fulfillment:z.array(z.string()).optional()}).strict();
 
 export const setup = Router();
 
