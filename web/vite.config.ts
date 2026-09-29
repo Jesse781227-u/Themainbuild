@@ -7,5 +7,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {alias: {'@': path.resolve(process.cwd(), 'src')}},
   build: {outDir: './dist', emptyOutDir: true},
-  server: {host: '0.0.0.0', port: 5173, strictPort: true}
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
+    headers: {'Cross-Origin-Opener-Policy': 'same-origin-allow-popups'}
+  }
 });

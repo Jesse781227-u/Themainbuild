@@ -59,6 +59,15 @@
   --color-lime-yellow: hsl(var(--color-lime-yellow));
 }
 
+.template-home-root img.opacity-15,
+.template-home-root img.opacity-20,
+.template-home-root img.opacity-25,
+.template-home-root img.opacity-35,
+.template-home-root img.opacity-40,
+.template-home-root img.opacity-45 {
+  opacity: 1;
+}
+
 /* LIGHT MODE */
 :root {
   --color-ink: 0 0% 8%;
@@ -182,6 +191,48 @@
 }
 
 @layer utilities {
+  [data-template] button,
+  [data-template] a {
+    transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, opacity 180ms ease;
+  }
+
+  [data-template] button:active,
+  [data-template] a:active {
+    transform: translateY(1px);
+  }
+
+  [data-template] img {
+    transition: transform 500ms cubic-bezier(.22, 1, .36, 1), opacity 300ms ease;
+  }
+
+  [data-template] .group:hover img {
+    transform: scale(1.035);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    [data-template] > div > section,
+    [data-template] .template-home-root > section {
+      animation: storefront-reveal 520ms both;
+    }
+
+    [data-template] .template-home-root > section:nth-child(3) { animation-delay: 70ms; }
+    [data-template] .template-home-root > section:nth-child(4) { animation-delay: 120ms; }
+  }
+
+  @keyframes storefront-reveal {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-template] *, [data-template] *::before, [data-template] *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
   .shadow-soft {
     box-shadow: var(--shadow-soft);
   }
@@ -214,8 +265,6 @@
   /* The carousel selection card must not become a second phone frame. Keep
      the preview viewport contained, but let the surrounding card breathe. */
   .snap-start:has(> .template-preview-shell) {
-    border: 0 !important;
-    box-shadow: none !important;
     overflow: visible !important;
   }
 

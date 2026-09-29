@@ -1,5 +1,8 @@
 export async function imageDataUrl(file:File,maxBytes=180_000):Promise<string>{
-  if(file.type==='image/svg+xml')return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsDataURL(file)});
+  if(file.type==='image/svg+xml'){
+    if(file.size>maxBytes)throw new Error(`SVG images must be ${Math.floor(maxBytes/1000)} KB or smaller. Choose a smaller SVG or export it as PNG or WebP.`);
+    return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsDataURL(file)});
+  }
   const source=await createImageBitmap(file);
   const scale=Math.min(1,1200/source.width,1200/source.height);
   const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(source.width*scale));canvas.height=Math.max(1,Math.round(source.height*scale));

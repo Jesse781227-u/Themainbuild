@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
+import { Route, Switch, Router as WouterRouter, useLocation, useParams } from 'wouter';
 
 import { Shell } from './components/layout/Shell';
 import Home from './pages/Home';
@@ -17,6 +17,7 @@ import Storefront from './pages/Storefront';
 import StorefrontManagement from './pages/StorefrontManagement';
 import StoreOverview from './sections/commerce/StoreOverview';
 import { useAuth } from './hooks/useAuth';
+import { getLocalStorefrontSlug } from './lib/storefront-host';
 
 const queryClient = new QueryClient();
 
@@ -27,6 +28,13 @@ function NotFound() {
       <p className="text-muted-foreground font-medium text-sm">The page you're looking for doesn't exist.</p>
     </div>
   );
+}
+
+class RuntimeErrorBoundary extends Component<{children:ReactNode},{error:Error|null}> {
+  state={error:null as Error|null};
+  static getDerivedStateFromError(error:Error){return {error};}
+  componentDidCatch(error:Error,info:ErrorInfo){console.error('Relay storefront render error',error,info);}
+  render(){return this.state.error?<div className="flex min-h-screen items-center justify-center bg-background p-6"><div role="alert" className="max-w-lg rounded-2xl border border-red-200 bg-red-50 p-6 text-red-900"><h1 className="text-xl font-extrabold">Relay could not render this page</h1><p className="mt-2 text-sm">The page hit an unexpected error. Reload to try again.</p><button type="button" onClick={()=>window.location.reload()} className="mt-4 rounded-xl bg-ink px-4 py-2 text-sm font-bold text-white">Reload</button></div></div>:this.props.children;}
 }
 
 function OnboardingRoute() {
@@ -41,12 +49,17 @@ function ProtectedSetupComplete(){
   return user?<SetupComplete />:<Login />;
 }
 
+function OwnerStorefrontRoute(){
+  const {businessSlug}=useParams<{businessSlug:string}>();
+  return <Storefront businessSlug={businessSlug}/>;
+}
+
 function AuthenticatedApp() {
   const {user,loading}=useAuth();
   const [,navigate]=useLocation();
   useEffect(()=>{if(!loading&&!user)navigate('/login');},[loading,user,navigate]);
   if(loading)return <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Loading Relay…</div>;
-  if(!user)return null;
+  if(!user)return <Login />;
   return <Shell>
     <Switch>
       <Route path="/dashboard" component={Home} />
@@ -67,23 +80,26 @@ function AuthenticatedApp() {
 }
 
 function App() {
+  const hostnameTenant=getLocalStorefrontSlug(window.location.hostname);
   return (
-    <QueryClientProvider client={queryClient}>
+    <RuntimeErrorBoundary><QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Switch>
+          {hostnameTenant ? <Storefront tenantSlug={hostnameTenant}/> : <Switch>
             <Route path="/" component={Login} />
             <Route path="/login" component={Login} />
             <Route path="/onboarding/complete" component={ProtectedSetupComplete} />
             <Route path="/onboarding" component={OnboardingRoute} />
-            <Route path="/store/:businessSlug" component={Storefront} />
-            <Route path="/store/:businessSlug/:rest*" component={Storefront} />
+            <Route path="/store/:businessSlug" component={OwnerStorefrontRoute} />
+            <Route path="/store/:businessSlug/:rest*" component={OwnerStorefrontRoute} />
+            <Route path="/s/:businessSlug" component={OwnerStorefrontRoute} />
+            <Route path="/s/:businessSlug/:rest*" component={OwnerStorefrontRoute} />
             <Route><AuthenticatedApp /></Route>
-          </Switch>
+          </Switch>}
         </WouterRouter>
         <Toaster />
       </TooltipProvider>
-    </QueryClientProvider>
+    </QueryClientProvider></RuntimeErrorBoundary>
   );
 }
 

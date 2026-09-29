@@ -1,24 +1,46 @@
 import type {ReactNode} from 'react';
 import type {StorefrontProduct} from '@/components/storefront/StorefrontRenderer';
-import type {StorefrontTheme} from './themes';
-import MenuTemplate from './templates/MenuTemplate';
-import BookTemplate from './templates/BookTemplate';
-import MarketTemplate from './templates/MarketTemplate';
-import DropTemplate from './templates/DropTemplate';
-import StudioTemplate from './templates/StudioTemplate';
-import EverydayTemplate from './templates/EverydayTemplate';
+import type {StorefrontCategory,StorefrontTheme} from './themes';
+import RunwayTemplate from './templates/RunwayTemplate';
+import {
+  BlossomTemplate,
+  BoldShelfTemplate,
+  CleanBrightTemplate,
+  ConciergeTemplate,
+  CornerBistroTemplate,
+  FreshMenuTemplate,
+  GlowStudioTemplate,
+  HorizonTemplate,
+  KitchenTableTemplate,
+  MarketplaceTemplate,
+  NightMarketTemplate,
+  SignatureTemplate,
+  SoftPetalsTemplate,
+  StudioTemplate,
+  SunsetTemplate,
+  UrbanRackTemplate,
+  VelvetTemplate,
+  WarehouseTemplate,
+  WorkshopTemplate,
+} from './templates/DistinctTemplateHomes';
 
 export type TemplateHomeData={
   theme:StorefrontTheme;
   businessName:string;
   headline:string;
   description:string;
+  logo?:string;
+  cartCount?:number;
   banner?:string;
   categories:string[];
   products:StorefrontProduct[];
   onCategory:(category:string)=>void;
   onProduct:(product:StorefrontProduct)=>void;
   onShop:()=>void;
+  onCart?:()=>void;
+  socialLinks?:Record<string,string>;
+  contactEmail?:string;
+  contactPhone?:string;
 };
 
 type TemplateComponent=(data:TemplateHomeData)=>ReactNode;
@@ -45,31 +67,10 @@ function TemplateHome({theme,businessName,headline,description,banner,categories
       <div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-extrabold" style={{fontFamily:theme.fonts.heading}}>{editorial?'Collection':'Featured products'}</h2><button onClick={onShop} className="text-sm font-bold opacity-60">View all</button></div>
       <div className={`grid gap-4 ${columns}`}>{products.slice(0,editorial?6:4).map(product=><TemplateProductCard key={product.id} product={product} theme={theme} onOpen={()=>onProduct(product)}/>)}</div>
     </section>}
-    <nav className="mx-auto flex max-w-6xl justify-around border-t px-5 py-4 text-xs font-bold opacity-70" style={{borderColor:theme.colors.border}}><button onClick={()=>onShop()}>Shop</button><button onClick={()=>onShop()}>Search</button><button onClick={()=>onShop()}>Cart</button></nav>
   </div>;
 }
 
 function TemplateProductCard({product,theme,onOpen}:{product:StorefrontProduct;theme:StorefrontTheme;onOpen:()=>void}){const editorial=['lookbook','editorial-clean'].includes(theme.cardStyle);const image=product.images?.[0]||product.image;return <button onClick={onOpen} className="group relative overflow-hidden border text-left" style={{background:theme.colors.surface,borderColor:theme.colors.border,borderRadius:theme.radius.card}}><div className={`${editorial?'aspect-[4/5]':'aspect-square'} relative overflow-hidden`} style={{background:theme.colors.accent}}>{image&&<img src={image} alt={product.name} className="h-full w-full object-cover transition duration-300 group-hover:scale-105"/>}<div className={editorial?'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 p-3 text-white':'p-3'}><p className="font-bold">{product.name}</p><p className="mt-1 text-sm opacity-75">₦{Number(product.price).toLocaleString('en-NG')}</p></div></div></button>}
-
-const KitchenTableTemplate:TemplateComponent=MenuTemplate;
-const CornerBistroTemplate:TemplateComponent=MenuTemplate;
-const FreshMenuTemplate:TemplateComponent=MenuTemplate;
-const NightMarketTemplate:TemplateComponent=MenuTemplate;
-const SunsetTemplate:TemplateComponent=DropTemplate;
-const RunwayTemplate:TemplateComponent=MarketTemplate;
-const UrbanRackTemplate:TemplateComponent=MarketTemplate;
-const SoftPetalsTemplate:TemplateComponent=BookTemplate;
-const GlowStudioTemplate:TemplateComponent=BookTemplate;
-const VelvetTemplate:TemplateComponent=DropTemplate;
-const BlossomTemplate:TemplateComponent=BookTemplate;
-const CleanBrightTemplate:TemplateComponent=EverydayTemplate;
-const BoldShelfTemplate:TemplateComponent=EverydayTemplate;
-const WarehouseTemplate:TemplateComponent=EverydayTemplate;
-const MarketplaceTemplate:TemplateComponent=MarketTemplate;
-const SignatureTemplate:TemplateComponent=EverydayTemplate;
-const HorizonTemplate:TemplateComponent=EverydayTemplate;
-const ConciergeTemplate:TemplateComponent=BookTemplate;
-const WorkshopTemplate:TemplateComponent=StudioTemplate;
 
 export const storefrontTemplates:Record<string,TemplateComponent>={
   'kitchen-table':KitchenTableTemplate,'corner-bistro':CornerBistroTemplate,'fresh-menu':FreshMenuTemplate,'night-market':NightMarketTemplate,
@@ -78,4 +79,24 @@ export const storefrontTemplates:Record<string,TemplateComponent>={
   warehouse:WarehouseTemplate,marketplace:MarketplaceTemplate,signature:SignatureTemplate,horizon:HorizonTemplate,concierge:ConciergeTemplate,workshop:WorkshopTemplate,
 };
 
-export function SelectedTemplateHome(data:TemplateHomeData){return (storefrontTemplates[data.theme.id]||TemplateHome)(data)}
+export const storefrontTemplateSourceFiles:Record<string,string>=Object.fromEntries(
+  Object.keys(storefrontTemplates).map(id=>[id,`/styles/${id}.html`]),
+);
+
+const categoryHero:Record<StorefrontCategory,string>={
+  'Restaurant & Café':'https://images.pexels.com/photos/8178762/pexels-photo-8178762.jpeg?auto=compress&cs=tinysrgb&w=1400',
+  Fashion:'https://images.pexels.com/photos/1536619/pexels-photo-1536619.jpeg?auto=compress&cs=tinysrgb&w=1400',
+  Beauty:'https://images.pexels.com/photos/3762878/pexels-photo-3762878.jpeg?auto=compress&cs=tinysrgb&w=1400',
+  Retail:'https://images.pexels.com/photos/1649771/pexels-photo-1649771.jpeg?auto=compress&cs=tinysrgb&w=1400',
+  Services:'https://images.pexels.com/photos/3184465/pexels-photo-3184465.jpeg?auto=compress&cs=tinysrgb&w=1400',
+};
+
+export function SelectedTemplateHome(data:TemplateHomeData){
+  const Template=storefrontTemplates[data.theme.id];
+  const resolved={...data,banner:data.banner||categoryHero[data.theme.category]};
+  if(!Template){
+    if(import.meta.env.DEV)console.warn(`Unknown storefront template "${data.theme.id}"; using the default template.`);
+    return TemplateHome(resolved);
+  }
+  return Template(resolved);
+}

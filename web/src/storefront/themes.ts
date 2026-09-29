@@ -753,7 +753,9 @@ export const templateAliases: Record<string, string> = {
 };
 
 export function resolveThemeId(value?: string): string {
-  return templateAliases[value || ""] || value || themes[0].id;
+  const normalized=(value||'').trim().toLowerCase().replace(/\.html$/,'');
+  const resolved=templateAliases[normalized]||normalized;
+  return themesById[resolved]?resolved:themes[0].id;
 }
 
 /** Maps theme tokens to CSS custom properties for the commerce engine root. */

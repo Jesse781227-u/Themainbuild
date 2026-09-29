@@ -13,7 +13,7 @@ export async function listCategories(businessId:string){const snap=await col.cat
 export async function getCart(id:string){const snap=await col.carts.doc(id).get();return snap.exists?snap.data() as Cart:null}
 export async function getOrder(id:string){const snap=await col.orders.doc(id).get();return snap.exists?snap.data() as Order:null}
 export async function createCart(value:Cart){await col.carts.doc(value.id).set(value);return value}
-export async function checkout(cart:Cart,customer:unknown|undefined,channel:'web'|'whatsapp'='web'){return adminDb.runTransaction(async(tx:Transaction)=>{let subtotal=0;const productRefs=cart.items.map(item=>col.products.doc(item.productId));const snaps=await Promise.all(productRefs.map(ref=>tx.get(ref)));for(let i=0;i<cart.items.length;i++){const product=snaps[i];const item=cart.items[i];if(!product?.exists||Number(product.get('inventoryQty')??0)<item.qty)throw new Error('INSUFFICIENT_STOCK');subtotal+=item.priceAtAdd*item.qty}for(let i=0;i<cart.items.length;i++){const item=cart.items[i];const ref=productRefs[i];const product=snaps[i];const timestamp=iso();tx.update(ref,{inventoryQty:Number(product!.get('inventoryQty'))-item.qty});tx.update(col.inventory.doc(item.productId),{quantity:admin.firestore.FieldValue.increment(-item.qty),adjustmentHistory:admin.firestore.FieldValue.arrayUnion({delta:-item.qty,reason:'order_created',actor:'system',timestamp})})}const order:Order={id:crypto.randomUUID(),businessId:cart.businessId,customer,channel,items:cart.items,subtotal,currency:'NGN',paymentStatus:'pending',deliveryStatus:'pending',orderStatus:'pending',createdAt:iso(),updatedAt:iso()};tx.set(col.orders.doc(order.id),order);tx.delete(col.carts.doc(cart.id));return order})}
+export async function checkout(cart:Cart,customer:unknown|undefined,channel:'web'|'whatsapp'='web'){return adminDb.runTransaction(async(tx:Transaction)=>{let subtotal=0;const productRefs=cart.items.map(item=>col.products.doc(item.productId));const snaps=await Promise.all(productRefs.map(ref=>tx.get(ref)));for(let i=0;i<cart.items.length;i++){const product=snaps[i];const item=cart.items[i];if(!product?.exists||product.get('businessId')!==cart.businessId||product.get('availability')===false||product.get(`channels.${channel}`)===false)throw new Error('PRODUCT_UNAVAILABLE');const inventory=Number(product.get('inventoryQty')??0);if(inventory<item.qty)throw new Error('INSUFFICIENT_STOCK');subtotal+=Number(product.get('price')??item.priceAtAdd)*item.qty}for(let i=0;i<cart.items.length;i++){const item=cart.items[i];const ref=productRefs[i];const product=snaps[i];const timestamp=iso();tx.update(ref,{inventoryQty:Number(product!.get('inventoryQty'))-item.qty});tx.update(col.inventory.doc(item.productId),{quantity:admin.firestore.FieldValue.increment(-item.qty),adjustmentHistory:admin.firestore.FieldValue.arrayUnion({delta:-item.qty,reason:'order_created',actor:'system',timestamp})})}const order:Order={id:crypto.randomUUID(),businessId:cart.businessId,customer,channel,items:cart.items,subtotal,currency:'NGN',paymentStatus:'pending',deliveryStatus:'pending',orderStatus:'pending',createdAt:iso(),updatedAt:iso()};tx.set(col.orders.doc(order.id),order);tx.delete(col.carts.doc(cart.id));return order})}
 export type StorefrontRecord={
   businessId:string;
   slug:string;
@@ -24,9 +24,15 @@ export type StorefrontRecord={
   headline?:string;
   description?:string;
   branding?:{logo?:string;banner?:string;primaryColor?:string;accentColor?:string};
+  socialLinks?:{instagram?:string;facebook?:string;tiktok?:string;x?:string;youtube?:string;telegram?:string};
   logo?:string;
   banner?:string;
   fulfillment?:string[];
+  pages?:{about?:boolean;contact?:boolean;policies?:boolean};
+  navigation?:Array<'home'|'shop'|'about'|'contact'|'policies'>;
+  contactEmail?:string;
+  contactPhone?:string;
+  policies?:string;
   updatedAt?:string;
 };
 export async function getStorefront(slug:string){const snap=await col.storefronts.doc(slug).get();return snap.exists?snap.data() as StorefrontRecord:null}

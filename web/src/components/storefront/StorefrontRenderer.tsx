@@ -2,8 +2,13 @@ import { useMemo, useState } from 'react';
 import { ShoppingBag, X, Plus, Minus, Check } from 'lucide-react';
 import { themes } from '@/storefront/themes';
 
-export type StorefrontProduct = { id:string; name:string; description?:string; price:number; inventoryQty?:number; availability?:boolean; channels?:{web?:boolean}; image?:string; images?:string[]; category?:string; categoryId?:string };
+export type StorefrontProduct = { id:string; name:string; description?:string; price:number; currency?:string; inventoryQty?:number; availability?:boolean; channels?:{web?:boolean}; image?:string; images?:string[]; category?:string; categoryId?:string };
 type Props = { themeId:string; name:string; headline:string; description:string; products:StorefrontProduct[]; onCheckout?:(customer:{name:string;phone:string;address:string})=>Promise<void> };
+
+export function formatStorefrontPrice(amount:number,currency='NGN'){
+  if(currency==='NGN')return `₦${Number(amount).toLocaleString('en-NG')}`;
+  return new Intl.NumberFormat(undefined,{style:'currency',currency,maximumFractionDigits:2}).format(Number(amount));
+}
 
 export function StorefrontRenderer({themeId,name,headline,description,products,onCheckout}:Props){
   const theme=themes.find(item=>item.id===themeId)||themes[0]; const [cart,setCart]=useState<Record<string,number>>({}); const [cartOpen,setCartOpen]=useState(false); const [checkoutOpen,setCheckoutOpen]=useState(false); const [complete,setComplete]=useState(false); const [error,setError]=useState(''); const [customer,setCustomer]=useState({name:'',phone:'',address:''});
