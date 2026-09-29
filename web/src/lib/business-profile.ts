@@ -9,7 +9,8 @@ export type BusinessProfile={
   banner:string;
   address:string;
   serviceArea:string;
-  social:Record<string,string>;
+  whatsapp:string;
+  website:string;
   inventory:Record<string,string>;
   fulfillment:string[];
   completedAt:string;
@@ -30,7 +31,8 @@ export function saveBusinessProfile(data:SetupData){
     banner:data.branding.banner,
     address:data.location.address.trim(),
     serviceArea:data.location.serviceArea.trim(),
-    social:{...data.social},
+    whatsapp:data.contact.whatsapp.trim(),
+    website:data.contact.website.trim(),
     inventory:{...data.inventory},
     fulfillment:parseList(data.fulfillment.methods),
     completedAt:new Date().toISOString(),
@@ -40,5 +42,5 @@ export function saveBusinessProfile(data:SetupData){
   return profile;
 }
 
-export function readBusinessProfile():BusinessProfile|null{try{return JSON.parse(localStorage.getItem(BUSINESS_PROFILE_KEY)||'null')}catch{return null}}
+export function readBusinessProfile():BusinessProfile|null{try{const saved=JSON.parse(localStorage.getItem(BUSINESS_PROFILE_KEY)||'null');return saved?{...saved,whatsapp:saved.whatsapp||saved.social?.whatsapp||'',website:saved.website||saved.social?.website||''}:null}catch{return null}}
 export function businessInitials(name:string){return name.trim().split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'R'}
