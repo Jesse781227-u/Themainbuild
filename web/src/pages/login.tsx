@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { useState } from "react";
-import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithEmailAndPassword, signInWithPopup, updateProfile } from "firebase/auth";
+import { browserLocalPersistence, browserSessionPersistence, createUserWithEmailAndPassword, GoogleAuthProvider, setPersistence, signInWithEmailAndPassword, signInWithPopup, updateProfile } from "firebase/auth";
 import { auth, firebaseConfigured } from "@/lib/firebase";
 
 const GoogleIcon = () => (
@@ -23,6 +23,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [, navigate] = useLocation();
 
@@ -35,7 +36,7 @@ export default function Login() {
     setError("");
     if (tab === "signup" && !name.trim()) { setError("Full name is required to create your Relay account."); return; }
     if (!firebaseConfigured || !auth) { setError("Firebase authentication is not configured yet."); return; }
-    try { const credential = await signInWithPopup(auth, new GoogleAuthProvider()); const ownerName = name.trim() || credential.user.displayName || ""; if (tab === "signup") await updateProfile(credential.user, { displayName: ownerName }); persistOwnerName(ownerName); navigate(tab === "signup" ? "/onboarding" : "/dashboard"); }
+    try { if (tab === "signin") await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence); const credential = await signInWithPopup(auth, new GoogleAuthProvider()); const ownerName = name.trim() || credential.user.displayName || ""; if (tab === "signup") await updateProfile(credential.user, { displayName: ownerName }); persistOwnerName(ownerName); navigate(tab === "signup" ? "/onboarding" : "/dashboard"); }
     catch (err) { setError(err instanceof Error ? err.message : "Unable to continue with Google."); }
   };
 
@@ -48,7 +49,7 @@ export default function Login() {
         const credential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(credential.user, { displayName: name.trim() });
         persistOwnerName(name);
-      } else { const credential = await signInWithEmailAndPassword(auth, email, password); persistOwnerName(credential.user.displayName || ""); }
+      } else { await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence); const credential = await signInWithEmailAndPassword(auth, email, password); persistOwnerName(credential.user.displayName || ""); }
       navigate(tab === "signup" ? "/onboarding" : "/dashboard");
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to authenticate."); }
   };
@@ -67,7 +68,7 @@ export default function Login() {
 
       {/* Header */}
       <header className="px-6 py-5 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="hidden items-center gap-2 sm:flex">
           <img src="/logo.png" alt="Relay" className="h-7 w-auto" />
         </Link>
         <p className="text-sm text-muted-foreground">
@@ -157,7 +158,7 @@ export default function Login() {
                   </div>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} autoComplete={tab === "signin" ? "on" : "off"} className="space-y-4">
                   {tab === "signup" && (
                     <>
                       <div className="space-y-1.5">
@@ -167,6 +168,7 @@ export default function Login() {
                         <Input
                           id="full-name"
                           type="text"
+                          autoComplete="off"
                           placeholder="James Okafor"
                           value={name}
                           onChange={(e) => setName(e.target.value)}
@@ -181,6 +183,7 @@ export default function Login() {
                         <Input
                           id="company"
                           type="text"
+                          autoComplete="off"
                           placeholder="City National Bank"
                           value={company}
                           onChange={(e) => setCompany(e.target.value)}
@@ -198,6 +201,7 @@ export default function Login() {
                     <Input
                       id="email"
                       type="email"
+                      autoComplete={tab === "signin" ? "username" : "off"}
                       placeholder="you@organisation.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -220,6 +224,7 @@ export default function Login() {
                     <Input
                       id="password"
                       type="password"
+                      autoComplete={tab === "signin" ? "current-password" : "off"}
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -227,6 +232,18 @@ export default function Login() {
                       data-testid="input-password"
                     />
                   </div>
+
+                  {tab === "signin" && (
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={rememberMe}
+                        onChange={(event) => setRememberMe(event.target.checked)}
+                        className="h-4 w-4 rounded border-border accent-primary"
+                      />
+                      Remember me
+                    </label>
+                  )}
 
                   <Button
                     type="submit"
