@@ -2,6 +2,7 @@ import type {ReactNode} from 'react';
 import type {StorefrontProduct} from '@/components/storefront/StorefrontRenderer';
 import type {StorefrontCategory,StorefrontTheme} from './themes';
 import RunwayTemplate from './templates/RunwayTemplate';
+import { NightMarketBespoke, SignatureBespoke, SoftPetalsBespoke, WarehouseBespoke } from './templates/DifferentiatedTemplates';
 import {
   BlossomTemplate,
   BoldShelfTemplate,
@@ -73,10 +74,10 @@ function TemplateHome({theme,businessName,headline,description,banner,categories
 function TemplateProductCard({product,theme,onOpen}:{product:StorefrontProduct;theme:StorefrontTheme;onOpen:()=>void}){const editorial=['lookbook','editorial-clean'].includes(theme.cardStyle);const image=product.images?.[0]||product.image;return <button onClick={onOpen} className="group relative overflow-hidden border text-left" style={{background:theme.colors.surface,borderColor:theme.colors.border,borderRadius:theme.radius.card}}><div className={`${editorial?'aspect-[4/5]':'aspect-square'} relative overflow-hidden`} style={{background:theme.colors.accent}}>{image&&<img src={image} alt={product.name} className="h-full w-full object-cover transition duration-300 group-hover:scale-105"/>}<div className={editorial?'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 p-3 text-white':'p-3'}><p className="font-bold">{product.name}</p><p className="mt-1 text-sm opacity-75">₦{Number(product.price).toLocaleString('en-NG')}</p></div></div></button>}
 
 export const storefrontTemplates:Record<string,TemplateComponent>={
-  'kitchen-table':KitchenTableTemplate,'corner-bistro':CornerBistroTemplate,'fresh-menu':FreshMenuTemplate,'night-market':NightMarketTemplate,
-  sunset:SunsetTemplate,studio:StudioTemplate,runway:RunwayTemplate,'urban-rack':UrbanRackTemplate,'soft-petals':SoftPetalsTemplate,
+  'kitchen-table':KitchenTableTemplate,'corner-bistro':CornerBistroTemplate,'fresh-menu':FreshMenuTemplate,'night-market':NightMarketBespoke,
+  sunset:SunsetTemplate,studio:StudioTemplate,runway:RunwayTemplate,'urban-rack':UrbanRackTemplate,'soft-petals':SoftPetalsBespoke,
   'glow-studio':GlowStudioTemplate,velvet:VelvetTemplate,blossom:BlossomTemplate,'clean-bright':CleanBrightTemplate,'bold-shelf':BoldShelfTemplate,
-  warehouse:WarehouseTemplate,marketplace:MarketplaceTemplate,signature:SignatureTemplate,horizon:HorizonTemplate,concierge:ConciergeTemplate,workshop:WorkshopTemplate,
+  warehouse:WarehouseBespoke,marketplace:MarketplaceTemplate,signature:SignatureBespoke,horizon:HorizonTemplate,concierge:ConciergeTemplate,workshop:WorkshopTemplate,
 };
 
 export const storefrontTemplateSourceFiles:Record<string,string>=Object.fromEntries(

@@ -11,14 +11,14 @@ const retailHero = 'https://images.pexels.com/photos/1649771/pexels-photo-164977
 const fashionHero = 'https://images.pexels.com/photos/1536619/pexels-photo-1536619.jpeg?auto=compress&cs=tinysrgb&w=1400';
 
 const StoreCurrency = createContext('NGN');
-function Price({ value }: { value: number }) { const currency=useContext(StoreCurrency); return <span>{formatStorefrontPrice(value,currency)}</span>; }
-function Photo({ product, className = '' }: { product: StorefrontProduct; className?: string }) {
+export function Price({ value }: { value: number }) { const currency=useContext(StoreCurrency); return <span>{formatStorefrontPrice(value,currency)}</span>; }
+export function Photo({ product, className = '' }: { product: StorefrontProduct; className?: string }) {
   const src = product.images?.[0] || product.image;
   return <div className={`overflow-hidden ${className}`}>
     {src && <img src={src} alt={product.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.025]"/>}
   </div>;
 }
-function BrandBar({ data, quiet = false }: { data: TemplateHomeData; quiet?: boolean }) {
+export function BrandBar({ data, quiet = false }: { data: TemplateHomeData; quiet?: boolean }) {
   return <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-2 pb-3 sm:px-8">
     <button type="button" onClick={data.onShop} className="min-w-0 text-left">
       <span className="flex items-center gap-2">{data.logo && <img src={data.logo} alt="" className="h-8 w-8 object-cover" style={{ borderRadius: data.theme.radius.image }}/>}<strong className="block truncate text-xl font-semibold" style={{ fontFamily: data.theme.fonts.heading }}>{data.businessName}</strong></span>
@@ -30,7 +30,7 @@ function BrandBar({ data, quiet = false }: { data: TemplateHomeData; quiet?: boo
     </div>
   </header>;
 }
-function CategoryRail({ data }: { data: TemplateHomeData }) {
+export function CategoryRail({ data }: { data: TemplateHomeData }) {
   return <nav aria-label="Product categories" className="flex gap-2 overflow-x-auto px-5 py-4 sm:px-8">
     <button type="button" onClick={() => data.onCategory('')} className="shrink-0 border px-4 py-2 text-xs font-semibold" style={{ background: data.theme.colors.accent, color: data.theme.colors.accentInk, borderColor: data.theme.colors.accent, borderRadius: data.theme.radius.button }}>All</button>
     {data.categories.map(category => <button key={category} type="button" onClick={() => data.onCategory(category)} className="shrink-0 border px-4 py-2 text-xs font-semibold" style={{ borderColor: data.theme.colors.border, borderRadius: data.theme.radius.button }}>{category}</button>)}
@@ -49,7 +49,7 @@ export function SocialLinks({ data }: { data: TemplateHomeData }) {
   return <footer className="mx-auto mt-4 max-w-6xl border-t px-5 py-10 sm:px-8" style={{ borderColor: data.theme.colors.border, color: data.theme.colors.muted }}><div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-lg font-bold" style={{ fontFamily: data.theme.fonts.heading }}>{data.businessName}</p>{data.contactEmail && <p className="mt-2 text-sm">{data.contactEmail}</p>}{data.contactPhone && <p className="mt-1 text-sm">{data.contactPhone}</p>}</div>{links.length > 0 && <div><p className="text-xs font-bold uppercase tracking-[.16em]">Follow us</p><div className="mt-3 flex flex-wrap gap-3">{links.map(([key, value]) => <a key={key} href={/^https?:\/\//i.test(value) ? value : `https://${value}`} target="_blank" rel="noreferrer noopener" className="text-sm font-semibold underline-offset-4 transition hover:underline">{labels[key] || key}</a>)}</div></div>}</div></footer>;
 }
 
-function Root({ data, children }: { data: TemplateHomeData; children: React.ReactNode }) {
+export function Root({ data, children }: { data: TemplateHomeData; children: React.ReactNode }) {
   return <StoreCurrency.Provider value={data.products[0]?.currency||'NGN'}><main className="template-home-root min-h-full" style={{ background: data.theme.colors.bg, color: data.theme.colors.ink, fontFamily: data.theme.fonts.body }}>{children}<SocialLinks data={data}/></main></StoreCurrency.Provider>;
 }
 
