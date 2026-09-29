@@ -24,8 +24,18 @@ export default function Login() {
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [signupEmailFocused, setSignupEmailFocused] = useState(false);
+  const [signupPasswordFocused, setSignupPasswordFocused] = useState(false);
   const [error, setError] = useState("");
   const [, navigate] = useLocation();
+
+  const changeTab = (nextTab: "signin" | "signup") => {
+    if (nextTab === "signup") {
+      setSignupEmailFocused(false);
+      setSignupPasswordFocused(false);
+    }
+    setTab(nextTab);
+  };
 
   const persistOwnerName = (value: string) => {
     const trimmed = value.trim();
@@ -75,14 +85,14 @@ export default function Login() {
           {tab === "signin" ? (
             <>
               New to Relay?{" "}
-              <button onClick={() => setTab("signup")} className="text-primary font-medium hover:underline">
+              <button onClick={() => changeTab("signup")} className="text-primary font-medium hover:underline">
                 Create account
               </button>
             </>
           ) : (
             <>
               Already have an account?{" "}
-              <button onClick={() => setTab("signin")} className="text-primary font-medium hover:underline">
+              <button onClick={() => changeTab("signin")} className="text-primary font-medium hover:underline">
                 Sign in
               </button>
             </>
@@ -102,7 +112,7 @@ export default function Login() {
             {(["signup", "signin"] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => changeTab(t)}
                 className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${
                   tab === t
                     ? "bg-card shadow-sm text-foreground"
@@ -202,6 +212,9 @@ export default function Login() {
                       id="email"
                       type="email"
                       autoComplete={tab === "signin" ? "username" : "off"}
+                      name={tab === "signin" ? "username" : "signup-email"}
+                      readOnly={tab === "signup" && !signupEmailFocused}
+                      onFocus={() => { if (tab === "signup") setSignupEmailFocused(true); }}
                       placeholder="you@organisation.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -225,6 +238,9 @@ export default function Login() {
                       id="password"
                       type="password"
                       autoComplete={tab === "signin" ? "current-password" : "off"}
+                      name={tab === "signin" ? "password" : "signup-password"}
+                      readOnly={tab === "signup" && !signupPasswordFocused}
+                      onFocus={() => { if (tab === "signup") setSignupPasswordFocused(true); }}
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
