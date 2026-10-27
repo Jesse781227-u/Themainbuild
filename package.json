@@ -1,6 +1,6 @@
 {
   "name": "relay",
   "private": true,
-  "scripts": {"dev": "concurrently \"cd web && npm run dev\" \"cd api && npm run dev\"", "build": "cd web && npm run build && cd .. && cd api && npm run build", "test": "cd api && npm run test"},
+  "scripts": {"dev": "concurrently \"firebase --project relayafrica-fcc2a emulators:start --only firestore,auth,storage\" \"cd web && npm run dev\" \"cd api && npm run dev\"", "build": "cd web && npm run build && cd .. && cd api && npm run build", "test": "cd api && npm run test", "tracker": "node tools/mvp-tracker/server.mjs"},
   "devDependencies": {"concurrently": "^9.1.2"}
 }

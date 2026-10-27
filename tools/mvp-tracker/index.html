@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay MVP Tracker</title>
+<style>
+:root{
+  --bg:#f5f6f2;--card:#ffffff;--ink:#16213e;--muted:#5d6577;--line:#e3e6dd;--soft:#eef0ea;
+  --green:#2f9e44;--green-soft:#e3f4e1;--amber:#b7791f;--amber-soft:#fdf1dc;--red:#c92a2a;--red-soft:#fde4e4;
+  --blue:#1c64c8;--blue-soft:#e3edfb;--violet:#6741d9;--violet-soft:#ece6fd;--track:#e6e9e1;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1420;--card:#171e2d;--ink:#e8ecf4;--muted:#99a3b8;--line:#263044;--soft:#1d2536;
+  --green:#5fcf6c;--green-soft:#173322;--amber:#f0b44c;--amber-soft:#382b14;--red:#ff7a7a;--red-soft:#3a1b1f;
+  --blue:#7fb0ff;--blue-soft:#172a48;--violet:#b49cff;--violet-soft:#2a2148;--track:#232c3e;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1060px;margin:0 auto;padding:28px 16px 64px}
+header{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between}
+h1{margin:0;font-size:28px;letter-spacing:-.02em}
+.sub{color:var(--muted);margin-top:4px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
+.dot.off{background:var(--red);box-shadow:0 0 0 3px var(--red-soft)}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:7px 12px;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0 14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.stat b{display:block;font-size:24px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.stat small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.bar{height:6px;background:var(--track);border-radius:99px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--green);border-radius:99px;transition:width .4s}
+.timeline{display:grid;grid-template-columns:repeat(21,1fr);gap:3px;margin:6px 0 4px}
+.day{height:26px;border-radius:5px;background:var(--track);position:relative}
+.day.past{background:var(--soft)}
+.day.w1{border-bottom:3px solid var(--blue)}.day.w2{border-bottom:3px solid var(--violet)}.day.w3{border-bottom:3px solid var(--green)}
+.day.today{background:var(--ink)}
+.day.has-overdue::after{content:"";position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:var(--red)}
+.tl-labels{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:22px 0 10px}
+.filters{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px;flex-wrap:wrap}
+.filters button{border:0;background:none;color:var(--muted);padding:6px 12px;border-radius:9px;font-weight:600;font-size:13px}
+.filters button.on{background:var(--ink);color:var(--bg)}
+.week{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-top:14px}
+.week.current{border-color:var(--ink)}
+.week-head{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:space-between;align-items:baseline}
+.week h2{margin:0;font-size:18px}
+.week .goal{color:var(--muted);font-size:13px;margin:4px 0 10px}
+.chip{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;letter-spacing:.02em;white-space:nowrap}
+.c-claude{background:var(--violet-soft);color:var(--violet)}
+.c-you{background:var(--blue-soft);color:var(--blue)}
+.c-over{background:var(--red-soft);color:var(--red)}
+.c-auto{background:var(--green-soft);color:var(--green)}
+.c-work{background:var(--amber-soft);color:var(--amber)}
+.c-block{background:var(--red-soft);color:var(--red)}
+.c-stretch{background:var(--soft);color:var(--muted)}
+.task{border-top:1px solid var(--line);padding:12px 0}
+.task:first-of-type{border-top:0}
+.row{display:flex;gap:12px;align-items:flex-start}
+.mark{flex:none;width:22px;height:22px;margin-top:1px;border-radius:7px;border:2px solid var(--line);display:grid;place-items:center;background:var(--card);color:transparent;padding:0}
+.mark.done{background:var(--green);border-color:var(--green);color:#fff}
+.mark.part{border-color:var(--amber)}
+.mark.part::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--amber)}
+.mark.over{border-color:var(--red)}
+button.mark:hover{border-color:var(--blue)}
+.mark svg{width:13px;height:13px}
+.body{flex:1;min-width:0}
+.title{font-weight:650}
+.task.is-done .title{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--line)}
+.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px;font-size:12px;color:var(--muted)}
+.detail{font-size:13px;color:var(--muted);margin-top:4px}
+.note{font-size:13px;margin-top:6px;padding:6px 10px;border-radius:9px;background:var(--soft)}
+details{margin-top:6px}
+summary{cursor:pointer;font-size:12px;color:var(--muted);font-weight:600;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ ";}
+details[open] summary::before{content:"▾ ";}
+.checks{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
+.checks li{display:flex;gap:8px;padding:3px 0}
+.checks .ok{color:var(--green)}.checks .no{color:var(--muted)}
+.checks em{color:var(--muted);font-style:normal;font-size:12px}
+code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;background:var(--soft);padding:1px 5px;border-radius:5px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-top:12px;display:none}
+.panel.open{display:block}
+.panel label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:8px 0 4px}
+.panel input{width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+pre{white-space:pre-wrap;font-size:12px;background:var(--soft);padding:10px;border-radius:10px;max-height:280px;overflow:auto}
+.empty{color:var(--muted);font-size:13px;padding:8px 0}
+footer{margin-top:28px;color:var(--muted);font-size:12px}
+@media (max-width:560px){h1{font-size:23px}.timeline{gap:2px}.day{height:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Relay MVP</h1>
+      <div class="sub" id="range"></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="live"><span class="dot" id="live"></span><span id="updated">connecting…</span></span>
+      <button class="btn" id="toggleTests">Tests</button>
+      <button class="btn" id="toggleSettings">Settings</button>
+    </div>
+  </header>
+
+  <div class="panel" id="settings">
+    <strong>Settings</strong>
+    <label for="stagingApiUrl">Staging API URL</label>
+    <input id="stagingApiUrl" placeholder="https://relay-api-staging.onrender.com">
+    <label for="prodApiUrl">Production API URL</label>
+    <input id="prodApiUrl" placeholder="https://api.relay…">
+    <div style="margin-top:10px"><button class="btn" id="saveSettings">Save</button></div>
+  </div>
+
+  <div class="panel" id="testsPanel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <strong>API test runs</strong>
+      <button class="btn" id="runTests">Run tests now</button>
+    </div>
+    <div id="testsInfo" class="detail"></div>
+    <pre id="testsOut" hidden></pre>
+  </div>
+
+  <section class="stats" id="stats"></section>
+
+  <div class="timeline" id="timeline"></div>
+  <div class="tl-labels" id="tlLabels"></div>
+
+  <div class="toolbar">
+    <div class="filters" id="filters">
+      <button data-f="all" class="on">All</button>
+      <button data-f="claude">Claude</button>
+      <button data-f="you">You</button>
+      <button data-f="attention">Needs attention</button>
+      <button data-f="open">Open only</button>
+    </div>
+  </div>
+
+  <main id="weeks"></main>
+
+  <footer>Claude’s tasks have no checkbox. They turn green only when their checks pass (tests, code, git or a live health check). Your tasks can be ticked by hand, and some tick themselves when the tracker detects them. Refreshes every 5 seconds.</footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDay = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short'});
+const ago = iso => { if (!iso) return ''; const s = Math.round((Date.now() - new Date(iso)) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s/60)}m ago` : s < 86400 ? `${Math.round(s/3600)}h ago` : fmtDay(iso.slice(0,10)); };
+const tick = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 8.5l3.2 3L13 4.5"/></svg>';
+let filter = 'all';
+try { filter = localStorage.getItem('relay-tracker-filter') || 'all'; } catch {}
+const openChecks = new Set();
+let data = null;
+
+function dayList(start, end) { const out = []; for (let d = new Date(start + 'T12:00:00'); d <= new Date(end + 'T12:00:00'); d.setDate(d.getDate() + 1)) out.push(d.toISOString().slice(0,10)); return out; }
+
+function visible(t) {
+  if (filter === 'claude') return t.owner === 'claude';
+  if (filter === 'you') return t.owner === 'you';
+  if (filter === 'attention') return !t.done && (t.overdue || t.note?.kind === 'blocked' || (t.due === data.today));
+  if (filter === 'open') return !t.done;
+  return true;
+}
+
+function taskHtml(t) {
+  const part = !t.done && t.passed > 0;
+  const cls = t.done ? 'done' : part ? 'part' : t.overdue ? 'over' : '';
+  const mark = t.owner === 'you' && t.doneBy !== 'auto'
+    ? `<button class="mark ${cls}" data-mark="${t.id}" data-done="${t.done ? 1 : 0}" title="${t.done ? 'Mark not done' : 'Mark done'}" aria-label="${t.done ? 'Mark not done' : 'Mark done'}: ${esc(t.title)}">${tick}</button>`
+    : `<span class="mark ${cls}" title="${t.done ? 'Verified by checks' : part ? `${t.passed} of ${t.checks.length} checks pass` : 'Not started'}">${tick}</span>`;
+  const chips = [
+    `<span class="chip ${t.owner === 'claude' ? 'c-claude' : 'c-you'}">${t.owner === 'claude' ? 'Claude' : 'You'}</span>`,
+    t.stretch ? '<span class="chip c-stretch">stretch</span>' : '',
+    t.overdue ? '<span class="chip c-over">overdue</span>' : '',
+    t.doneBy === 'auto' ? '<span class="chip c-auto">verified</span>' : '',
+    t.note?.kind === 'working' ? '<span class="chip c-work">in progress</span>' : '',
+    t.note?.kind === 'blocked' ? '<span class="chip c-block">blocked</span>' : '',
+  ].join('');
+  const checks = t.checks.length ? `<details data-id="${t.id}" ${openChecks.has(t.id) ? 'open' : ''}><summary>${t.passed}/${t.checks.length} checks</summary><ul class="checks">${t.checks.map(c => `<li><span class="${c.ok ? 'ok' : 'no'}">${c.ok ? '✓' : '○'}</span><span>${esc(c.label)}${c.detail ? ` <em>— ${esc(c.detail)}</em>` : ''}</span></li>`).join('')}</ul></details>` : '';
+  return `<div class="task ${t.done ? 'is-done' : ''}"><div class="row">${mark}<div class="body">
+    <div class="title">${esc(t.title)}</div>
+    <div class="meta">${chips}<span>due ${fmtDay(t.due)}</span>${t.done && t.manualAt ? `<span>· ticked ${ago(t.manualAt)}</span>` : ''}<span>· ${t.id}</span></div>
+    ${t.detail ? `<div class="detail">${esc(t.detail).replace(/`([^`]+)`/g, '<code>$1</code>')}</div>` : ''}
+    ${t.note ? `<div class="note"><strong>${t.note.kind === 'blocked' ? 'Blocked' : t.note.kind === 'working' ? 'Claude' : 'Note'}:</strong> ${esc(t.note.text)} <span class="detail">· ${ago(t.note.at)}</span></div>` : ''}
+    ${checks}
+  </div></div></div>`;
+}
+
+function render() {
+  const { plan, today, tasks, tests, emulator } = data;
+  const core = tasks.filter(t => !t.stretch);
+  const pct = list => list.length ? Math.round(list.filter(t => t.done).length / list.length * 100) : 0;
+  const claude = core.filter(t => t.owner === 'claude'), you = core.filter(t => t.owner === 'you');
+  const days = dayList(plan.start, plan.end);
+  const dayIdx = days.indexOf(today);
+  const overdue = core.filter(t => t.overdue);
+  $('#range').textContent = `${fmtDay(plan.start)} → ${fmtDay(plan.end)} · ${dayIdx >= 0 ? `day ${dayIdx + 1} of ${days.length}` : today < plan.start ? 'not started' : 'plan window ended'}`;
+
+  const testLine = tests?.summary ? `${tests.summary.passed} passing · ${tests.summary.failed} failing` : 'no runs yet';
+  $('#stats').innerHTML = [
+    ['Overall', `${pct(core)}%`, `${core.filter(t => t.done).length} of ${core.length} tasks`, pct(core)],
+    ['Claude', `${claude.filter(t => t.done).length}/${claude.length}`, 'verified by checks', pct(claude)],
+    ['You', `${you.filter(t => t.done).length}/${you.length}`, 'ticked or detected', pct(you)],
+    ['Overdue', overdue.length, overdue.length ? overdue.slice(0, 3).map(t => t.id).join(', ') : 'on schedule', null],
+    ['API tests', tests?.running ? 'running…' : (tests?.summary?.passed ?? 0), `${testLine} · emulator ${emulator ? 'up' : 'down'}`, null],
+  ].map(([k, v, s, p]) => `<div class="stat"><span>${k}</span><b>${esc(v)}</b><small>${esc(s)}</small>${p !== null ? `<div class="bar"><i style="width:${p}%"></i></div>` : ''}</div>`).join('');
+
+  $('#timeline').innerHTML = days.map(d => {
+    const w = plan.weeks.find(x => d >= x.from && d <= x.to)?.n;
+    const od = core.some(t => t.due === d && t.overdue);
+    const due = core.filter(t => t.due === d);
+    return `<div class="day w${w} ${d < today ? 'past' : ''} ${d === today ? 'today' : ''} ${od ? 'has-overdue' : ''}" title="${fmtDay(d)}${due.length ? ` · due: ${due.map(t => t.id).join(', ')}` : ''}"></div>`;
+  }).join('');
+  $('#tlLabels').innerHTML = plan.weeks.map(w => `<span>W${w.n} · ${esc(w.label)}</span>`).join('');
+
+  $('#weeks').innerHTML = plan.weeks.map(w => {
+    const wt = tasks.filter(t => t.week === w.n);
+    const shown = wt.filter(visible).sort((a, b) => (a.done - b.done) || a.due.localeCompare(b.due) || a.owner.localeCompare(b.owner));
+    const wcore = wt.filter(t => !t.stretch);
+    const current = today >= w.from && today <= w.to;
+    return `<section class="week ${current ? 'current' : ''}">
+      <div class="week-head"><h2>Week ${w.n}: ${esc(w.label)}${current ? ' <span class="chip c-work">this week</span>' : ''}</h2><span class="detail">${fmtDay(w.from)} – ${fmtDay(w.to)} · ${wcore.filter(t => t.done).length}/${wcore.length} done</span></div>
+      <div class="goal">Exit: ${esc(w.goal)}</div>
+      <div class="bar"><i style="width:${pct(wcore)}%"></i></div>
+      <div style="margin-top:8px">${shown.length ? shown.map(taskHtml).join('') : '<div class="empty">Nothing here for this filter.</div>'}</div>
+    </section>`;
+  }).join('');
+
+  const info = [];
+  if (tests?.running) info.push('Running now…');
+  if (tests?.ranAt) info.push(`Last run ${ago(tests.ranAt)}${tests.reason ? ` (${tests.reason})` : ''}${tests.durationMs ? ` in ${(tests.durationMs / 1000).toFixed(1)}s` : ''}.`);
+  if (tests?.skipped) info.push(`Skipped: ${tests.skipped}.`);
+  info.push('Tests re-run automatically when api/src, api/test or the Firebase rules change.');
+  $('#testsInfo').textContent = info.join(' ');
+  $('#runTests').disabled = Boolean(tests?.running);
+  $('#testsOut').hidden = !tests?.outputTail;
+  $('#testsOut').textContent = tests?.outputTail || '';
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/status', { cache: 'no-store' });
+    data = await res.json();
+    if (document.activeElement?.tagName !== 'INPUT') {
+      $('#stagingApiUrl').value = data.settings.stagingApiUrl || '';
+      $('#prodApiUrl').value = data.settings.prodApiUrl || '';
+    }
+    render();
+    $('#live').classList.remove('off');
+    $('#updated').textContent = `live · ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
+  } catch {
+    $('#live').classList.add('off');
+    $('#updated').textContent = 'tracker server not reachable';
+  }
+}
+
+document.addEventListener('click', async e => {
+  const m = e.target.closest('[data-mark]');
+  if (m) {
+    m.disabled = true;
+    await fetch('/api/mark', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: m.dataset.mark, done: m.dataset.done !== '1' }) });
+    return refresh();
+  }
+  const f = e.target.closest('[data-f]');
+  if (f) {
+    filter = f.dataset.f;
+    try { localStorage.setItem('relay-tracker-filter', filter); } catch {}
+    document.querySelectorAll('#filters button').forEach(b => b.classList.toggle('on', b === f));
+    if (data) render();
+  }
+});
+document.addEventListener('toggle', e => { const d = e.target; if (d.tagName === 'DETAILS' && d.dataset.id) d.open ? openChecks.add(d.dataset.id) : openChecks.delete(d.dataset.id); }, true);
+$('#toggleSettings').onclick = () => $('#settings').classList.toggle('open');
+$('#toggleTests').onclick = () => $('#testsPanel').classList.toggle('open');
+$('#saveSettings').onclick = async () => {
+  await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stagingApiUrl: $('#stagingApiUrl').value, prodApiUrl: $('#prodApiUrl').value }) });
+  $('#settings').classList.remove('open');
+  refresh();
+};
+$('#runTests').onclick = async () => { await fetch('/api/run-tests', { method: 'POST' }); setTimeout(refresh, 400); };
+document.querySelectorAll('#filters button').forEach(b => b.classList.toggle('on', b.dataset.f === filter));
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

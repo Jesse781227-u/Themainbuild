@@ -7,3 +7,4 @@ dist/
 *.tsbuildinfo
 *.js.map
 relayafrica-fcc2a-firebase-adminsdk-fbsvc-37cb338ebb.json
+tools/mvp-tracker/state.json
