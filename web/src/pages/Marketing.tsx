@@ -1,6 +1,7 @@
 import { Bell, Clock3, Send, Smartphone, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { auth } from '@/lib/firebase';
+import { apiBase } from '@/lib/api-base';
 
 type PushSegment = string;
 type AudienceCounts = Record<string, number> & { lists?: { id: string; name: string; count: number }[] };
@@ -37,7 +38,7 @@ export default function Marketing() {
   const [pushSending, setPushSending] = useState(false);
   const palette = campaignPalettes.find(item => item.id === paletteId) ?? campaignPalettes[0];
   const businessId = typeof window !== 'undefined' ? localStorage.getItem('relay_business_id') || import.meta.env.VITE_BUSINESS_ID : undefined;
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+  const apiUrl = apiBase;
   const loadPushData = async () => {
     if (!businessId) return;
     const token = await auth?.currentUser?.getIdToken();

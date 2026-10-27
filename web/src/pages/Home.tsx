@@ -4,6 +4,7 @@ import {useEffect,useMemo,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {Link} from 'wouter';
 import {auth} from '@/lib/firebase';
+import {apiBase} from '@/lib/api-base';
 import {businessInitials,readBusinessProfile} from '@/lib/business-profile';
 
 type Tab='overview'|'analytic';
@@ -16,7 +17,7 @@ async function loadDashboard():Promise<DashboardData|null>{
   if(!businessId)return null;
   const token=await auth?.currentUser?.getIdToken();
   if(!token)return null;
-  const response=await fetch(`${import.meta.env.VITE_API_URL||'http://localhost:4000'}/api/v1/businesses/${businessId}/dashboard`,{headers:{Authorization:`Bearer ${token}`,'x-business-id':businessId}});
+  const response=await fetch(`${apiBase}/api/v1/businesses/${businessId}/dashboard`,{headers:{Authorization:`Bearer ${token}`,'x-business-id':businessId}});
   if(!response.ok)throw new Error('Dashboard data unavailable');
   const payload=await response.json();
   return payload.data as DashboardData;

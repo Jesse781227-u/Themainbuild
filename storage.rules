@@ -1,2 +1,16 @@
-rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{allPaths=**} { allow read, write: if false; } } }
-
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function member(businessId) {
+      return request.auth != null && firestore.exists(/databases/(default)/documents/businessMemberships/$(request.auth.uid + '_' + businessId));
+    }
+    // Product images are public (they appear on storefronts); only members of the business can upload,
+    // and only reasonably sized images.
+    match /businesses/{businessId}/products/{file} {
+      allow read: if true;
+      allow create, update: if member(businessId) && request.resource.size < 2 * 1024 * 1024 && request.resource.contentType.matches('image/.*');
+      allow delete: if member(businessId);
+    }
+    match /{allPaths=**} { allow read, write: if false; }
+  }
+}

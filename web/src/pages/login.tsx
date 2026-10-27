@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { useState } from "react";
 import { browserLocalPersistence, browserSessionPersistence, createUserWithEmailAndPassword, GoogleAuthProvider, setPersistence, signInWithEmailAndPassword, signInWithPopup, updateProfile } from "firebase/auth";
 import { auth, firebaseConfigured } from "@/lib/firebase";
+import { restoreBusiness } from "@/lib/api";
 
 const GoogleIcon = () => (
   <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
@@ -42,11 +43,17 @@ export default function Login() {
     if (trimmed) localStorage.setItem("relay_owner_name", trimmed);
   };
 
+  // Returning merchants go to their dashboard on any device; people without a business go to setup.
+  const continueAfterSignIn = async () => {
+    const businessId = await restoreBusiness().catch(() => tab === "signup" ? "" : localStorage.getItem("relay_business_id") || "");
+    navigate(businessId ? "/dashboard" : "/onboarding");
+  };
+
   const handleGoogle = async () => {
     setError("");
     if (tab === "signup" && !name.trim()) { setError("Full name is required to create your Relay account."); return; }
     if (!firebaseConfigured || !auth) { setError("Firebase authentication is not configured yet."); return; }
-    try { if (tab === "signin") await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence); const credential = await signInWithPopup(auth, new GoogleAuthProvider()); const ownerName = name.trim() || credential.user.displayName || ""; if (tab === "signup") await updateProfile(credential.user, { displayName: ownerName }); persistOwnerName(ownerName); navigate(tab === "signup" ? "/onboarding" : "/dashboard"); }
+    try { if (tab === "signin") await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence); const credential = await signInWithPopup(auth, new GoogleAuthProvider()); const ownerName = name.trim() || credential.user.displayName || ""; if (tab === "signup") await updateProfile(credential.user, { displayName: ownerName }); persistOwnerName(ownerName); await continueAfterSignIn(); }
     catch (err) { setError(err instanceof Error ? err.message : "Unable to continue with Google."); }
   };
 
@@ -60,7 +67,7 @@ export default function Login() {
         await updateProfile(credential.user, { displayName: name.trim() });
         persistOwnerName(name);
       } else { await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence); const credential = await signInWithEmailAndPassword(auth, email, password); persistOwnerName(credential.user.displayName || ""); }
-      navigate(tab === "signup" ? "/onboarding" : "/dashboard");
+      await continueAfterSignIn();
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to authenticate."); }
   };
 

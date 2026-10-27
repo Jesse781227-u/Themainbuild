@@ -3,7 +3,7 @@ import {Link,useLocation} from 'wouter';
 import {ArrowLeft,ArrowRight,Check,Clock,UploadCloud} from 'lucide-react';
 import {SETUP_SECTIONS,readSetupProgress,setupPercent,writeSetupProgress,type SetupSectionId,type SetupStatus} from '@/lib/setup-progress';
 import {saveBusinessProfile} from '@/lib/business-profile';
-import {apiFetchChecked} from '@/lib/api';
+import {apiFetchChecked,restoreBusiness} from '@/lib/api';
 import {imageDataUrl,optimizeImageDataUrl} from '@/lib/image';
 const readFileAsDataUrl=imageDataUrl;
 
@@ -32,7 +32,7 @@ export default function SetupWizard(){
   const completeSetup=async(finalProgress=progress)=>{
     try{
       const preparedData={...data,branding:{...data.branding,logo:await optimizeImageDataUrl(data.branding.logo||''),banner:await optimizeImageDataUrl(data.branding.banner||'')}};
-      let businessId=localStorage.getItem('relay_business_id')||'';
+      let businessId=localStorage.getItem('relay_business_id')||await restoreBusiness().catch(()=>'');
       const categoryMap:Record<string,string>={restaurant:'food_beverage',fashion:'fashion_retail',beauty:'beauty_wellness',health:'general_services',consultancy:'general_services',retail:'fashion_retail',education:'general_services',technology:'general_services',logistics:'general_services',other:'other'};
       if(!businessId){
         const response=await apiFetchChecked('/api/v1/businesses',{method:'POST',body:JSON.stringify({name:data.basic.name,category:categoryMap[data.basic.category]||'other',description:data.basic.description,logo:preparedData.branding.logo,banner:preparedData.branding.banner,currency:'NGN'})});
