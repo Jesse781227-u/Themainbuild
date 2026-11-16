@@ -234,14 +234,18 @@ Each commit is checked with `tsc` locally; the tests are checked in CI (see §4.
 | 15 | Test verification | Local runs (once JDK 21 is installed) **and** CI. |
 | 16 | Uncommitted web edits | Discarded. |
 | H | Hosting (changed 16 Nov, after Phase 1) | **Render is dropped; everything runs on Cloudflare.** The API becomes a **Cloudflare Worker (Hono)** that talks to **Firestore over its REST API** with a service-account token, because `firebase-admin` can't run on Workers. Webhook processing uses **Cloudflare Queues** (save → ack → enqueue). This **supersedes the locked "Express API on Render" decision** and Q19's sweep (a Queue gives retries). The migration happens at the start of Phase 2. |
+| I | Product images (16 Nov) | **Cloudflare R2**, not Firebase Storage. Images are served publicly at `/media/businesses/{id}/products/{file}` by the Worker (Meta fetches carousel images by URL). Firebase Storage and `storage.rules` are removed. |
 | 17 | Remote | Push the branch and tag to **`themainbuild`**. |
 | 18 | `RELAY_ENV` | **Required, no default.** |
 | 19 | Webhooks | Save as `pending`, ack, process. A sweep runs on startup and via the Cloudflare cron. |
 | 20 | Owner takeover | The bot stays silent in a chat **until the owner hands back** through the Admin Bot. |
-| 21 | Webhook log retention | **30 days** via a Firestore TTL policy. No message text is stored. |
+| 21 | Webhook log retention | **30 days** via a Firestore TTL policy on `inboundEvents.expireAt`. Message text and the raw message are kept only until the event is processed, then cleared; only metadata remains until the TTL. |
 
 ### Changes to the strip plan (§5) from these answers
 - Commit 2 also removes `uber_direct` (Q5). Commit 3 also removes the `crmEvents` writers (Q7).
 - Commit 6 moves the types into `api/src/domain/` and deletes `shared/` (Q14).
 - Commit 7 salvages the Privacy/Terms text into `api/public/` (Q9).
 - `render.yaml` is deleted (Hosting). Phase 2 starts by porting the API to a Worker with `wrangler.toml`, Queues and Cron Triggers.
+
+## Phase 2 status (16 Nov 2026)
+The API runs on Cloudflare Workers (Hono, Firestore REST, Queues, Cron Triggers, R2). Details and the outstanding `TODO(jesse)` items are in the Phase 2 summary; grep `TODO(jesse)` in `api/src` for the live list.

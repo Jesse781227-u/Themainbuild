@@ -53,10 +53,10 @@ export const tasks = [
 
   // ───────────── Phase 2 · Foundation ─────────────
   { id: 'Y4', week: 2, due: '2026-11-20', owner: 'you', title: 'Bachs: account, API keys, and docs for sub-accounts, splits and webhooks',
-    checks: [{ kind: 'envKey', file: 'api/.env', key: 'BACHS_API_KEY' }, { kind: 'envKey', file: 'api/.env', key: 'BACHS_WEBHOOK_SECRET' }] },
-  { id: 'Y5', week: 2, due: '2026-11-20', owner: 'you', title: 'Meta test number + app secrets in api/.env',
-    checks: [{ kind: 'envKey', file: 'api/.env', key: 'META_APP_SECRET' }, { kind: 'envKey', file: 'api/.env', key: 'META_VERIFY_TOKEN' }, { kind: 'envKey', file: 'api/.env', key: 'ADMIN_BOT_PHONE_NUMBER_ID' }] },
-  { id: 'Y6', week: 2, due: '2026-11-17', owner: 'you', title: 'Cloudflare account (Workers Paid plan for Queues) and a wrangler login', checks: [{ kind: 'cmd', run: 'npx wrangler --version', label: 'wrangler available' }] },
+    checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'BACHS_API_KEY' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'BACHS_WEBHOOK_SECRET' }] },
+  { id: 'Y5', week: 2, due: '2026-11-20', owner: 'you', title: 'Meta test number + app secrets in api/.dev.vars',
+    checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'META_APP_SECRET' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'META_VERIFY_TOKEN' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'ADMIN_BOT_PHONE_NUMBER_ID' }] },
+  { id: 'Y6', week: 2, due: '2026-11-17', owner: 'you', title: 'Cloudflare account (Workers Paid plan for Queues) and a wrangler login', detail: 'Then create the resources wrangler.toml names, per environment: queues relay-events-<env> and relay-events-<env>-dlq (npx wrangler queues create …), and R2 buckets relay-product-images-<env> (npx wrangler r2 bucket create …).', checks: [{ kind: 'cmd', run: 'npx wrangler --version', label: 'wrangler available' }] },
   { id: 'Y7', week: 2, due: '2026-11-27', owner: 'you', title: 'Legal review of the drafted Privacy, Terms and Data Deletion pages', detail: 'Drafts in api/public/. Fill every [bracketed] value, then remove the DRAFT banner.', checks: [{ kind: 'lacks', path: 'api/public', re: '\\[[A-Z]{2,}[A-Z ]*[\\],]', label: 'no [PLACEHOLDER] values left' }, { kind: 'lacks', path: 'api/public', re: 'class="draft"', label: 'draft banner removed' }] },
 
   { id: 'C0', week: 2, due: '2026-11-19', owner: 'claude', title: 'API runs on Cloudflare Workers', detail: 'Hono instead of Express; Firestore over REST (transactions via beginTransaction/commit) instead of firebase-admin; wrangler.toml with Queues and Cron Triggers.',
@@ -77,8 +77,8 @@ export const tasks = [
     checks: [{ kind: 'has', file: 'api/wrangler.toml', re: 'crons', label: 'cron triggers configured' }, t('jobs: scheduled handler releases expired holds')] },
 
   // ───────────── Phase 3 · Bots ─────────────
-  { id: 'Y8', week: 3, due: '2026-11-28', owner: 'you', title: 'Gemini and OpenAI API keys in api/.env',
-    checks: [{ kind: 'envKey', file: 'api/.env', key: 'GEMINI_API_KEY' }, { kind: 'envKey', file: 'api/.env', key: 'OPENAI_API_KEY' }] },
+  { id: 'Y8', week: 3, due: '2026-11-28', owner: 'you', title: 'Gemini and OpenAI API keys in api/.dev.vars',
+    checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'GEMINI_API_KEY' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'OPENAI_API_KEY' }] },
   { id: 'Y9', week: 3, due: '2026-12-05', owner: 'you', title: 'Request Instagram messaging permissions in Meta App Review', checks: [] },
   { id: 'Y10', week: 3, due: '2026-12-11', owner: 'you', title: 'Line up 3–5 pilot merchants', checks: [] },
 

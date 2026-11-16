@@ -9,7 +9,7 @@ The pivot is in progress on `pivot/whatsapp-native`. The audit, decisions and ph
 
 ## Architecture
 
-- **API on Cloudflare Workers**: owns all data and all bot logic. Meta and Bachs webhooks are signature-verified, idempotent, saved, acknowledged, then processed from a Cloudflare Queue. *Migration in progress:* the code is still Express + `firebase-admin` until Phase 2 ports it to Hono + Firestore REST.
+- **API on Cloudflare Workers**: owns all data and all bot logic. Meta and Bachs webhooks are signature-verified, idempotent, saved, acknowledged, then processed from a Cloudflare Queue. Hono on Workers, talking to Firestore over REST (`api/src/lib/firestore.ts`), with Workers Assets for the legal pages and R2 for product images.
 - **Firestore**: flat top-level collections, each document carrying a `businessId`. No client access (deny-all rules). Only the API reads and writes, using service-account credentials.
 - **AI**: Gemini parses intents and picks typed tools. OpenAI transcribes voice notes. The model never writes to Firestore: tools validate with zod and write within the caller's business.
 - **Payments**: Bachs, split at source. Each merchant has their own Bachs account; Relay takes 1% of the goods (capped at ₦2,000, never on delivery), paid by the customer on top. All money is integer kobo.
@@ -20,11 +20,11 @@ The pivot is in progress on `pivot/whatsapp-native`. The audit, decisions and ph
 
 ```text
 cd api && npm install
-cp ../.env.example .env        # RELAY_ENV is required
-cd .. && npm run dev           # Firestore + Storage emulators and the API
+cp .dev.vars.example .dev.vars   # secrets for `wrangler dev`; RELAY_ENV etc. come from wrangler.toml
+cd .. && npm run dev             # Firestore emulator + `wrangler dev` (http://localhost:8787)
 ```
 
-The emulators need Java 21 and the Firebase CLI.
+The emulator needs Java 21 and the Firebase CLI. `wrangler dev` runs the Worker locally with a local queue, R2 bucket and rate limiter. To fire the cron handler locally, run `npx wrangler dev --test-scheduled` and open `/__scheduled?cron=*+*+*+*+*`.
 
 ## Tests
 
@@ -36,13 +36,19 @@ This runs the API tests against the Firestore emulator under the `demo-relay` pr
 
 ## Deployment
 
-Cloudflare Workers, set up in Phase 2 with `wrangler.toml`. Secrets are set with `wrangler secret put`, never committed. Outside development the API refuses to start without:
-- Firebase service-account credentials;
+```text
+npm run deploy:staging --prefix api      # or deploy:production
+```
+
+`wrangler.toml` defines the development, staging and production environments: one queue (plus dead-letter queue) and one R2 bucket each, and the cron triggers. Create those resources once per environment with `npx wrangler queues create` and `npx wrangler r2 bucket create`, and deploy `firestore.indexes.json` (including the TTL policy on `inboundEvents.expireAt`) with `firebase deploy --only firestore`.
+
+Secrets are set with `npx wrangler secret put <NAME> --env <env>`, never committed. Outside development the Worker refuses to serve without:
+- the Firebase service account (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`);
 - a 64-hex-character `TOKEN_ENCRYPTION_KEY`;
 - `META_APP_SECRET`;
 - a `META_VERIFY_TOKEN` of at least 16 characters.
 
-Development, staging and production use separate Firebase projects, Workers environments and provider credentials.
+It also refuses `FIRESTORE_EMULATOR_HOST` outside development. Development, staging and production use separate Firebase projects, Workers environments and provider credentials.
 
 ## Tracker
 
