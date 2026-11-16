@@ -249,3 +249,6 @@ Each commit is checked with `tsc` locally; the tests are checked in CI (see §4.
 
 ## Phase 2 status (16 Nov 2026)
 The API runs on Cloudflare Workers (Hono, Firestore REST, Queues, Cron Triggers, R2). Details and the outstanding `TODO(jesse)` items are in the Phase 2 summary; grep `TODO(jesse)` in `api/src` for the live list.
+
+## Phase 3 status (16 Nov 2026)
+Both bots are built. The Admin Bot covers onboarding by chat, Embedded Signup, catalogue, stock, orders, delivery zones, payment details, handback and "delete my data". The Shop Bot covers browse, cart, delivery or pickup, order and payment instructions, order status, handover to a person and "delete my data". Instagram DMs get the same shop flow as numbered text. The Meta data-deletion callback is also in. Checkout is conversational (lists and buttons), not a WhatsApp Flow: Flows need a published Flow and an encrypted endpoint, which can come later. Until the Bachs API is known, customers are told to pay to the bank details the owner sets with "payment details …".

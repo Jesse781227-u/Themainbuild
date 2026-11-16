@@ -10,7 +10,8 @@
     "test:tracker": "node --import tsx --test --test-concurrency=1 --test-reporter=tap \"test/**/*.test.ts\"",
     "test:emulators": "npx -y firebase-tools@14 --config ../firebase.json --project demo-relay emulators:exec --only firestore \"npm test\"",
     "deploy:staging": "wrangler deploy --env staging",
-    "deploy:production": "wrangler deploy --env production"
+    "deploy:production": "wrangler deploy --env production",
+    "simulate": "tsx scripts/simulate-webhook.ts"
   },
   "dependencies": {
     "hono": "4.13.16",

@@ -26,6 +26,22 @@ cd .. && npm run dev             # Firestore emulator + `wrangler dev` (http://l
 
 The emulator needs Java 21 and the Firebase CLI. `wrangler dev` runs the Worker locally with a local queue, R2 bucket and rate limiter. To fire the cron handler locally, run `npx wrangler dev --test-scheduled` and open `/__scheduled?cron=*+*+*+*+*`.
 
+## Trying the bots locally
+
+With `META_SEND_MODE=log` in `api/.dev.vars`, replies are printed in the `wrangler dev` console instead of being sent to Meta. Send signed, Meta-shaped webhooks with the simulator:
+
+```text
+cd api
+npm run simulate -- admin "hi"                                   # onboarding starts
+npm run simulate -- admin "add Jollof rice, 2500, 10"
+npm run simulate -- shop --to <merchant phone_number_id> "hi"
+npm run simulate -- shop --to <id> --choice add:<productId> "Add to cart"
+npm run simulate -- echo --to <id> --from 2348090000001 "I'll take it from here"   # owner takeover
+npm run simulate -- instagram --to <ig account id> --from igsid-1 "price?"
+```
+
+The bots work without AI keys: plain commands ("products", "restock rice 5", "RLY-ABCDE paid") are matched by rules. With `GEMINI_API_KEY` set, other messages go to Gemini, which can only pick one of the bot's typed tools. With `OPENAI_API_KEY` set, voice notes are transcribed.
+
 ## Tests
 
 ```text
