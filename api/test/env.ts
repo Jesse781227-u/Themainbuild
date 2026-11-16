@@ -12,4 +12,3 @@ process.env.FIRESTORE_EMULATOR_HOST ||= '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST ||= '127.0.0.1:9099';
 process.env.FIREBASE_STORAGE_EMULATOR_HOST ||= '127.0.0.1:9199';
 process.env.RATE_LIMIT_MAX = '100000';
-process.env.N8N_WEBHOOK_SECRET ??= '';

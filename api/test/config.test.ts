@@ -10,7 +10,7 @@ after(stopApi);
 
 const prod = {
   RELAY_ENV: 'production', FIREBASE_ADMIN_PROJECT_ID: 'p', FIREBASE_ADMIN_SERVICE_ACCOUNT_FILE: 'sa.json',
-  TOKEN_ENCRYPTION_KEY: 'a'.repeat(64), N8N_WEBHOOK_SECRET: 'x'.repeat(32), META_APP_SECRET: 'meta-secret', META_VERIFY_TOKEN: 'v'.repeat(16),
+  TOKEN_ENCRYPTION_KEY: 'a'.repeat(64), META_APP_SECRET: 'meta-secret', META_VERIFY_TOKEN: 'v'.repeat(16),
 };
 
 test('config: RELAY_ENV is required', () => {
@@ -30,11 +30,6 @@ test('config: production requires Meta secrets', () => {
   assert.throws(() => parseConfig({ ...prod, META_APP_SECRET: undefined }), /META_APP_SECRET/);
   assert.throws(() => parseConfig({ ...prod, META_VERIFY_TOKEN: undefined }), /META_VERIFY_TOKEN/);
   assert.throws(() => parseConfig({ ...prod, META_VERIFY_TOKEN: 'short' }), /META_VERIFY_TOKEN/);
-});
-
-test('config: production requires N8N_WEBHOOK_SECRET', () => {
-  assert.throws(() => parseConfig({ ...prod, N8N_WEBHOOK_SECRET: undefined }), /N8N_WEBHOOK_SECRET/);
-  assert.throws(() => parseConfig({ ...prod, N8N_WEBHOOK_SECRET: 'short' }), /N8N_WEBHOOK_SECRET/);
 });
 
 test('crypto: no fallback key outside development', () => {

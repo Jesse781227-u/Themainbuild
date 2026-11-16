@@ -23,8 +23,6 @@ const schema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_VERIFY_TOKEN: z.string().optional(),
   BACKS_IO_API_BASE_URL: optionalUrl,
-  UBER_DIRECT_CLIENT_ID: z.string().optional(),
-  N8N_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export function parseConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -32,7 +30,6 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env) {
   if (parsed.RELAY_ENV !== 'development') {
     if (!parsed.FIREBASE_ADMIN_PROJECT_ID || (!parsed.FIREBASE_ADMIN_SERVICE_ACCOUNT_FILE && (!parsed.FIREBASE_ADMIN_CLIENT_EMAIL || !parsed.FIREBASE_ADMIN_PRIVATE_KEY))) throw new Error('Missing Firebase Admin credentials for non-development environment.');
     if (!parsed.TOKEN_ENCRYPTION_KEY || !hexKey.test(parsed.TOKEN_ENCRYPTION_KEY)) throw new Error('TOKEN_ENCRYPTION_KEY must be exactly 64 hex characters outside development.');
-    if (!parsed.N8N_WEBHOOK_SECRET || parsed.N8N_WEBHOOK_SECRET.length < 32) throw new Error('N8N_WEBHOOK_SECRET must be at least 32 characters outside development.');
     if (!parsed.META_APP_SECRET) throw new Error('META_APP_SECRET is required outside development.');
     if (!parsed.META_VERIFY_TOKEN || parsed.META_VERIFY_TOKEN.length < 16) throw new Error('META_VERIFY_TOKEN must be at least 16 characters outside development.');
   }
