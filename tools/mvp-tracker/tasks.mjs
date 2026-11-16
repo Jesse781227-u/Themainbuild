@@ -25,7 +25,7 @@ export const plan = {
   end: '2026-12-18',
   weeks: [
     { n: 1, label: 'Phase 1 · Strip', from: '2026-11-16', to: '2026-11-16', goal: 'Web app, web push, n8n, storefronts and Firebase-auth tenancy are gone; config fails closed; the API builds and every test passes.' },
-    { n: 2, label: 'Phase 2 · Foundation', from: '2026-11-17', to: '2026-11-27', goal: 'Webhooks route to the right bot; channel layer, new data model, Bachs split payments, stock holds that expire, and an idempotent on-paid pipeline.' },
+    { n: 2, label: 'Phase 2 · Foundation', from: '2026-11-17', to: '2026-11-27', goal: 'The API runs on Cloudflare Workers (Hono + Firestore REST, Queues, Cron Triggers); webhooks route to the right bot; channel layer, new data model, Bachs split payments, stock holds that expire, and an idempotent on-paid pipeline.' },
     { n: 3, label: 'Phase 3 · Bots', from: '2026-11-28', to: '2026-12-11', goal: 'An owner onboards and manages stock by chat; a customer browses, checks out and pays on WhatsApp; Instagram DMs get basic replies.' },
     { n: 4, label: 'Phase 4 · Reports & broadcasts', from: '2026-12-12', to: '2026-12-18', goal: 'Owners get the 20:00 daily summary and can broadcast templates to opted-in customers with the cost shown first.' },
   ],
@@ -40,7 +40,7 @@ export const tasks = [
   { id: 'C2', week: 1, due: '2026-11-16', owner: 'claude', title: 'n8n, web push, storefront and dashboard code removed',
     checks: [{ kind: 'lacks', path: 'api/src', re: '[Nn]8[Nn]', label: 'no n8n in the API' }, { kind: 'lacks', path: 'api/src', re: 'pushSubscriptions|messaging\\(\\)', label: 'no web push' }, { kind: 'lacks', path: 'api/src', re: 'storefronts', label: 'no storefronts' }, { kind: 'lacks', path: 'api/src', re: 'verifyIdToken', label: 'no Firebase-auth tenancy' }] },
   { id: 'C3', week: 1, due: '2026-11-16', owner: 'claude', title: 'Web app removed; one source of domain types',
-    checks: [{ kind: 'lacks', file: 'render.yaml', re: 'relay-web', label: 'no relay-web service' }, { kind: 'exists', path: 'api/src/domain/commerce.ts' }] },
+    checks: [{ kind: 'lacks', file: 'package.json', re: 'cd web', label: 'root scripts no longer build web' }, { kind: 'exists', path: 'api/src/domain/commerce.ts' }] },
   { id: 'C4', week: 1, due: '2026-11-16', owner: 'claude', title: 'Checkout integrity and tenant isolation still hold at the service level',
     checks: [t('checkout: duplicate lines cannot oversell'), t('checkout: expired cart is rejected'), t('checkout: order snapshots item name and price'), t('tenant: inventory adjust rejects another business product'), t('tenant: delivery method rejects another business order'), t('tenant: batch assignment rejects another business order'), t('tenant: product create cannot overwrite another business product')] },
   { id: 'C5', week: 1, due: '2026-11-16', owner: 'claude', title: 'Firestore denies all client access',
@@ -48,7 +48,7 @@ export const tasks = [
 
   { id: 'Y1', week: 1, due: '2026-11-18', owner: 'you', title: 'Install Java 21 (and Firebase CLI)', detail: 'So the emulator tests run locally, not only in CI. `winget install EclipseAdoptium.Temurin.21.JDK` then `npm i -g firebase-tools`.',
     checks: [{ kind: 'cmd', run: 'java -version', label: 'java on PATH' }, { kind: 'cmd', run: 'firebase --version', label: 'firebase CLI on PATH' }] },
-  { id: 'Y2', week: 1, due: '2026-11-18', owner: 'you', title: 'Delete the relay-web service on Render', detail: 'Removing it from render.yaml does not delete the running service.', checks: [] },
+  { id: 'Y2', week: 1, due: '2026-11-18', owner: 'you', title: 'Shut down the Render services (relay-web and relay-api)', detail: 'Hosting moved to Cloudflare. Deleting render.yaml does not stop running services.', checks: [] },
   { id: 'Y3', week: 1, due: '2026-11-18', owner: 'you', title: 'Start Meta Business Verification and the Tech Provider application', detail: 'Launch blocker for Embedded Signup; Meta review takes weeks.', checks: [] },
 
   // ───────────── Phase 2 · Foundation ─────────────
@@ -56,13 +56,15 @@ export const tasks = [
     checks: [{ kind: 'envKey', file: 'api/.env', key: 'BACHS_API_KEY' }, { kind: 'envKey', file: 'api/.env', key: 'BACHS_WEBHOOK_SECRET' }] },
   { id: 'Y5', week: 2, due: '2026-11-20', owner: 'you', title: 'Meta test number + app secrets in api/.env',
     checks: [{ kind: 'envKey', file: 'api/.env', key: 'META_APP_SECRET' }, { kind: 'envKey', file: 'api/.env', key: 'META_VERIFY_TOKEN' }, { kind: 'envKey', file: 'api/.env', key: 'ADMIN_BOT_PHONE_NUMBER_ID' }] },
-  { id: 'Y6', week: 2, due: '2026-11-24', owner: 'you', title: 'Cloudflare account for the scheduler worker', checks: [] },
-  { id: 'Y7', week: 2, due: '2026-11-27', owner: 'you', title: 'Write the new Privacy Policy, Terms and Data Deletion text', detail: 'The archived copy in docs/legal-archive describes an older product. The new text must cover WhatsApp/Instagram data, AI processing (Gemini, OpenAI) and Bachs.', checks: [] },
+  { id: 'Y6', week: 2, due: '2026-11-17', owner: 'you', title: 'Cloudflare account (Workers Paid plan for Queues) and a wrangler login', checks: [{ kind: 'cmd', run: 'npx wrangler --version', label: 'wrangler available' }] },
+  { id: 'Y7', week: 2, due: '2026-11-27', owner: 'you', title: 'Legal review of the drafted Privacy, Terms and Data Deletion pages', detail: 'Drafts in api/public/. Fill every [bracketed] value, then remove the DRAFT banner.', checks: [{ kind: 'lacks', path: 'api/public', re: '\\[[A-Z]{2,}[A-Z ]*[\\],]', label: 'no [PLACEHOLDER] values left' }, { kind: 'lacks', path: 'api/public', re: 'class="draft"', label: 'draft banner removed' }] },
 
+  { id: 'C0', week: 2, due: '2026-11-19', owner: 'claude', title: 'API runs on Cloudflare Workers', detail: 'Hono instead of Express; Firestore over REST (transactions via beginTransaction/commit) instead of firebase-admin; wrangler.toml with Queues and Cron Triggers.',
+    checks: [{ kind: 'exists', path: 'api/wrangler.toml' }, { kind: 'lacks', file: 'api/package.json', re: '"express"', label: 'no Express' }, { kind: 'lacks', file: 'api/package.json', re: 'firebase-admin', label: 'no firebase-admin at runtime' }] },
   { id: 'C6', week: 2, due: '2026-11-19', owner: 'claude', title: 'Phone, money and Lagos-time helpers',
     checks: [t('phone: normalises Nigerian numbers to E.164'), t('money: naira to kobo is exact'), t('money: fee is 1% of goods capped at 2000 naira'), t('time: today boundaries use Africa/Lagos')] },
   { id: 'C7', week: 2, due: '2026-11-20', owner: 'claude', title: 'Webhook router: save pending, ack fast, route to the right bot',
-    checks: [t('router: admin bot number routes to admin handler'), t('router: merchant number routes to shop handler'), t('router: unknown number is ignored'), t('webhook: duplicate message is processed once'), t('webhook: pending events are swept after restart')] },
+    checks: [t('router: admin bot number routes to admin handler'), t('router: merchant number routes to shop handler'), t('router: unknown number is ignored'), t('webhook: duplicate message is processed once'), t('webhook: queued event is retried after a failure')] },
   { id: 'C8', week: 2, due: '2026-11-21', owner: 'claude', title: 'Channel layer with the 24-hour window guard',
     checks: [t('window: free-form allowed within 24 hours'), t('window: free-form blocked after 24 hours')] },
   { id: 'C9', week: 2, due: '2026-11-24', owner: 'claude', title: 'Stock hold reserves and auto-releases',
@@ -71,8 +73,8 @@ export const tasks = [
     checks: [t('payments: pending orders get unique amounts per business'), t('payments: webhook rejects bad signature'), t('payments: webhook matches by amount and marks order paid'), t('payments: duplicate webhook is idempotent')] },
   { id: 'C11', week: 2, due: '2026-11-27', owner: 'claude', title: 'On-paid pipeline runs exactly once',
     checks: [t('paid: pipeline is idempotent'), t('paid: updates customer stats, ledger and daily stats')] },
-  { id: 'C12', week: 2, due: '2026-11-27', owner: 'claude', title: 'Cloudflare scheduler worker and protected job endpoints',
-    checks: [{ kind: 'exists', path: 'workers/scheduler' }, t('jobs: internal endpoints reject a missing secret')] },
+  { id: 'C12', week: 2, due: '2026-11-27', owner: 'claude', title: 'Cron Triggers for hold release and the daily summary',
+    checks: [{ kind: 'has', file: 'api/wrangler.toml', re: 'crons', label: 'cron triggers configured' }, t('jobs: scheduled handler releases expired holds')] },
 
   // ───────────── Phase 3 · Bots ─────────────
   { id: 'Y8', week: 3, due: '2026-11-28', owner: 'you', title: 'Gemini and OpenAI API keys in api/.env',

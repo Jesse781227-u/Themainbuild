@@ -225,14 +225,15 @@ Each commit is checked with `tsc` locally; the tests are checked in CI (see §4.
 | 6 | Broadcasts | WhatsApp template broadcasts to opted-in customers, showing audience size and cost first, plus the `wa.me` prefilled-link fallback. All web push is deleted. |
 | 7 | crmEvents | **Dropped.** |
 | 8 | Staff | **Owners only** in v1. The model leaves room for members later. |
-| 9 | Meta pages | **Served by `relay-api`** as static HTML. |
-| 10 | Scheduled jobs | A **Cloudflare Worker** with cron triggers calls secret-protected internal API endpoints. The worker source lives in the repo. |
+| 9 | Meta pages | Served by the API Worker as static assets: `api/public/{privacy,terms,data-deletion}.html`, drafted 16 Nov and **awaiting legal review** (the bracketed values must be filled in). |
+| 10 | Scheduled jobs | **Cron Triggers on the API Worker itself** (see Hosting). There is no separate scheduler service. |
 | 11 | Relay revenue | **No subscriptions.** Relay takes a **percentage fee on each processed transaction**, **split at source by Bachs**: each merchant has their own Bachs (sub-)account and Bachs routes Relay's share automatically. The **customer pays the fee on top** as a visible service fee in the payment message. The rate is config (basis points: global default, per-business override). Default rate **1% (100 bps) of the goods subtotal, capped at ₦2,000 (200,000 kobo)**. **Delivery fees are never charged.** Fee = min(round(subtotal × 1%), 200,000 kobo); the customer pays subtotal + delivery + fee. Split at source **confirmed available** (16 Nov). `TODO(jesse)`: Bachs API docs for the split, sub-account and webhook payloads. Unique-amount matching (Q1) then runs per merchant account. |
 | 12 | Tracker | **Rewritten** for the pivot phases. |
 | 13 | Instagram | **Basic DMs get built** in this rebuild (receive and reply). Carousels, Story publishing and comment-to-DM come later. Needs the Instagram permissions in Meta App Review. |
 | 14 | Types | Moved into `api/src/domain/`. `shared/` is deleted. |
 | 15 | Test verification | Local runs (once JDK 21 is installed) **and** CI. |
 | 16 | Uncommitted web edits | Discarded. |
+| H | Hosting (changed 16 Nov, after Phase 1) | **Render is dropped; everything runs on Cloudflare.** The API becomes a **Cloudflare Worker (Hono)** that talks to **Firestore over its REST API** with a service-account token, because `firebase-admin` can't run on Workers. Webhook processing uses **Cloudflare Queues** (save → ack → enqueue). This **supersedes the locked "Express API on Render" decision** and Q19's sweep (a Queue gives retries). The migration happens at the start of Phase 2. |
 | 17 | Remote | Push the branch and tag to **`themainbuild`**. |
 | 18 | `RELAY_ENV` | **Required, no default.** |
 | 19 | Webhooks | Save as `pending`, ack, process. A sweep runs on startup and via the Cloudflare cron. |
@@ -243,4 +244,4 @@ Each commit is checked with `tsc` locally; the tests are checked in CI (see §4.
 - Commit 2 also removes `uber_direct` (Q5). Commit 3 also removes the `crmEvents` writers (Q7).
 - Commit 6 moves the types into `api/src/domain/` and deletes `shared/` (Q14).
 - Commit 7 salvages the Privacy/Terms text into `api/public/` (Q9).
-- `render.yaml` gets no cron services. A `workers/scheduler/` Cloudflare Worker is added in Phase 2 (Q10).
+- `render.yaml` is deleted (Hosting). Phase 2 starts by porting the API to a Worker with `wrangler.toml`, Queues and Cron Triggers.
