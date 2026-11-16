@@ -210,3 +210,37 @@ Each commit is checked with `tsc` locally; the tests are checked in CI (see §4.
 7. `chore: remove web/` — salvage the policy text and logo first. Update the root `package.json` and CI.
 8. `chore: deny-all rules` — `firestore.rules`, `storage.rules`, rules test.
 9. `docs: pivot reality` — README, `.env.example`, `render.yaml`, `production-context.md`, tracker per Q12.
+
+---
+
+## 6. Decisions (answered 16 Nov 2026)
+
+| # | Topic | Decision |
+|---|---|---|
+| 1 | Payments | Bachs has **payment webhooks but one shared collection account**. Orders are matched by **unique amount** (a few extra kobo per pending order). `TODO(jesse)`: exact provider name and API docs. |
+| 2 | AI | **Gemini** for intent parsing and tool selection. **OpenAI (Whisper / gpt-4o-transcribe)** for voice notes. Both behind interfaces. |
+| 3 | Meta | The Meta app exists. **No Admin Bot number yet**, so development uses Meta's test number. **Business Verification and Tech Provider are not started: this is a launch blocker for Embedded Signup.** |
+| 4 | Money | **Integer kobo** everywhere. Test data is converted or dropped. |
+| 5 | Delivery | **Self-arranged + pickup only.** `uber_direct` is removed. Zones and batches stay. |
+| 6 | Broadcasts | WhatsApp template broadcasts to opted-in customers, showing audience size and cost first, plus the `wa.me` prefilled-link fallback. All web push is deleted. |
+| 7 | crmEvents | **Dropped.** |
+| 8 | Staff | **Owners only** in v1. The model leaves room for members later. |
+| 9 | Meta pages | **Served by `relay-api`** as static HTML. |
+| 10 | Scheduled jobs | A **Cloudflare Worker** with cron triggers calls secret-protected internal API endpoints. The worker source lives in the repo. |
+| 11 | Merchant billing | **In scope now.** Paid via Bachs using the same unique-amount matching. `TODO(jesse)`: plans, prices, grace period and what happens on lapse. |
+| 12 | Tracker | **Rewritten** for the pivot phases. |
+| 13 | Instagram | **Basic DMs get built** in this rebuild (receive and reply). Carousels, Story publishing and comment-to-DM come later. Needs the Instagram permissions in Meta App Review. |
+| 14 | Types | Moved into `api/src/domain/`. `shared/` is deleted. |
+| 15 | Test verification | Local runs (once JDK 21 is installed) **and** CI. |
+| 16 | Uncommitted web edits | Discarded. |
+| 17 | Remote | Push the branch and tag to **`themainbuild`**. |
+| 18 | `RELAY_ENV` | **Required, no default.** |
+| 19 | Webhooks | Save as `pending`, ack, process. A sweep runs on startup and via the Cloudflare cron. |
+| 20 | Owner takeover | The bot stays silent in a chat **until the owner hands back** through the Admin Bot. |
+| 21 | Webhook log retention | **30 days** via a Firestore TTL policy. No message text is stored. |
+
+### Changes to the strip plan (§5) from these answers
+- Commit 2 also removes `uber_direct` (Q5). Commit 3 also removes the `crmEvents` writers (Q7).
+- Commit 6 moves the types into `api/src/domain/` and deletes `shared/` (Q14).
+- Commit 7 salvages the Privacy/Terms text into `api/public/` (Q9).
+- `render.yaml` gets no cron services. A `workers/scheduler/` Cloudflare Worker is added in Phase 2 (Q10).
