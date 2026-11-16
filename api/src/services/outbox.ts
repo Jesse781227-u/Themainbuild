@@ -26,12 +26,23 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
 
   try {
     const from = claimed.audience === 'owner' ? { adminBot: true as const } : { businessId: claimed.businessId };
-    const { messageId } = await send(db, cfg, transport, { from, conversationId: claimed.conversationId, to: claimed.to, content: { type: 'text', text: claimed.text }, now });
-    await db.update(db.doc(C.outbox, id), { status: 'sent', leaseUntil: null, sentAt: new Date().toISOString(), providerMessageId: messageId });
+    const base = { from, conversationId: claimed.conversationId, to: claimed.to, now };
+    let messageId: string;
+    let viaTemplate = false;
+    try {
+      ({ messageId } = await send(db, cfg, transport, { ...base, content: { type: 'text', text: claimed.text } }));
+    } catch (e) {
+      if (!(e instanceof WindowClosedError) || !claimed.template || claimed.channel !== 'whatsapp') throw e;
+      // Outside the window: the approved template (Y11) carries the same information.
+      const t = claimed.template;
+      const name = { daily_summary: cfg.DAILY_SUMMARY_TEMPLATE, broadcast: cfg.BROADCAST_TEMPLATE, receipt: cfg.RECEIPT_TEMPLATE }[t.key];
+      ({ messageId } = await send(db, cfg, transport, { ...base, content: { type: 'template', name, language: cfg.TEMPLATE_LANGUAGE, components: [{ type: 'body', parameters: t.params.map(text => ({ type: 'text', text: text.slice(0, 1000) })) }] } }));
+      viaTemplate = true;
+    }
+    await db.update(db.doc(C.outbox, id), { status: 'sent', leaseUntil: null, sentAt: new Date().toISOString(), providerMessageId: messageId, viaTemplate });
     return 'sent';
   } catch (e) {
     if (e instanceof WindowClosedError) {
-      // TODO(jesse): send the approved template instead once Meta approves it (Y11).
       await db.update(db.doc(C.outbox, id), { status: 'blocked_window', leaseUntil: null });
       log('warn', 'outbox_window_closed', { outboxId: id, kind: claimed.kind });
       return 'blocked_window';

@@ -39,6 +39,14 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   const { db, cfg, businessId, conversationId } = ctx;
   const [conv, business, customer] = (await db.getAll([db.doc(C.conversations, conversationId), db.doc(C.businesses, businessId), db.doc(C.customers, conversationId)])) as [ShopConversation | null, Business | null, Customer | null];
   if (!conv || !business || business.status === 'deleted') return;
+  // Marketing opt-out is honoured even while the owner has taken over the chat.
+  const optText = (ctx.event.text ?? '').trim().toLowerCase();
+  if (/^(stop|unsubscribe|stop all)$/.test(optText)) {
+    await db.set(db.doc(C.customers, conversationId), { marketingOptIn: false, marketingOptOutAt: new Date().toISOString() }, { merge: true });
+    if (conv.mode === 'owner') return;
+    await send(db, cfg, deps.transport, { from: { businessId }, conversationId, to: ctx.event.from, content: { type: 'text', text: `You won't get updates from ${business.name} any more. You can still order here any time; send SUBSCRIBE to get updates again.` } });
+    return;
+  }
   if (conv.mode === 'owner') return; // the owner is handling this chat until they hand back
 
   const to = ctx.event.from;
@@ -78,6 +86,12 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   }
   if (/^delete my (data|details|info(rmation)?)$/.test(lower)) {
     return reply(buttons(`Delete your details (name, number, cart and chat history) from ${business.name} on Relay? Orders you've paid for are kept for accounting.`, [['delete_yes', 'Yes, delete'], ['delete_no', 'No']]), { step: 'confirm_delete' });
+  }
+
+  if (/^(subscribe|start updates|yes to updates)$/.test(lower)) {
+    if (ctx.event.source !== 'whatsapp') return reply('Updates are only sent on WhatsApp for now.');
+    await db.set(db.doc(C.customers, conversationId), { marketingOptIn: true, marketingOptInAt: new Date().toISOString() }, { merge: true });
+    return reply(`You'll now get occasional updates and offers from ${business.name}. Send STOP any time to stop them.`);
   }
 
   // ── Talk to a person ──

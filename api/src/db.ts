@@ -29,6 +29,7 @@ export const C = {
   instagramConnections: 'instagramConnections',
   signupSessions: 'signupSessions',
   deletionRequests: 'deletionRequests',
+  broadcasts: 'broadcasts',
   customers: 'customers',
   conversations: 'conversations',
   products: 'products',

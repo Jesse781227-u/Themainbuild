@@ -18,6 +18,7 @@ import { saveZone } from '../services/delivery';
 import { markOrderPaid } from '../services/on-paid';
 import { cancelOrder, findOrderByRef, recentOrders } from '../services/orders';
 import { createSignupSession } from '../services/signup';
+import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../services/broadcasts';
 import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
 import { findProducts, type BotDeps } from './common';
@@ -72,6 +73,7 @@ export const HELP = [
   '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
   '• delivery zone Lekki, 1500, same day',
   '• payment details GTBank 0123456789 Mama Kitchen',
+  '• broadcast <message> (to customers who opted in; you see the cost first) · link (a wa.me link for your Status)',
   '• handback (let the bot answer customers again)',
   '• connect (link your WhatsApp Business number)',
   'You can also send a voice note.',
@@ -252,6 +254,29 @@ export const adminTools = {
     schema: z.object({}),
     confirm: () => 'Delete your Relay account? This disconnects your WhatsApp and Instagram and stops the bots. Paid orders and records the law requires us to keep are kept. This cannot be undone.',
     async run(_a, ctx) { const code = await deleteOwnerData(ctx.db, ctx.business.id, ctx.ownerPhone); return `Your account is deleted. Reference: ${code}. Thank you for using Relay.`; },
+  }),
+  broadcast: def({
+    spec: { name: 'broadcast', description: 'Send a promotional update to customers who opted in.', params: { message: { type: 'string', description: 'The message to send, in the owner\'s words' } }, required: ['message'] },
+    schema: z.object({ message: z.string().trim().min(5).max(700) }),
+    async confirm(a, ctx) {
+      const q = await quoteBroadcast(ctx.db, ctx.cfg, ctx.business.id);
+      if (!q) throw new ToolError('Broadcasts are not switched on yet. Send LINK to get a link you can share in your Status instead.');
+      if (!q.audience) throw new ToolError("No customers have opted in to updates yet. Customers opt in by sending SUBSCRIBE to your number. Send LINK to get a link you can share in your Status.");
+      return quoteText(q, a.message);
+    },
+    async run(a, ctx) {
+      const { outboxIds } = await createBroadcast(ctx.db, ctx.cfg, ctx.business, a.message);
+      await ctx.deps.enqueue(outboxIds.map(messageId => ({ kind: 'outbox' as const, messageId })));
+      return `Sending to ${outboxIds.length} customer${outboxIds.length === 1 ? '' : 's'}. They can reply STOP to opt out.`;
+    },
+  }),
+  shopLink: def({
+    spec: { name: 'shopLink', description: 'Get a wa.me link to the shop (with an optional prefilled message) to share in Status, groups or Instagram.', params: { message: { type: 'string', description: 'Prefilled message the customer sends, e.g. "Hi, I want to order"' } } },
+    schema: z.object({ message: z.string().trim().max(200).optional() }),
+    async run(a, ctx) {
+      const link = shopLink((ctx.business as Business & { whatsappDisplayNumber?: string | null }).whatsappDisplayNumber, a.message || 'Hi! I would like to order');
+      return link ? `Share this link in your Status, groups or Instagram bio. Customers who tap it start a chat with your shop:\n${link}` : 'Connect your WhatsApp Business number first (send CONNECT).';
+    },
   }),
   help: def({ spec: { name: 'help', description: 'Explain what the Admin Bot can do.', params: {} }, schema: z.object({}), async run() { return HELP; } }),
   offTopic: def({ spec: { name: 'offTopic', description: 'Anything not about running this shop (general questions, chit-chat, other topics).', params: {} }, schema: z.object({}), async run() { return OFF_TOPIC; } }),

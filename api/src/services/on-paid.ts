@@ -8,11 +8,17 @@ import type { Customer, Order, Product } from '../domain/commerce';
 import { claimId } from './orders';
 import { adminConversationId, customerConversationId } from './conversations';
 
+// Template names live in config (they're created in Meta), resolved when the message is sent.
+export type TemplateKey = 'daily_summary' | 'broadcast' | 'receipt';
+
 export interface OutboxMessage {
   id: string; businessId: string; audience: 'customer' | 'owner'; channel: 'whatsapp' | 'instagram';
   to: string; conversationId: string; kind: string; text: string;
   status: 'pending' | 'sending' | 'sent' | 'blocked_window' | 'failed'; attempts: number;
   createdAt: string; leaseUntil?: string | null; sentAt?: string | null; providerMessageId?: string | null;
+  // Sent instead of the text when the 24-hour window is closed. Body parameters fill the template's
+  // {{1}}, {{2}}, … in order. Messages without one are not sent outside the window.
+  template?: { key: TemplateKey; params: string[] } | null;
 }
 
 export type PaidResult = { applied: false; reason: 'not_found' | 'already_paid' | 'cancelled' } | { applied: true; order: Order; late: boolean; outboxIds: string[] };
@@ -72,6 +78,8 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   if (customer?.phone) queue({
     id: `${order.id}_receipt`, audience: 'customer', channel: order.channel, to: customer.phone,
     conversationId: customerConversationId(order.businessId, order.channel, customer.phone), kind: 'order_paid_receipt',
+    // Template body (Y11): {{1}} order number, {{2}} amount paid.
+    template: { key: 'receipt', params: [order.ref, formatKobo(order.payAmountKobo)] },
     text: `Payment received for order ${order.ref}: ${formatKobo(order.payAmountKobo)}. Thank you! We'll update you on ${order.delivery?.method === 'pickup' ? 'pickup' : 'delivery'}.`,
   });
   if (business?.ownerPhone) queue({

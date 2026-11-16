@@ -57,6 +57,8 @@ export function parseAdminCommand(input: string): ToolChoice | null {
     return { tool: 'updateFulfilment', args: { order: m[1], status } };
   }
   if ((m = /^delivery zone\s+(.+?),\s*([^,]+?)(?:,\s*(.+))?$/i.exec(text))) return { tool: 'addDeliveryZone', args: { area: m[1], fee: toNaira(m[2]), ...(m[3] ? { timeframe: m[3] } : {}) } };
+  if ((m = /^broadcast\s*:?\s+([\s\S]+)$/i.exec(input.trim()))) return { tool: 'broadcast', args: { message: m[1].trim() } };
+  if ((m = /^(?:link|share link|shop link|my link)(?:\s*:?\s+(.+))?$/i.exec(text))) return { tool: 'shopLink', args: m[1] ? { message: m[1] } : {} };
   if ((m = /^payment details?\s*:?\s+(.+)$/i.exec(text))) return { tool: 'setPaymentDetails', args: { details: m[1] } };
   return null;
 }

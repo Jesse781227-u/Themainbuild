@@ -21,7 +21,7 @@ export class FakeQueue { sent: QueueJob[] = []; async send(job: QueueJob) { this
 export function testEnv(overrides: Record<string, unknown> = {}): Env & { EVENTS: FakeQueue } {
   return {
     RELAY_ENV: 'development', FIREBASE_PROJECT_ID: projectId, FIRESTORE_EMULATOR_HOST: emulatorHost,
-    META_APP_SECRET: META_SECRET, META_VERIFY_TOKEN: VERIFY_TOKEN, ADMIN_BOT_PHONE_NUMBER_ID: ADMIN_PNID, ADMIN_BOT_ACCESS_TOKEN: 'admin-token',
+    META_APP_SECRET: META_SECRET, META_VERIFY_TOKEN: VERIFY_TOKEN, ADMIN_BOT_PHONE_NUMBER_ID: ADMIN_PNID, ADMIN_BOT_ACCESS_TOKEN: 'admin-token', MARKETING_MESSAGE_COST_KOBO: '2500',
     EVENTS: new FakeQueue(), ...overrides,
   } as Env & { EVENTS: FakeQueue };
 }

@@ -1,5 +1,6 @@
 // Cron Triggers (wrangler.toml [triggers]). Cron times are UTC; Lagos is UTC+1.
 import { getDb } from '../db';
+import { queueDailySummaries } from './summary';
 import type { Env, ScheduledEventLike } from '../env';
 import { log } from '../lib/logger';
 import { findStuckEvents } from './inbound';
@@ -14,9 +15,10 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const now = new Date(event.scheduledTime);
   const db = getDb(env);
   if (event.cron === CRON_DAILY_SUMMARY) {
-    // Phase 4 (C19): build and send each owner's daily summary from dailyStats.
-    log('info', 'daily_summary_pending_phase4', {});
-    return { summaries: 0 };
+    const ids = await queueDailySummaries(db, now);
+    await enqueue(env, ids.map(messageId => ({ kind: 'outbox' as const, messageId })));
+    log('info', 'daily_summaries_queued', { count: ids.length });
+    return { summaries: ids.length };
   }
   const released = await releaseExpiredHolds(db, now);
   const events = await findStuckEvents(db, now);

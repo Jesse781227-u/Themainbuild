@@ -31,6 +31,15 @@ const schema = z.object({
   GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
   OPENAI_API_KEY: optionalString,
   OPENAI_TRANSCRIBE_MODEL: z.string().default('gpt-4o-transcribe'),
+  // Message templates (created and approved in Meta, Y11). Used outside the 24-hour window.
+  TEMPLATE_LANGUAGE: z.string().default('en'),
+  DAILY_SUMMARY_TEMPLATE: z.string().default('relay_daily_summary'),
+  BROADCAST_TEMPLATE: z.string().default('relay_shop_update'),
+  RECEIPT_TEMPLATE: z.string().default('relay_payment_receipt'),
+  // TODO(jesse): Meta's per-message price for marketing templates to Nigerian numbers, in kobo,
+  // and who pays it (Terms placeholder). Broadcasts are refused until this is set.
+  MARKETING_MESSAGE_COST_KOBO: z.coerce.number().int().positive().optional().or(z.literal('').transform(() => undefined)),
+  BROADCAST_MAX_RECIPIENTS: z.coerce.number().int().positive().default(1000),
   BACHS_API_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   BACHS_API_KEY: optionalString,
   BACHS_WEBHOOK_SECRET: optionalString,
