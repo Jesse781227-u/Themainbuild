@@ -26,6 +26,9 @@ export const C = {
   ownerPhones: 'ownerPhones',           // id: owner E.164 → { businessId }
   channelAccounts: 'channelAccounts',   // id: `${channel}_${accountId}` → which business a number/IG account belongs to
   whatsappConnections: 'whatsappConnections',
+  instagramConnections: 'instagramConnections',
+  signupSessions: 'signupSessions',
+  deletionRequests: 'deletionRequests',
   customers: 'customers',
   conversations: 'conversations',
   products: 'products',

@@ -5,7 +5,10 @@ import { createApp } from '../src/app';
 import { getDb } from '../src/db';
 import type { Env, QueueJob, QueueMessage } from '../src/env';
 import type { BachsAdapter } from '../src/services/bachs';
-import type { Transport } from '../src/services/channel';
+import { optionIds, toText, type OutboundContent, type Transport } from '../src/services/channel';
+import type { LLMProvider, ToolChoice } from '../src/services/ai';
+import { handleQueueBatch } from '../src/services/queue';
+import { buildPayload } from '../scripts/simulate-webhook';
 
 export const projectId = 'demo-relay';
 export const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
@@ -31,8 +34,8 @@ export async function clearFirestore() {
   if (!res.ok) throw new Error(`Could not clear the Firestore emulator: ${res.status}`);
 }
 
-export async function api(method: string, path: string, opts: { body?: unknown; raw?: string; headers?: Record<string, string>; env?: Env; bachs?: BachsAdapter } = {}) {
-  const app = createApp({ bachs: opts.bachs });
+export async function api(method: string, path: string, opts: { body?: unknown; raw?: string; headers?: Record<string, string>; env?: Env; bachs?: BachsAdapter; fetch?: typeof fetch } = {}) {
+  const app = createApp({ bachs: opts.bachs, fetch: opts.fetch });
   const body = opts.raw ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
   const res = await app.request(path, { method, headers: { 'content-type': 'application/json', ...opts.headers }, body }, opts.env ?? env);
   const text = await res.text();
@@ -67,9 +70,35 @@ export function queueMessage(body: QueueJob, attempts = 1) {
 }
 
 export class FakeTransport implements Transport {
-  sent: { phoneNumberId: string; to: string; content: unknown }[] = [];
-  async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: unknown) { this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content }); return { messageId: `wamid.${this.sent.length}` }; }
+  sent: { phoneNumberId: string; to: string; content: OutboundContent; channel: 'whatsapp' | 'instagram' }[] = [];
+  async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: OutboundContent) { this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content, channel: 'whatsapp' }); return { messageId: `wamid.${this.sent.length}` }; }
+  async sendInstagram(sender: { igAccountId: string }, to: string, text: string) { this.sent.push({ phoneNumberId: sender.igAccountId, to, content: { type: 'text', text }, channel: 'instagram' }); return { messageId: `ig.${this.sent.length}` }; }
 }
+
+// Drives the real bots end to end: a signed Meta webhook (built by the simulator script) goes
+// through the route, the queue and the handlers; replies are captured instead of sent.
+export class Bot {
+  transport = new FakeTransport();
+  constructor(public llm: LLMProvider | null = null) {}
+  async send(kind: 'admin' | 'shop' | 'echo' | 'instagram', o: { from: string; to?: string; text?: string; choice?: string; name?: string }) {
+    const before = this.transport.sent.length;
+    const res = await postMeta(buildPayload(kind, { from: o.from, to: o.to ?? ADMIN_PNID, text: o.text ?? '', choice: o.choice, name: o.name }));
+    if (res.status !== 200) throw new Error(`webhook returned ${res.status}`);
+    await this.drain();
+    return this.transport.sent.slice(before).map(m => ({ ...m, text: toText(m.content), options: optionIds(m.content) }));
+  }
+  async drain() {
+    for (let i = 0; i < 10 && env.EVENTS.sent.length; i++) {
+      const msgs = env.EVENTS.sent.splice(0).map(job => queueMessage(job));
+      await handleQueueBatch({ queue: 'test', messages: msgs }, env, { transport: this.transport, llm: this.llm, transcriber: null });
+    }
+  }
+}
+
+export const fakeLLM = (pick: (message: string) => ToolChoice | null): LLMProvider & { calls: string[] } => {
+  const calls: string[] = [];
+  return { calls, async chooseTool({ message }) { calls.push(message); return pick(message); } };
+};
 
 const now = () => new Date().toISOString();
 

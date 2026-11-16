@@ -6,11 +6,12 @@ import { rateLimiter } from './middleware/rateLimiter';
 import { health } from './routes/health';
 import { media } from './routes/media';
 import { webhooks } from './routes/webhooks';
+import { signupRoutes } from './routes/signup';
 import type { BachsAdapter } from './services/bachs';
 
 // Static files in public/ (Privacy, Terms, Data Deletion) are served by Workers Assets before the
 // Worker runs, so they never reach this app.
-export function createApp(deps: { bachs?: BachsAdapter } = {}) {
+export function createApp(deps: { bachs?: BachsAdapter; fetch?: typeof fetch } = {}) {
   const app = new Hono<{ Bindings: Env; Variables: { requestId: string } }>();
 
   app.use('*', async (c, next) => {
@@ -30,6 +31,7 @@ export function createApp(deps: { bachs?: BachsAdapter } = {}) {
   app.route('/health', health);
   app.route('/media', media);
   app.route('/api/v1/webhooks', webhooks(deps));
+  app.route('/', signupRoutes(deps));
 
   app.notFound(c => c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }, 404));
   app.onError((err, c) => {

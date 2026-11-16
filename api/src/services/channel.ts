@@ -27,10 +27,34 @@ export class WindowClosedError extends Error {
 }
 
 export interface Sender { phoneNumberId: string; accessToken: string }
-export interface Transport { sendWhatsApp(sender: Sender, toE164: string, content: OutboundContent): Promise<{ messageId: string }> }
+export interface InstagramSender { igAccountId: string; accessToken: string }
+export interface Transport {
+  sendWhatsApp(sender: Sender, toE164: string, content: OutboundContent): Promise<{ messageId: string }>;
+  sendInstagram(sender: InstagramSender, recipientId: string, text: string): Promise<{ messageId: string }>;
+}
+
+// Interactive messages as plain text, for Instagram (and logs). Options are numbered in the same
+// order as optionIds(), so a reply of "2" picks the second option on any channel.
+export function optionIds(content: OutboundContent): string[] {
+  if (content.type !== 'interactive') return [];
+  const i = content.interactive as { type?: string; action?: { buttons?: { reply: { id: string } }[]; sections?: { rows: { id: string }[] }[] } };
+  if (i.type === 'button') return (i.action?.buttons ?? []).map(b => b.reply.id);
+  if (i.type === 'list') return (i.action?.sections ?? []).flatMap(sec => sec.rows.map(r => r.id));
+  return [];
+}
+
+export function toText(content: OutboundContent): string {
+  if (content.type === 'text') return content.text;
+  if (content.type === 'image') return [content.caption, content.link].filter(Boolean).join(NEWLINE);
+  if (content.type === 'template') return `[template ${content.name}]`;
+  const i = content.interactive as { body?: { text?: string }; action?: { buttons?: { reply: { title: string } }[]; sections?: { title?: string; rows: { title: string; description?: string }[] }[] } };
+  const titles = i.action?.buttons ? i.action.buttons.map(b => b.reply.title) : (i.action?.sections ?? []).flatMap(sec => sec.rows.map(r => (r.description ? `${r.title} (${r.description})` : r.title)));
+  return [i.body?.text ?? '', ...titles.map((t, n) => `${n + 1}. ${t}`), titles.length ? 'Reply with a number.' : ''].filter(Boolean).join(NEWLINE);
+}
+const NEWLINE = String.fromCharCode(10);
 
 // WhatsApp Cloud API: POST /{phone-number-id}/messages.
-export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION'>, doFetch: typeof fetch = (...a) => fetch(...a)): Transport {
+export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION' | 'INSTAGRAM_GRAPH_HOST'>, doFetch: typeof fetch = (...a) => fetch(...a)): Transport {
   return {
     async sendWhatsApp(sender, to, content) {
       const { type, ...rest } = content;
@@ -48,7 +72,39 @@ export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION'>, doFetch:
       if (!res.ok || !json.messages?.[0]?.id) throw new Error(`META_SEND_FAILED: ${res.status} ${json.error?.code ?? ''}`.trim());
       return { messageId: json.messages[0].id };
     },
+    // TODO(jesse): verify against the approved Instagram messaging setup (see INSTAGRAM_GRAPH_HOST).
+    async sendInstagram(sender, recipientId, text) {
+      const res = await doFetch(`https://${cfg.INSTAGRAM_GRAPH_HOST}/${cfg.META_GRAPH_VERSION}/${sender.igAccountId}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${sender.accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { message_id?: string; error?: { code?: number } };
+      if (!res.ok || !json.message_id) throw new Error(`INSTAGRAM_SEND_FAILED: ${res.status} ${json.error?.code ?? ''}`.trim());
+      return { messageId: json.message_id };
+    },
   };
+}
+
+// Development only (config refuses it elsewhere): prints messages instead of sending them.
+export function logTransport(): Transport {
+  let n = 0;
+  return {
+    async sendWhatsApp(sender, to, content) { console.log(`[send:log] whatsapp ${sender.phoneNumberId} → ${maskPhone(to)}\n${toText(content)}`); return { messageId: `log.${++n}` }; },
+    async sendInstagram(sender, to, text) { console.log(`[send:log] instagram ${sender.igAccountId} → ${to}\n${text}`); return { messageId: `log.${++n}` }; },
+  };
+}
+
+export const transportFor = (cfg: Config, doFetch?: typeof fetch) => (cfg.META_SEND_MODE === 'log' ? logTransport() : graphTransport(cfg, doFetch));
+
+// Meta media (voice notes, photos): GET /{media-id} gives a short-lived URL that also needs the token.
+export async function downloadMedia(cfg: Pick<Config, 'META_GRAPH_VERSION'>, accessToken: string, mediaId: string, doFetch: typeof fetch = (...a) => fetch(...a)) {
+  const meta = await doFetch(`https://graph.facebook.com/${cfg.META_GRAPH_VERSION}/${encodeURIComponent(mediaId)}`, { headers: { authorization: `Bearer ${accessToken}` } });
+  if (!meta.ok) throw new Error(`MEDIA_LOOKUP_FAILED: ${meta.status}`);
+  const { url, mime_type } = (await meta.json()) as { url: string; mime_type?: string };
+  const file = await doFetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
+  if (!file.ok) throw new Error(`MEDIA_DOWNLOAD_FAILED: ${file.status}`);
+  return { bytes: await file.arrayBuffer(), mimeType: mime_type ?? file.headers.get('content-type') ?? 'application/octet-stream' };
 }
 
 // Which number a message goes out from: the Relay Admin Bot, or the merchant's own number.
@@ -62,11 +118,23 @@ export async function resolveSender(db: Firestore, cfg: Config, from: { adminBot
   return { phoneNumberId: String(conn.phoneNumberId), accessToken: decrypt(String(conn.accessTokenEncrypted), cfg) };
 }
 
+export async function resolveInstagramSender(db: Firestore, cfg: Config, businessId: string): Promise<InstagramSender> {
+  const conn = await db.get(db.doc(C.instagramConnections, businessId));
+  if (!conn || conn.status !== 'connected' || !conn.accessTokenEncrypted) throw new Error('INSTAGRAM_NOT_CONNECTED');
+  return { igAccountId: String(conn.igAccountId), accessToken: decrypt(String(conn.accessTokenEncrypted), cfg) };
+}
+
 export async function send(db: Firestore, cfg: Config, transport: Transport, args: {
   from: { adminBot: true } | { businessId: string }; conversationId: string; to: string; content: OutboundContent; now?: Date;
 }) {
   const conversation = await db.get(db.doc(C.conversations, args.conversationId));
   if (args.content.type !== 'template' && !windowOpen(conversation?.lastInboundAt as string | null, args.now)) throw new WindowClosedError();
+  if (conversation?.channel === 'instagram' && 'businessId' in args.from) {
+    const sender = await resolveInstagramSender(db, cfg, args.from.businessId);
+    const result = await transport.sendInstagram(sender, args.to, toText(args.content));
+    log('info', 'message_sent', { conversationId: args.conversationId, channel: 'instagram', type: args.content.type });
+    return result;
+  }
   const sender = await resolveSender(db, cfg, args.from);
   const result = await transport.sendWhatsApp(sender, args.to, args.content);
   log('info', 'message_sent', { conversationId: args.conversationId, to: maskPhone(args.to), type: args.content.type });

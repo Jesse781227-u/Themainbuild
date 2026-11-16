@@ -6,7 +6,6 @@ import { C } from '../db';
 import type { Config } from '../config';
 import type { Firestore } from '../lib/firestore';
 import { log } from '../lib/logger';
-import { maskPhone } from '../lib/phone';
 import type { InboundEvent } from './inbound';
 import { customerConversationId, recordAdminInbound, recordCustomerInbound } from './conversations';
 
@@ -17,12 +16,6 @@ export interface Handlers {
   shop(ctx: ShopContext): Promise<void>;
   ownerEcho?(ctx: ShopContext): Promise<void>;
 }
-
-// Phase 3 replaces these with the Admin Bot and Shop Bot.
-export const placeholderHandlers: Handlers = {
-  async admin(ctx) { log('info', 'admin_message_received', { eventId: ctx.event.id, businessId: ctx.businessId, from: maskPhone(ctx.ownerPhone), type: ctx.event.type }); },
-  async shop(ctx) { log('info', 'shop_message_received', { eventId: ctx.event.id, businessId: ctx.businessId, channel: ctx.event.source, type: ctx.event.type }); },
-};
 
 export type Route = 'admin' | 'shop' | 'owner_echo' | 'ignored';
 

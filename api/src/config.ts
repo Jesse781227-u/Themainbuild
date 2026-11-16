@@ -18,6 +18,19 @@ const schema = z.object({
   META_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v21.0'),
   ADMIN_BOT_PHONE_NUMBER_ID: optionalString,
   ADMIN_BOT_ACCESS_TOKEN: optionalString,
+  // Embedded Signup (the merchant connects their own number).
+  META_APP_ID: optionalString,
+  META_ES_CONFIG_ID: optionalString,
+  // "log" prints outgoing messages instead of calling Meta (local development and the simulator).
+  META_SEND_MODE: z.enum(['live', 'log']).default('live'),
+  // TODO(jesse): confirm the Instagram messaging API variant (Instagram Login → graph.instagram.com,
+  // or Facebook Login → graph.facebook.com) once the Instagram permission is approved (Y9).
+  INSTAGRAM_GRAPH_HOST: z.string().default('graph.instagram.com'),
+  GEMINI_API_KEY: optionalString,
+  // TODO(jesse): confirm the Gemini model to use in production.
+  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+  OPENAI_API_KEY: optionalString,
+  OPENAI_TRANSCRIBE_MODEL: z.string().default('gpt-4o-transcribe'),
   BACHS_API_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   BACHS_API_KEY: optionalString,
   BACHS_WEBHOOK_SECRET: optionalString,
@@ -38,6 +51,7 @@ export function parseConfig(env: Record<string, unknown>): Config {
     if (!parsed.META_APP_SECRET) throw new Error('META_APP_SECRET is required outside development.');
     if (!parsed.META_VERIFY_TOKEN || parsed.META_VERIFY_TOKEN.length < 16) throw new Error('META_VERIFY_TOKEN must be at least 16 characters outside development.');
     if (parsed.FIRESTORE_EMULATOR_HOST) throw new Error('FIRESTORE_EMULATOR_HOST must not be set outside development.');
+    if (parsed.META_SEND_MODE !== 'live') throw new Error('META_SEND_MODE must be "live" outside development.');
   }
   return parsed;
 }

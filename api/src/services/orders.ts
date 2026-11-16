@@ -125,3 +125,35 @@ export async function releaseExpiredHolds(db: Firestore, now = new Date(), limit
   for (const o of due) if (await releaseHold(db, o._id, now)) released++;
   return released;
 }
+
+// Owner cancels an order. An unpaid order gives its stock back; a paid order can't be cancelled
+// here (the money has moved; the owner refunds and adjusts stock themselves).
+export async function cancelOrder(db: Firestore, orderId: string, businessId: string, now = new Date()) {
+  return db.runTransaction(async tx => {
+    const order = (await tx.get(db.doc(C.orders, orderId))) as Order | null;
+    if (!order || order.businessId !== businessId) return 'not_found' as const;
+    if (order.status === 'paid') return 'paid' as const;
+    if (order.status === 'cancelled') return 'already_cancelled' as const;
+    const at = now.toISOString();
+    if (order.status === 'awaiting_payment') {
+      const products = await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)));
+      order.items.forEach((line, i) => {
+        if (!products[i]) return;
+        tx.update(db.doc(C.products, line.productId), { stock: increment(line.qty), updatedAt: at });
+        const mid = `${order.id}_${line.productId}_release`;
+        tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId, productId: line.productId, delta: line.qty, reason: 'release', orderId: order.id, actor: 'owner', at });
+      });
+    }
+    tx.update(db.doc(C.orders, order.id), { status: 'cancelled', updatedAt: at });
+    return 'cancelled' as const;
+  });
+}
+
+export async function findOrderByRef(db: Firestore, businessId: string, ref: string) {
+  const [o] = await db.query(C.orders, [['businessId', '==', businessId], ['ref', '==', ref.trim().toUpperCase()]], { limit: 1 });
+  return (o as unknown as Order) ?? null;
+}
+
+export async function recentOrders(db: Firestore, filters: [string, '==', unknown][], limit = 50) {
+  return (await db.query(C.orders, filters, { orderBy: [['createdAt', 'desc']], limit })) as unknown as Order[];
+}

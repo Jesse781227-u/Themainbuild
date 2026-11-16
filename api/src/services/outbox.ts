@@ -24,11 +24,6 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
   });
   if (typeof claimed === 'string') return claimed;
 
-  if (claimed.channel === 'instagram') {
-    // TODO(jesse): Instagram sending (Phase 3, C17) needs the IG messaging permission (Y9).
-    await db.update(db.doc(C.outbox, id), { status: 'failed', leaseUntil: null, lastError: 'INSTAGRAM_SEND_NOT_IMPLEMENTED' });
-    return 'failed';
-  }
   try {
     const from = claimed.audience === 'owner' ? { adminBot: true as const } : { businessId: claimed.businessId };
     const { messageId } = await send(db, cfg, transport, { from, conversationId: claimed.conversationId, to: claimed.to, content: { type: 'text', text: claimed.text }, now });

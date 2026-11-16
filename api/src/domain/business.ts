@@ -3,7 +3,8 @@ export type BusinessCategory = 'food_beverage' | 'fashion_retail' | 'beauty_well
 export interface Business {
   id: string; name: string; category: BusinessCategory;
   ownerPhone: string;                 // E.164; the owner talks to the Admin Bot from this number
-  status: 'onboarding' | 'active' | 'suspended';
+  status: 'onboarding' | 'active' | 'suspended' | 'deleted';
+  paymentDetails?: string | null;      // bank details shown to customers until Bachs payment links exist
   timezone: 'Africa/Lagos';
   feeBps?: number | null;             // per-business override of Relay's fee rate
   holdMinutes?: number | null;        // per-business override of the unpaid-order stock hold

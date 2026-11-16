@@ -4,20 +4,28 @@ import { getConfig } from '../config';
 import { getDb } from '../db';
 import type { Env, MessageBatchLike, QueueJob } from '../env';
 import { log } from '../lib/logger';
-import { graphTransport, type Transport } from './channel';
+import { transportFor, type Transport } from './channel';
+import { geminiProvider, openAiTranscriber, type LLMProvider, type Transcriber } from './ai';
+import { createBotHandlers } from '../bots';
 import { claimEvent, markFailed, markProcessed } from './inbound';
 import { processOutbox } from './outbox';
-import { placeholderHandlers, routeEvent, type Handlers } from './router';
+import { routeEvent, type Handlers } from './router';
 
-export interface QueueDeps { handlers?: Handlers; transport?: Transport; now?: () => Date }
+export interface QueueDeps { handlers?: Handlers; transport?: Transport; llm?: LLMProvider | null; transcriber?: Transcriber | null; fetch?: typeof fetch; now?: () => Date }
 
 const backoff = (attempts: number) => Math.min(30 * 2 ** Math.max(0, attempts - 1), 900);
 
 export async function handleQueueBatch(batch: MessageBatchLike<QueueJob>, env: Env, deps: QueueDeps = {}) {
   const db = getDb(env);
   const cfg = getConfig(env);
-  const handlers = deps.handlers ?? placeholderHandlers;
-  const transport = deps.transport ?? graphTransport(cfg);
+  const doFetch = deps.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+  const transport = deps.transport ?? transportFor(cfg, doFetch);
+  const handlers = deps.handlers ?? createBotHandlers({
+    transport, fetch: doFetch, images: env.PRODUCT_IMAGES, now: deps.now,
+    llm: deps.llm !== undefined ? deps.llm : geminiProvider(cfg, doFetch),
+    transcriber: deps.transcriber !== undefined ? deps.transcriber : openAiTranscriber(cfg, doFetch),
+    enqueue: jobs => enqueue(env, jobs),
+  });
   for (const msg of batch.messages) {
     const job = msg.body;
     try {

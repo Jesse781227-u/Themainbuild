@@ -13,3 +13,11 @@ BACHS_WEBHOOK_SECRET=
 # Only for pointing local dev at a real Firebase project instead of the emulator:
 # FIREBASE_CLIENT_EMAIL=
 # FIREBASE_PRIVATE_KEY=
+# Embedded Signup
+META_APP_ID=
+META_ES_CONFIG_ID=
+# "log" prints outgoing messages instead of calling Meta (use with scripts/simulate-webhook.ts)
+META_SEND_MODE=log
+# AI: without these keys the bots still work on plain commands, and voice notes are refused politely.
+GEMINI_API_KEY=
+OPENAI_API_KEY=
