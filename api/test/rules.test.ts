@@ -1,4 +1,4 @@
-import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
+import { assertFails, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -10,24 +10,27 @@ before(async () => {
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async ctx => {
     const db = ctx.firestore();
-    for (const b of ['a', 'b']) await db.collection('businessMemberships').doc(`user-${b}_biz-${b}`).set({ businessId: `biz-${b}`, userId: `user-${b}`, role: 'owner' });
     await db.collection('products').doc('prod-a').set({ businessId: 'biz-a', name: 'A', availability: true });
-    await db.collection('orders').doc('order-a').set({ businessId: 'biz-a', orderStatus: 'pending' });
+    await db.collection('orders').doc('order-a').set({ businessId: 'biz-a', status: 'pending' });
   });
 });
 after(async () => { await env?.cleanup(); });
 
-const as = (uid: string) => env.authenticatedContext(uid).firestore();
+const clients = () => [env.unauthenticatedContext().firestore(), env.authenticatedContext('user-a').firestore()];
 
-test('rules: member cannot reassign another business product', async () => {
-  await assertFails(as('user-b').collection('products').doc('prod-a').update({ businessId: 'biz-b', name: 'Mine now' }));
-  await assertFails(as('user-b').collection('products').doc('prod-a').set({ businessId: 'biz-b', name: 'Mine now' }));
-  await assertFails(as('user-a').collection('products').doc('prod-a').update({ businessId: 'biz-b' }));
-  await assertSucceeds(as('user-a').collection('products').doc('prod-a').update({ name: 'Renamed' }));
+test('rules: clients cannot read any collection', async () => {
+  for (const db of clients()) {
+    await assertFails(db.collection('products').doc('prod-a').get());
+    await assertFails(db.collection('orders').doc('order-a').get());
+    await assertFails(db.collection('products').where('businessId', '==', 'biz-a').get());
+    await assertFails(db.collection('owners').doc('+2348000000000').get());
+  }
 });
 
-test('rules: member cannot reassign another business order', async () => {
-  await assertFails(as('user-b').collection('orders').doc('order-a').update({ businessId: 'biz-b' }));
-  await assertFails(as('user-b').collection('orders').doc('order-a').set({ businessId: 'biz-b', orderStatus: 'cancelled' }));
-  await assertSucceeds(as('user-a').collection('orders').doc('order-a').update({ orderStatus: 'confirmed' }));
+test('rules: clients cannot write any collection', async () => {
+  for (const db of clients()) {
+    await assertFails(db.collection('products').doc('prod-a').update({ name: 'Mine now' }));
+    await assertFails(db.collection('orders').doc('order-new').set({ businessId: 'biz-a' }));
+    await assertFails(db.collection('customers').doc('x').set({ businessId: 'biz-a' }));
+  }
 });
