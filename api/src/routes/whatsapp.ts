@@ -1,5 +1,0 @@
-import {Router} from 'express';import {recordWebhook,safeEqual,verifyMetaSignature} from '../services/whatsapp';
-export const whatsapp=Router();
-// Fails closed: with no verify token configured, or a missing/wrong one in the request, Meta's check is refused.
-whatsapp.get('/webhooks/meta',(req,res)=>{const expected=process.env.META_VERIFY_TOKEN;const received=req.query['hub.verify_token'];if(!expected||req.query['hub.mode']!=='subscribe'||typeof received!=='string'||!safeEqual(received,expected))return res.sendStatus(403);return res.status(200).type('text/plain').send(String(req.query['hub.challenge']??''))});
-whatsapp.post('/webhooks/meta',async(req,res,next)=>{try{if(!verifyMetaSignature(req.rawBody??Buffer.alloc(0),req.header('x-hub-signature-256')))return res.sendStatus(401);const messages=Array.isArray(req.body?.entry)?req.body.entry.flatMap((entry:{changes?:unknown[]})=>entry.changes??[]):[];for(const event of messages as {value?:{messages?:{id?:string}[]}}[]){for(const message of event.value?.messages??[]){if(message.id)await recordWebhook(message.id,req.body)}}return res.sendStatus(200)}catch(e){return next(e)}});

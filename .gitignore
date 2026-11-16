@@ -8,3 +8,7 @@ dist/
 *.js.map
 relayafrica-fcc2a-firebase-adminsdk-fbsvc-37cb338ebb.json
 tools/mvp-tracker/state.json
+.dev.vars
+.dev.vars.*
+.wrangler/
+!.dev.vars.example

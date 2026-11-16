@@ -2,7 +2,7 @@
   "name": "relay",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"firebase --project relayafrica-fcc2a emulators:start --only firestore,storage\" \"cd api && npm run dev\"",
+    "dev": "concurrently \"firebase --project demo-relay emulators:start --only firestore\" \"cd api && npm run dev\"",
     "build": "cd api && npm run build",
     "test": "cd api && npm run test",
     "tracker": "node tools/mvp-tracker/server.mjs"

@@ -1,60 +1,100 @@
-import { projectId } from './env';
-import type { AddressInfo } from 'node:net';
-import type { Server } from 'node:http';
-import { app } from '../src/app';
-import { adminDb } from '../src/services/firebase-admin';
+// Tests run under Node against the Firestore emulator (project demo-relay), calling the Hono app and
+// the Worker's queue/scheduled handlers directly with fake bindings. No real credentials are used.
+import crypto from 'node:crypto';
+import { createApp } from '../src/app';
+import { getDb } from '../src/db';
+import type { Env, QueueJob, QueueMessage } from '../src/env';
+import type { BachsAdapter } from '../src/services/bachs';
+import type { Transport } from '../src/services/channel';
 
-export { adminDb, projectId };
-export const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST!;
+export const projectId = 'demo-relay';
+export const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
+export const META_SECRET = 'test-app-secret';
+export const VERIFY_TOKEN = 'v'.repeat(16);
+export const ADMIN_PNID = 'pn-admin';
 
-let server: Server | undefined;
-let baseUrl = '';
+export class FakeQueue { sent: QueueJob[] = []; async send(job: QueueJob) { this.sent.push(job); } }
 
-export async function startApi() {
-  server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+export function testEnv(overrides: Record<string, unknown> = {}): Env & { EVENTS: FakeQueue } {
+  return {
+    RELAY_ENV: 'development', FIREBASE_PROJECT_ID: projectId, FIRESTORE_EMULATOR_HOST: emulatorHost,
+    META_APP_SECRET: META_SECRET, META_VERIFY_TOKEN: VERIFY_TOKEN, ADMIN_BOT_PHONE_NUMBER_ID: ADMIN_PNID, ADMIN_BOT_ACCESS_TOKEN: 'admin-token',
+    EVENTS: new FakeQueue(), ...overrides,
+  } as Env & { EVENTS: FakeQueue };
 }
-export async function stopApi() {
-  await new Promise(resolve => server ? server.close(resolve) : resolve(undefined));
-  await adminDb.terminate().catch(() => undefined);
-}
+
+export const env = testEnv();
+export const db = getDb(env);
 
 export async function clearFirestore() {
   const res = await fetch(`http://${emulatorHost}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Could not clear the Firestore emulator: ${res.status}`);
 }
 
-export async function api(method: string, path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}) {
-  const headers: Record<string, string> = { 'content-type': 'application/json', ...opts.headers };
-  const res = await fetch(baseUrl + path, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
+export async function api(method: string, path: string, opts: { body?: unknown; raw?: string; headers?: Record<string, string>; env?: Env; bachs?: BachsAdapter } = {}) {
+  const app = createApp({ bachs: opts.bachs });
+  const body = opts.raw ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
+  const res = await app.request(path, { method, headers: { 'content-type': 'application/json', ...opts.headers }, body }, opts.env ?? env);
   const text = await res.text();
-  let body: any = text;
-  try { body = JSON.parse(text); } catch { /* not JSON */ }
-  return { status: res.status, body };
+  let parsed: any = text;
+  try { parsed = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: res.status, body: parsed };
+}
+
+export const signMeta = (raw: string, secret = META_SECRET) => 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+
+export async function postMeta(payload: unknown, e: Env = env) {
+  const raw = JSON.stringify(payload);
+  return api('POST', '/api/v1/webhooks/meta', { raw, headers: { 'x-hub-signature-256': signMeta(raw) }, env: e });
+}
+
+export function waMessage(opts: { phoneNumberId: string; from: string; id: string; text?: string; timestamp?: number; name?: string }) {
+  const ts = String(opts.timestamp ?? Math.floor(Date.now() / 1000));
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{ id: 'waba', changes: [{ field: 'messages', value: {
+      messaging_product: 'whatsapp', metadata: { display_phone_number: '000', phone_number_id: opts.phoneNumberId },
+      contacts: [{ wa_id: opts.from, profile: { name: opts.name ?? 'Ada' } }],
+      messages: [{ from: opts.from, id: opts.id, timestamp: ts, type: 'text', text: { body: opts.text ?? 'hi' } }],
+    } }] }],
+  };
+}
+
+export function queueMessage(body: QueueJob, attempts = 1) {
+  const m = { id: crypto.randomUUID(), body, attempts, acked: false, retried: false, retryDelay: undefined as number | undefined,
+    ack() { m.acked = true; }, retry(o?: { delaySeconds?: number }) { m.retried = true; m.retryDelay = o?.delaySeconds; } };
+  return m satisfies QueueMessage<QueueJob>;
+}
+
+export class FakeTransport implements Transport {
+  sent: { phoneNumberId: string; to: string; content: unknown }[] = [];
+  async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: unknown) { this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content }); return { messageId: `wamid.${this.sent.length}` }; }
 }
 
 const now = () => new Date().toISOString();
 
-// Two businesses, each with an owner, a product, a customer and an order.
+// Two businesses, each with an owner, a connected WhatsApp number, a product (₦1,000, 5 in stock),
+// a customer and an order.
 export async function seed() {
   const fixture = {
-    a: { id: 'biz-a', owner: 'user-a', product: 'prod-a', customer: 'cust-a', order: 'order-a' },
-    b: { id: 'biz-b', owner: 'user-b', product: 'prod-b', customer: 'cust-b', order: 'order-b' },
+    a: { id: 'biz-a', ownerPhone: '+2348030000001', pnid: 'pn-a', bachs: 'bachs-a', product: 'prod-a', customer: 'biz-a_wa_2348090000001', customerPhone: '+2348090000001', order: 'order-a' },
+    b: { id: 'biz-b', ownerPhone: '+2348030000002', pnid: 'pn-b', bachs: 'bachs-b', product: 'prod-b', customer: 'biz-b_wa_2348090000002', customerPhone: '+2348090000002', order: 'order-b' },
   };
-  const batch = adminDb.batch();
+  const batch = db.batch();
   for (const f of [fixture.a, fixture.b]) {
-    batch.set(adminDb.collection('businesses').doc(f.id), { id: f.id, name: `Business ${f.id}`, ownerId: f.owner, status: 'active', createdAt: now() });
-    batch.set(adminDb.collection('businessMemberships').doc(`${f.owner}_${f.id}`), { id: `${f.owner}_${f.id}`, businessId: f.id, userId: f.owner, role: 'owner', joinedAt: now() });
-    batch.set(adminDb.collection('products').doc(f.product), { id: f.product, businessId: f.id, name: `Product ${f.id}`, description: '', price: 1000, currency: 'NGN', images: [], availability: true, inventoryQty: 5, lowStockThreshold: 2, channels: { web: true, whatsapp: true }, deletedAt: null });
-    batch.set(adminDb.collection('inventory').doc(f.product), { productId: f.product, businessId: f.id, quantity: 5, lowStockThreshold: 2, adjustmentHistory: [] });
-    batch.set(adminDb.collection('customers').doc(f.customer), { id: f.customer, businessId: f.id, name: `Customer ${f.id}`, phone: '08000000000', createdAt: now(), updatedAt: now() });
-    batch.set(adminDb.collection('orders').doc(f.order), { id: f.order, businessId: f.id, channel: 'web', items: [{ productId: f.product, qty: 1, priceAtAdd: 1000 }], subtotal: 1000, currency: 'NGN', paymentStatus: 'pending', deliveryStatus: 'pending', orderStatus: 'pending', createdAt: now(), updatedAt: now() });
+    batch.set(db.doc('businesses', f.id), { id: f.id, name: `Business ${f.id}`, category: 'other', ownerPhone: f.ownerPhone, status: 'active', timezone: 'Africa/Lagos', bachsAccountId: f.bachs, createdAt: now(), updatedAt: now() });
+    batch.set(db.doc('ownerPhones', f.ownerPhone), { businessId: f.id });
+    batch.set(db.doc('channelAccounts', `whatsapp_${f.pnid}`), { id: `whatsapp_${f.pnid}`, businessId: f.id, channel: 'whatsapp', accountId: f.pnid });
+    batch.set(db.doc('products', f.product), { id: f.product, businessId: f.id, name: `Product ${f.id}`, description: '', priceKobo: 100_000, images: [], categoryId: null, available: true, stock: 5, lowStockThreshold: 2, createdAt: now(), updatedAt: now(), deletedAt: null });
+    batch.set(db.doc('customers', f.customer), { id: f.customer, businessId: f.id, channel: 'whatsapp', phone: f.customerPhone, name: 'Ada', marketingOptIn: false, orderCount: 0, totalSpentKobo: 0, createdAt: now(), updatedAt: now() });
+    batch.set(db.doc('orders', f.order), { id: f.order, ref: 'RLY-TEST', businessId: f.id, customerId: f.customer, channel: 'whatsapp', items: [{ productId: f.product, name: 'x', priceKobo: 100_000, qty: 1 }], subtotalKobo: 100_000, deliveryFeeKobo: 0, feeKobo: 1_000, uniqueKobo: 0, payAmountKobo: 101_000, status: 'expired', fulfilment: 'pending', delivery: null, holdExpiresAt: now(), createdAt: now(), updatedAt: now() });
   }
   await batch.commit();
   return fixture;
 }
 
-export async function doc(collection: string, id: string) {
-  const snap = await adminDb.collection(collection).doc(id).get();
-  return snap.exists ? snap.data()! : null;
+export async function doc(collection: string, id: string) { return (await db.get(db.doc(collection, id))) as any; }
+
+export async function seedCart(id: string, businessId: string, customerId: string, items: { productId: string; qty: number }[], expiresAt = new Date(Date.now() + 3600_000).toISOString()) {
+  await db.set(db.doc('carts', id), { id, businessId, customerId, channel: 'whatsapp', items, expiresAt, updatedAt: now() });
 }

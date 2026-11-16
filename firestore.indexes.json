@@ -1,1 +1,13 @@
-{"indexes":[{"collectionGroup":"products","queryScope":"COLLECTION","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"deletedAt","order":"ASCENDING"},{"fieldPath":"availability","order":"ASCENDING"}]},{"collectionGroup":"carts","queryScope":"COLLECTION","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"expiresAt","order":"ASCENDING"}]},{"collectionGroup":"deliveryBatches","queryScope":"COLLECTION","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"dispatchAt","order":"ASCENDING"}]}],"fieldOverrides":[]}
+{
+  "indexes": [
+    {"collectionGroup": "orders", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "holdExpiresAt", "order": "ASCENDING"}]},
+    {"collectionGroup": "inboundEvents", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "receivedAt", "order": "ASCENDING"}]},
+    {"collectionGroup": "inboundEvents", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "leaseUntil", "order": "ASCENDING"}]},
+    {"collectionGroup": "outbox", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "createdAt", "order": "ASCENDING"}]},
+    {"collectionGroup": "outbox", "queryScope": "COLLECTION", "fields": [{"fieldPath": "status", "order": "ASCENDING"}, {"fieldPath": "leaseUntil", "order": "ASCENDING"}]},
+    {"collectionGroup": "deliveryZones", "queryScope": "COLLECTION", "fields": [{"fieldPath": "businessId", "order": "ASCENDING"}, {"fieldPath": "active", "order": "ASCENDING"}]}
+  ],
+  "fieldOverrides": [
+    {"collectionGroup": "inboundEvents", "fieldPath": "expireAt", "ttl": true, "indexes": []}
+  ]
+}

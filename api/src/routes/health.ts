@@ -1,1 +1,15 @@
-import {Router} from 'express';import {adminDb} from '../services/firebase-admin';import {config} from '../config';export const health=Router();health.get('/live',(_req,res)=>res.json({success:true,data:{status:'ok',service:'relay-api',environment:config.RELAY_ENV}}));health.get('/',(_req,res)=>res.json({success:true,data:{status:'ok',service:'relay-api',environment:config.RELAY_ENV}}));health.get('/deep',async(_req,res)=>{let firestore='ok';try{await adminDb.collection('_health').doc('probe').get()}catch{firestore='unavailable'}const ready=firestore==='ok'||config.RELAY_ENV==='development';return res.status(ready?200:503).json({success:ready,data:{status:ready?'ok':'degraded',checks:{api:'ok',firestore}}})});
+import { Hono } from 'hono';
+import { getConfig } from '../config';
+import { getDb } from '../db';
+import type { Env } from '../env';
+
+export const health = new Hono<{ Bindings: Env }>();
+const ok = (env: Env) => ({ success: true, data: { status: 'ok', service: 'relay-api', environment: getConfig(env).RELAY_ENV } });
+health.get('/', c => c.json(ok(c.env)));
+health.get('/live', c => c.json(ok(c.env)));
+health.get('/deep', async c => {
+  let firestore = 'ok';
+  try { await getDb(c.env).get({ collection: '_health', id: 'probe' }); } catch { firestore = 'unavailable'; }
+  const ready = firestore === 'ok';
+  return c.json({ success: ready, data: { status: ready ? 'ok' : 'degraded', checks: { api: 'ok', firestore } } }, ready ? 200 : 503);
+});

@@ -1,0 +1,15 @@
+# Copy to api/.dev.vars for `wrangler dev` (git-ignored). RELAY_ENV, FIREBASE_PROJECT_ID and
+# FIRESTORE_EMULATOR_HOST come from wrangler.toml [vars] for local development.
+# Staging/production values are set with `npx wrangler secret put <NAME> --env <env>`.
+TOKEN_ENCRYPTION_KEY=
+META_APP_SECRET=
+META_VERIFY_TOKEN=
+META_GRAPH_VERSION=v21.0
+ADMIN_BOT_PHONE_NUMBER_ID=
+ADMIN_BOT_ACCESS_TOKEN=
+BACHS_API_BASE_URL=
+BACHS_API_KEY=
+BACHS_WEBHOOK_SECRET=
+# Only for pointing local dev at a real Firebase project instead of the emulator:
+# FIREBASE_CLIENT_EMAIL=
+# FIREBASE_PRIVATE_KEY=

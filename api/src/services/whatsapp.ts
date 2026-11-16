@@ -1,11 +1,21 @@
-import crypto from 'crypto';import {adminDb} from './firebase-admin';
-// Outside development the key must be 64 hex characters (config enforces this at startup too); the
-// derived fallback key is only ever used in development, never with real tokens.
-const key=()=>{const raw=process.env.TOKEN_ENCRYPTION_KEY??'';if(/^[0-9a-fA-F]{64}$/.test(raw))return Buffer.from(raw,'hex');if(process.env.RELAY_ENV!=='development')throw new Error('TOKEN_ENCRYPTION_KEY must be 64 hex characters outside development.');return crypto.createHash('sha256').update(raw||'relay-development-key').digest()};
-export function safeEqual(received:string,expected:string){const a=crypto.createHash('sha256').update(received).digest();const b=crypto.createHash('sha256').update(expected).digest();return crypto.timingSafeEqual(a,b)}
-export function encrypt(value:string){const iv=crypto.randomBytes(12);const cipher=crypto.createCipheriv('aes-256-gcm',key(),iv);const encrypted=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return `${iv.toString('base64')}.${cipher.getAuthTag().toString('base64')}.${encrypted.toString('base64')}`}
-export function decrypt(value:string){const [iv,tag,payload]=value.split('.');const decipher=crypto.createDecipheriv('aes-256-gcm',key(),Buffer.from(iv,'base64'));decipher.setAuthTag(Buffer.from(tag,'base64'));return Buffer.concat([decipher.update(Buffer.from(payload,'base64')),decipher.final()]).toString('utf8')}
-export async function getWhatsAppConnection(businessId:string){const snap=await adminDb.collection('whatsappConnections').doc(businessId).get();if(!snap.exists)return null;const data=snap.data()!;return {businessId,wabaId:data.wabaId,phoneNumberId:data.phoneNumberId,status:data.status,accessTokenConfigured:Boolean(data.accessTokenEncrypted),updatedAt:data.updatedAt}}
-export async function saveWhatsAppConnection(value:{businessId:string;wabaId:string;phoneNumberId:string;accessToken:string}){const data={businessId:value.businessId,wabaId:value.wabaId,phoneNumberId:value.phoneNumberId,accessTokenEncrypted:encrypt(value.accessToken),status:'connected',updatedAt:new Date().toISOString()};await adminDb.collection('whatsappConnections').doc(value.businessId).set(data);return getWhatsAppConnection(value.businessId)}
-export function verifyMetaSignature(raw:Buffer,signature:string|undefined){const secret=process.env.META_APP_SECRET;if(!secret||!signature?.startsWith('sha256='))return false;const expected=crypto.createHmac('sha256',secret).update(raw).digest('hex');const received=signature.slice(7);return received.length===expected.length&&crypto.timingSafeEqual(Buffer.from(received),Buffer.from(expected))}
-export async function recordWebhook(messageId:string,payload:unknown){const ref=adminDb.collection('whatsappEvents').doc(messageId);return adminDb.runTransaction(async tx=>{const existing=await tx.get(ref);if(existing.exists)return false;tx.set(ref,{messageId,payload,receivedAt:new Date().toISOString(),processed:false});return true})}
+import { C } from '../db';
+import type { Config } from '../config';
+import type { Firestore } from '../lib/firestore';
+import { encrypt } from '../lib/crypto';
+
+// A merchant's own WhatsApp Business number, connected through Embedded Signup (Phase 3 wires the
+// signup flow). The access token is stored encrypted; channelAccounts maps the number back to the
+// business so inbound webhooks can be routed.
+export async function saveWhatsAppConnection(db: Firestore, cfg: Config, v: { businessId: string; wabaId: string; phoneNumberId: string; accessToken: string }) {
+  const at = new Date().toISOString();
+  const batch = db.batch();
+  batch.set(db.doc(C.whatsappConnections, v.businessId), { businessId: v.businessId, wabaId: v.wabaId, phoneNumberId: v.phoneNumberId, accessTokenEncrypted: encrypt(v.accessToken, cfg), status: 'connected', updatedAt: at });
+  batch.set(db.doc(C.channelAccounts, `whatsapp_${v.phoneNumberId}`), { id: `whatsapp_${v.phoneNumberId}`, businessId: v.businessId, channel: 'whatsapp', accountId: v.phoneNumberId });
+  await batch.commit();
+}
+
+export async function getWhatsAppConnection(db: Firestore, businessId: string) {
+  const d = await db.get(db.doc(C.whatsappConnections, businessId));
+  if (!d) return null;
+  return { businessId, wabaId: d.wabaId as string, phoneNumberId: d.phoneNumberId as string, status: d.status as string, accessTokenConfigured: Boolean(d.accessTokenEncrypted), updatedAt: d.updatedAt as string };
+}
