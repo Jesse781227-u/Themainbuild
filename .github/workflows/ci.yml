@@ -18,5 +18,5 @@ jobs:
       - run: npm run build
         working-directory: api
       - name: API tests against the Firebase emulators
-        run: npx -y firebase-tools@14 --config ../firebase.json --project demo-relay emulators:exec --only firestore,auth "npm test"
+        run: npx -y firebase-tools@14 --config ../firebase.json --project demo-relay emulators:exec --only firestore "npm test"
         working-directory: api

@@ -2,7 +2,7 @@ import { projectId } from './env';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { app } from '../src/app';
-import { adminAuth, adminDb } from '../src/services/firebase-admin';
+import { adminDb } from '../src/services/firebase-admin';
 
 export { adminDb, projectId };
 export const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST!;
@@ -19,31 +19,13 @@ export async function stopApi() {
   await adminDb.terminate().catch(() => undefined);
 }
 
-// In emulator mode verifyIdToken also checks the user exists, so users are created on first use.
-const users = new Set<string>();
-async function ensureUser(uid: string) {
-  if (users.has(uid)) return;
-  await adminAuth.createUser({ uid }).catch(e => { if (e?.code !== 'auth/uid-already-exists') throw e; });
-  users.add(uid);
-}
-
 export async function clearFirestore() {
   const res = await fetch(`http://${emulatorHost}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Could not clear the Firestore emulator: ${res.status}`);
 }
 
-// The Admin SDK accepts unsigned ID tokens when FIREBASE_AUTH_EMULATOR_HOST is set, so tests can
-// sign in as any uid without creating accounts.
-export function idToken(uid: string) {
-  const b64 = (v: object) => Buffer.from(JSON.stringify(v)).toString('base64url');
-  const now = Math.floor(Date.now() / 1000);
-  return `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ iss: `https://securetoken.google.com/${projectId}`, aud: projectId, auth_time: now, user_id: uid, sub: uid, iat: now, exp: now + 3600, firebase: { identities: {}, sign_in_provider: 'custom' } })}.`;
-}
-
-export async function api(method: string, path: string, opts: { as?: string; business?: string; body?: unknown; headers?: Record<string, string> } = {}) {
+export async function api(method: string, path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}) {
   const headers: Record<string, string> = { 'content-type': 'application/json', ...opts.headers };
-  if (opts.as) { await ensureUser(opts.as); headers.authorization = `Bearer ${idToken(opts.as)}`; }
-  if (opts.business) headers['x-business-id'] = opts.business;
   const res = await fetch(baseUrl + path, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
   const text = await res.text();
   let body: any = text;

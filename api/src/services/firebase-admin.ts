@@ -8,4 +8,4 @@ if(!admin.apps.length){
   if(projectId&&clientEmail&&privateKey)admin.initializeApp({credential:admin.credential.cert({projectId,clientEmail,privateKey})});
   else admin.initializeApp({projectId});
 }
-export const adminAuth=admin.auth();export const adminDb=admin.firestore();
+export const adminDb=admin.firestore();

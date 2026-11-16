@@ -8,8 +8,6 @@ const schema = z.object({
   // Required with no default: a missing value must never silently boot in development mode.
   RELAY_ENV: z.enum(['development', 'staging', 'production'], {required_error: 'RELAY_ENV is required (development, staging or production).'}),
   API_BASE_URL: z.string().url().default('http://localhost:4000'),
-  WEB_BASE_URL: z.string().url().default('http://localhost:5173'),
-  CORS_ORIGIN: z.string().default('http://localhost:5173'),
   PORT: z.coerce.number().int().positive().default(4000),
   FIREBASE_ADMIN_PROJECT_ID: z.string().optional(),
   FIREBASE_ADMIN_CLIENT_EMAIL: z.string().email().optional(),
@@ -17,7 +15,6 @@ const schema = z.object({
   FIREBASE_ADMIN_SERVICE_ACCOUNT_FILE: z.string().optional(),
   TOKEN_ENCRYPTION_KEY: z.string().optional(),
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
-  FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   META_APP_SECRET: z.string().optional(),
