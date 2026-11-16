@@ -14,6 +14,7 @@ The pivot is in progress on `pivot/whatsapp-native`. The audit, decisions and ph
 - **AI**: Gemini parses intents and picks typed tools. OpenAI transcribes voice notes. The model never writes to Firestore: tools validate with zod and write within the caller's business.
 - **Payments**: Bachs, split at source. Each merchant has their own Bachs account; Relay takes 1% of the goods (capped at ₦2,000, never on delivery), paid by the customer on top. All money is integer kobo.
 - **Scheduled jobs**: Cron Triggers on the same Worker (stock-hold release, the 20:00 Africa/Lagos daily summary).
+- **Outside the 24-hour window** only approved templates can be sent. They are listed in [docs/meta-templates.md](docs/meta-templates.md). Broadcasts go only to customers who opted in (SUBSCRIBE / STOP), and the owner sees the audience size and cost first.
 - **Meta-required pages**: `api/public/` (Privacy, Terms, Data Deletion), served as static assets. These are drafts awaiting legal review.
 
 ## Local development

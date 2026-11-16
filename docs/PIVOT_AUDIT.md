@@ -252,3 +252,10 @@ The API runs on Cloudflare Workers (Hono, Firestore REST, Queues, Cron Triggers,
 
 ## Phase 3 status (16 Nov 2026)
 Both bots are built. The Admin Bot covers onboarding by chat, Embedded Signup, catalogue, stock, orders, delivery zones, payment details, handback and "delete my data". The Shop Bot covers browse, cart, delivery or pickup, order and payment instructions, order status, handover to a person and "delete my data". Instagram DMs get the same shop flow as numbered text. The Meta data-deletion callback is also in. Checkout is conversational (lists and buttons), not a WhatsApp Flow: Flows need a published Flow and an encrypted endpoint, which can come later. Until the Bachs API is known, customers are told to pay to the bank details the owner sets with "payment details …".
+
+## Phase 4 status (16 Nov 2026)
+- **Daily summary:** at 20:00 Lagos the cron queues one summary per active business per Lagos date: paid orders, sales, unpaid orders and low stock, read from the Lagos-day stats.
+- **Broadcasts:** owners send "broadcast …" and see the audience size and estimated Meta cost before confirming. Only customers who sent SUBSCRIBE are targeted; STOP opts out.
+- **Template fallback:** outside the 24-hour window, the outbox switches to the approved template (`docs/meta-templates.md`).
+- **Share link:** "link" gives a wa.me link for Status and groups, the free fallback for broadcasts.
+- **Pricing:** broadcasts stay off until `MARKETING_MESSAGE_COST_KOBO` is set; the code doesn't assume a Meta price.

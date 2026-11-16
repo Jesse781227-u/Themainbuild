@@ -95,7 +95,7 @@ export const tasks = [
   { id: 'C18', week: 3, due: '2026-12-11', owner: 'claude', title: 'Webhook simulator for both bots', checks: [{ kind: 'exists', path: 'api/scripts/simulate-webhook.ts' }] },
 
   // ───────────── Phase 4 · Reports & broadcasts ─────────────
-  { id: 'Y11', week: 4, due: '2026-12-15', owner: 'you', title: 'Get the message templates approved by Meta', detail: 'Daily summary, receipt, broadcast templates.', checks: [] },
+  { id: 'Y11', week: 4, due: '2026-12-15', owner: 'you', title: 'Get the message templates approved by Meta', detail: 'Exact names and bodies are in docs/meta-templates.md (daily summary, receipt, broadcast). Also set MARKETING_MESSAGE_COST_KOBO.', checks: [] },
   { id: 'C19', week: 4, due: '2026-12-15', owner: 'claude', title: 'Daily summary at 20:00 Lagos',
     checks: [t('summary: daily summary uses Lagos day'), t('summary: uses a template outside the 24-hour window')] },
   { id: 'C20', week: 4, due: '2026-12-17', owner: 'claude', title: 'Broadcasts to opted-in customers with cost shown first',
