@@ -1,4 +1,5 @@
-import { adminDb, api, clearFirestore, doc, seed, startApi, stopApi } from './helpers';
+import { adminDb, clearFirestore, doc, seed, startApi, stopApi } from './helpers';
+import { checkout } from '../src/services/firestore-commerce';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -6,39 +7,35 @@ let fx: Awaited<ReturnType<typeof seed>>;
 before(async () => { await clearFirestore(); fx = await seed(); await startApi(); });
 after(stopApi);
 
+type Line = { productId: string; qty: number; priceAtAdd: number };
 const future = () => new Date(Date.now() + 3600_000).toISOString();
-const seedCart = (id: string, items: { productId: string; qty: number; priceAtAdd: number }[], expiresAt = future()) =>
-  adminDb.collection('carts').doc(id).set({ id, businessId: fx.a.id, sessionId: 'session-test', items, expiresAt });
+async function seedCart(id: string, items: Line[], expiresAt = future()) {
+  const cart = { id, businessId: fx.a.id, sessionId: 'session-test', items, expiresAt };
+  await adminDb.collection('carts').doc(id).set(cart);
+  return cart;
+}
 
 test('checkout: duplicate lines cannot oversell', async () => {
-  const viaApi = await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart`, { body: { sessionId: 'session-test', items: [{ productId: fx.a.product, qty: 3 }, { productId: fx.a.product, qty: 3 }] } });
-  assert.equal(viaApi.status, 409);
-  await seedCart('cart-dup', [{ productId: fx.a.product, qty: 3, priceAtAdd: 1000 }, { productId: fx.a.product, qty: 3, priceAtAdd: 1000 }]);
-  const res = await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart/cart-dup/checkout`, { body: {} });
-  assert.equal(res.status, 409);
+  const cart = await seedCart('cart-dup', [{ productId: fx.a.product, qty: 3, priceAtAdd: 1000 }, { productId: fx.a.product, qty: 3, priceAtAdd: 1000 }]);
+  await assert.rejects(checkout(cart, undefined, 'whatsapp'), /INSUFFICIENT_STOCK/);
   assert.equal((await doc('products', fx.a.product))!.inventoryQty, 5);
 });
 
 test('checkout: expired cart is rejected', async () => {
-  await seedCart('cart-old', [{ productId: fx.a.product, qty: 1, priceAtAdd: 1000 }], new Date(Date.now() - 1000).toISOString());
-  const res = await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart/cart-old/checkout`, { body: {} });
-  assert.equal(res.status, 409);
-  assert.equal(res.body.error.code, 'CART_EXPIRED');
+  const cart = await seedCart('cart-old', [{ productId: fx.a.product, qty: 1, priceAtAdd: 1000 }], new Date(Date.now() - 1000).toISOString());
+  await assert.rejects(checkout(cart, undefined, 'whatsapp'), /CART_EXPIRED/);
   assert.equal((await doc('products', fx.a.product))!.inventoryQty, 5);
 });
 
 test('checkout: order snapshots item name and price', async () => {
-  const cart = await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart`, { body: { sessionId: 'session-test', items: [{ productId: fx.a.product, qty: 2 }] } });
-  assert.equal(cart.status, 201);
-  const res = await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart/${cart.body.data.id}/checkout`, { body: {} });
-  assert.equal(res.status, 201);
-  const orderId = res.body.data.order.id;
+  const cart = await seedCart('cart-ok', [{ productId: fx.a.product, qty: 2, priceAtAdd: 1000 }]);
+  const order = await checkout(cart, undefined, 'whatsapp');
   await adminDb.collection('products').doc(fx.a.product).update({ name: 'Renamed later', price: 99999 });
-  const view = await api('GET', `/api/v1/storefronts/${fx.a.slug}/orders/${orderId}`);
-  assert.equal(view.status, 200);
-  assert.equal(view.body.data.items[0].name, `Product ${fx.a.id}`);
-  assert.equal(view.body.data.items[0].price, 1000);
-  assert.equal(view.body.data.subtotal, 2000);
+  const stored = (await doc('orders', order.id))!;
+  assert.equal(stored.items[0].name, `Product ${fx.a.id}`);
+  assert.equal(stored.items[0].price, 1000);
+  assert.equal(stored.subtotal, 2000);
+  assert.equal((await doc('products', fx.a.product))!.inventoryQty, 3);
   // The cart is consumed: a second checkout cannot create a second order.
-  assert.equal((await api('POST', `/api/v1/storefronts/${fx.a.slug}/cart/${cart.body.data.id}/checkout`, { body: {} })).status, 404);
+  await assert.rejects(checkout(cart, undefined, 'whatsapp'), /CART_NOT_FOUND/);
 });

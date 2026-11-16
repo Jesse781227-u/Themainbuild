@@ -53,11 +53,11 @@ export async function api(method: string, path: string, opts: { as?: string; bus
 
 const now = () => new Date().toISOString();
 
-// Two businesses, each with an owner, a product, a published storefront, a customer and an order.
+// Two businesses, each with an owner, a product, a customer and an order.
 export async function seed() {
   const fixture = {
-    a: { id: 'biz-a', owner: 'user-a', slug: 'shop-a', product: 'prod-a', customer: 'cust-a', order: 'order-a' },
-    b: { id: 'biz-b', owner: 'user-b', slug: 'shop-b', product: 'prod-b', customer: 'cust-b', order: 'order-b' },
+    a: { id: 'biz-a', owner: 'user-a', product: 'prod-a', customer: 'cust-a', order: 'order-a' },
+    b: { id: 'biz-b', owner: 'user-b', product: 'prod-b', customer: 'cust-b', order: 'order-b' },
   };
   const batch = adminDb.batch();
   for (const f of [fixture.a, fixture.b]) {
@@ -65,7 +65,6 @@ export async function seed() {
     batch.set(adminDb.collection('businessMemberships').doc(`${f.owner}_${f.id}`), { id: `${f.owner}_${f.id}`, businessId: f.id, userId: f.owner, role: 'owner', joinedAt: now() });
     batch.set(adminDb.collection('products').doc(f.product), { id: f.product, businessId: f.id, name: `Product ${f.id}`, description: '', price: 1000, currency: 'NGN', images: [], availability: true, inventoryQty: 5, lowStockThreshold: 2, channels: { web: true, whatsapp: true }, deletedAt: null });
     batch.set(adminDb.collection('inventory').doc(f.product), { productId: f.product, businessId: f.id, quantity: 5, lowStockThreshold: 2, adjustmentHistory: [] });
-    batch.set(adminDb.collection('storefronts').doc(f.slug), { businessId: f.id, slug: f.slug, published: true, name: `Shop ${f.id}`, templateId: 'kitchen-table', updatedAt: now() });
     batch.set(adminDb.collection('customers').doc(f.customer), { id: f.customer, businessId: f.id, name: `Customer ${f.id}`, phone: '08000000000', createdAt: now(), updatedAt: now() });
     batch.set(adminDb.collection('orders').doc(f.order), { id: f.order, businessId: f.id, channel: 'web', items: [{ productId: f.product, qty: 1, priceAtAdd: 1000 }], subtotal: 1000, currency: 'NGN', paymentStatus: 'pending', deliveryStatus: 'pending', orderStatus: 'pending', createdAt: now(), updatedAt: now() });
   }
