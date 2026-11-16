@@ -2,3 +2,4 @@ export interface Product{id:string;businessId:string;name:string;description:str
 export interface Category{id:string;businessId:string;name:string;sortOrder:number;parentId?:string|null}
 export interface Cart{id:string;businessId:string;sessionId?:string;customerId?:string;items:{productId:string;qty:number;priceAtAdd:number}[];expiresAt:string}
 export interface Order{id:string;businessId:string;customer?:unknown;channel:'web'|'whatsapp';items:{productId:string;qty:number;priceAtAdd:number;price?:number;name?:string}[];subtotal:number;currency:string;paymentStatus:'pending'|'paid'|'failed'|'refunded';deliveryStatus:'pending'|'confirmed'|'cancelled';orderStatus:'pending'|'confirmed'|'preparing'|'ready'|'completed'|'cancelled';createdAt:string;updatedAt:string}
+export interface Payment{id:string;orderId:string;provider:'backs.io';providerRef?:string;amount:number;currency:string;status:'pending'|'paid'|'failed';createdAt:string;updatedAt:string}
