@@ -1,2 +1,0 @@
-import {MessageCircle} from 'lucide-react';
-export default function WhatsAppShoppingExperience(){return <div className="min-h-full bg-background p-6 md:p-10"><div className="max-w-3xl mx-auto bg-card rounded-[28px] border border-border/50 p-10 text-center shadow-soft"><MessageCircle className="mx-auto text-muted-foreground/50" size={38}/><h1 className="mt-5 text-2xl font-extrabold text-ink">WhatsApp Shopping</h1><p className="mt-2 text-muted-foreground">The customer experience will appear here once a live WhatsApp catalogue is connected.</p></div></div>}

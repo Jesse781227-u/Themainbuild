@@ -1,2 +1,0 @@
-import {getMessaging,getToken,isSupported} from 'firebase/messaging';import {app} from './firebase';
-export async function requestPushToken(){if(!app||typeof window==='undefined'||!(await isSupported()))return null;const permission=await Notification.requestPermission();if(permission!=='granted')return {token:null,permission};const token=await getToken(getMessaging(app),{vapidKey:import.meta.env.VITE_FIREBASE_VAPID_KEY,serviceWorkerRegistration:await navigator.serviceWorker.ready});return {token,permission}}
