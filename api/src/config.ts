@@ -19,7 +19,7 @@ const schema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   META_APP_SECRET: z.string().optional(),
   META_VERIFY_TOKEN: z.string().optional(),
-  BACKS_IO_API_BASE_URL: optionalUrl,
+  BACHS_API_BASE_URL: optionalUrl,
 });
 
 export function parseConfig(env: NodeJS.ProcessEnv = process.env) {

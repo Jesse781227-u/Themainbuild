@@ -1,62 +1,48 @@
 # Relay
 
-Relay is a merchant operations platform for small and medium businesses in Nigeria: e-commerce (web storefront and automated WhatsApp commerce) plus CRM and push advertising. The codebase contains the web dashboard/storefront and an API that owns tenant authorization, catalogue, inventory, orders, customers, delivery, notifications, WhatsApp orchestration, and push campaigns.
+Relay runs a small business's shop inside WhatsApp (and, next, Instagram DMs), for SMEs in Nigeria. There is no merchant dashboard.
 
-## Current architecture decisions
+- **Owners** manage their business by chatting with the Relay **Admin Bot** (a Relay-owned WhatsApp number): products, stock, orders, debts and reports, by text or voice note.
+- **Customers** message the merchant's **own WhatsApp Business number**, which is connected through Meta Embedded Signup with coexistence. Relay's **Shop Bot** answers there: product carousels, checkout, Bachs payment details, payment confirmation and delivery. It hands over to the owner when it's unsure.
 
-- WhatsApp uses Meta Cloud API directly; n8n orchestrates workflows and is not a source of truth.
-- Customer checkout is isolated behind the backs.io payment-provider interface.
-- Delivery supports merchant-defined zones, prices, timeframes, scheduled batches, pickup, and optional Uber Direct express delivery.
-- Firestore is the persistence layer and Admin SDK access stays server-side.
-- Environment values are never committed. See [.env.example](.env.example) and [docs/production-context.md](docs/production-context.md).
+The pivot is in progress on `pivot/whatsapp-native`. The audit, decisions and phase plan are in [docs/PIVOT_AUDIT.md](docs/PIVOT_AUDIT.md). The pre-pivot web app is preserved at the tag `pre-pivot`.
+
+## Architecture
+
+- **`relay-api`**: Express + Firebase Admin + zod on Render. It owns all data and all bot logic. Meta and Bachs webhooks are signature-verified, idempotent, and saved before they are acknowledged.
+- **Firestore**: flat top-level collections, each document carrying a `businessId`. No client access (deny-all rules). Only the API reads and writes, through the Admin SDK.
+- **AI**: Gemini parses intents and picks typed tools. OpenAI transcribes voice notes. The model never writes to Firestore: tools validate with zod and write within the caller's business.
+- **Payments**: Bachs, split at source. Each merchant has their own Bachs account; Relay takes 1% of the goods (capped at ₦2,000, never on delivery), paid by the customer on top. All money is integer kobo.
+- **Scheduled jobs**: a Cloudflare Worker cron calls secret-protected internal API endpoints (stock-hold release, the 20:00 Africa/Lagos daily summary).
 
 ## Local development
 
-Install dependencies in both packages, copy `.env.example` to local environment files, start Firebase emulators, then run the web and API dev servers.
-
 ```text
-cd web && npm install && npm run dev
-cd api && npm install && npm run dev
-firebase emulators:start
+cd api && npm install
+cp ../.env.example .env        # RELAY_ENV is required
+cd .. && npm run dev           # Firestore + Storage emulators and the API
 ```
 
-The API validates production environment requirements at startup. Development may use the Firebase Auth/Firestore emulator variables.
+The emulators need Java 21 and the Firebase CLI.
 
-## Repository structure
-
-- `web/` — React/Vite dashboard, onboarding, public storefront, PWA shell, push opt-in
-- `api/` — Express API, Firebase Admin, commerce, delivery, CRM, WhatsApp, and push campaigns
-- `shared/` — shared domain types
-- `firestore.rules`, `storage.rules`, `firebase.json` — Firebase infrastructure configuration
-- `render.yaml` — separate Render web/API service definitions
-
-## Build and tests
+## Tests
 
 ```text
-npm run build --prefix web
-npm run build --prefix api
-npm test --prefix api
+npm run test:emulators --prefix api
 ```
 
-The test command currently performs strict API type checking. Emulator-backed rules, concurrency, and provider contract tests should run in CI once the Firebase CLI is provisioned in the runner.
+This runs the API tests against the Firestore emulator under the `demo-relay` project. CI runs the same command on every push.
 
-## Render deployment
+## Deployment
 
-The repository includes [render.yaml](render.yaml), which defines two services:
+[render.yaml](render.yaml) defines one service, `relay-api`, with `/health` as its health check. Set the variables from [.env.example](.env.example) on Render. Outside development the API refuses to start without:
+- Firebase Admin credentials;
+- a 64-hex-character `TOKEN_ENCRYPTION_KEY`;
+- `META_APP_SECRET`;
+- a `META_VERIFY_TOKEN` of at least 16 characters.
 
-- `relay-web` — static Vite output from `web/dist`
-- `relay-api` — Node API listening on Render’s `PORT`, with `/health` as its health check
+Paste `FIREBASE_ADMIN_PRIVATE_KEY` with escaped newlines (`\n`). Development, staging and production use separate Firebase projects, Render services and provider credentials. Never commit any of them.
 
-To deploy:
+## Tracker
 
-1. Push this repository to GitHub.
-2. In Render, choose **New → Blueprint**, connect the repository, and select `render.yaml`.
-3. Create separate Render environment groups for Development, Staging, and Production.
-4. Set the API variables from `.env.example` on `relay-api`. At minimum, production needs `RELAY_ENV`, `API_BASE_URL`, `WEB_BASE_URL`, `CORS_ORIGIN`, Firebase Admin credentials, and `TOKEN_ENCRYPTION_KEY`.
-5. Set the client variables on `relay-web` before its build. At minimum, set `VITE_API_BASE_URL` to the public API URL and provide the `VITE_FIREBASE_*` client configuration. Vite embeds these values during the build.
-6. Deploy the API first, confirm `/health` and `/health/deep`, then deploy the web service.
-7. Update `CORS_ORIGIN` to the final web URL and redeploy the API if the web URL changes.
-
-For `FIREBASE_ADMIN_PRIVATE_KEY`, paste the service-account key as a Render secret with escaped newlines (`\n`). The API converts those escaped newlines before initializing Firebase Admin. Never place production credentials in Git or in `web` variables unless they are explicitly `VITE_` client configuration values.
-
-After deployment, configure Firebase Auth authorized domains, Meta/n8n webhook URLs, backs.io webhook URLs, and any Uber Direct callback URL with the deployed API hostname. Production should use separate Firebase, Render, and external-provider credentials from development and staging.
+`npm run tracker` serves the phase tracker at http://localhost:4700 ([tools/mvp-tracker/tasks.mjs](tools/mvp-tracker/tasks.mjs)).
