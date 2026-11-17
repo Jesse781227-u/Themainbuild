@@ -9,6 +9,7 @@ import { adminConversationId } from '../services/conversations';
 import { completeSignup, getSignupSession, SignupError } from '../services/signup';
 import { enqueue } from '../services/queue';
 import { deletionCode } from '../bots/deletion';
+import { isDevChat } from './dev';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -28,6 +29,11 @@ export function signupRoutes(deps: { fetch?: typeof fetch } = {}) {
     const token = c.req.param('token');
     const session = await getSignupSession(getDb(c.env), token);
     if (!session) return c.html(page('Link expired', '<p>This link has expired or was already used. Send CONNECT to the Relay Admin Bot on WhatsApp for a new one.</p>'), 404);
+    // Local test chat: no Facebook login, just a pretend number (see routes/dev.ts).
+    if (isDevChat(cfg)) {
+      const testScript = `<script>document.getElementById('go').onclick=function(){var o=document.getElementById('status');o.textContent='Connecting…';fetch('/dev/connect/${token}',{method:'POST'}).then(function(r){return r.json()}).then(function(j){o.textContent=j.success?'Connected (test mode). Your shop now has a pretend WhatsApp number. Open the customer chat to try it like a customer.':'Something went wrong. Send CONNECT to the Relay Admin Bot for a new link.'})}</script>`;
+      return c.html(page('Connect your WhatsApp Business number', '<p><b>Test mode.</b> On real WhatsApp this step logs in with Facebook and links your WhatsApp Business number. Here it gives your shop a pretend number so you can try it from the customer chat.</p><p><button id="go" type="button">Connect (test mode)</button></p><p id="status" class="meta"></p>', testScript));
+    }
     if (!cfg.META_APP_ID || !cfg.META_ES_CONFIG_ID) return c.html(page('Not available yet', '<p>WhatsApp connection is not configured yet. Please try again later.</p>'), 503);
     const data = JSON.stringify({ token, appId: cfg.META_APP_ID, configId: cfg.META_ES_CONFIG_ID, version: cfg.META_GRAPH_VERSION }).replace(/</g, '\\u003c');
     const script = `<script>

@@ -110,8 +110,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 <div class="screen">
   <header>
     <button aria-label="Back" tabindex="-1">${ICON.back}</button>
-    <div class="avatar">${initial}</div>
-    <div class="peer"><b>${cfg.title}</b><small id="sub">${cfg.subtitle}</small></div>
+    <div class="avatar" id="avatar">${initial}</div>
+    <div class="peer"><b id="title">${cfg.title}</b><small id="sub">${cfg.subtitle}</small></div>
     <button aria-label="Video call" tabindex="-1">${ICON.video}</button>
     <button aria-label="Voice call" tabindex="-1">${ICON.call}</button>
     <button aria-label="Menu" id="menuBtn">${ICON.more}</button>
@@ -120,8 +120,6 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     <div class="info" id="me"></div>
     <button id="clear">Clear chat</button>
     <button id="fresh">${cfg.role === 'owner' ? 'Start as a new business owner' : 'Start as a new customer'}</button>
-    <button id="restore">${cfg.role === 'owner' ? 'Back to Mama Put Kitchen owner' : 'Back to the usual customer'}</button>
-    <button id="reseed">Reset Mama Put Kitchen products</button>
   </div>
   <div id="log"></div>
   <footer>
@@ -144,14 +142,21 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 (function () {
   var CFG = ${json(cfg)};
   var ICON = ${json({ ticks: '<svg viewBox="0 0 16 11" width="16" height="11"><path fill="currentColor" d="M11.1.3 4.8 7.5 2.3 5 1.2 6.1l3.7 3.6L12.2 1.4zm3.6 0L8.4 7.5l-.8-.8-1.1 1.1 1.9 1.9L15.8 1.4z"/></svg>', reply: ICON.reply, list: ICON.list, mic: ICON.mic, send: ICON.send })};
-  var KEY = 'relay.dev.' + CFG.role + '.phone';
+  var KEY = 'relay.chat.' + CFG.role + '.phone';
   var $ = function (id) { return document.getElementById(id); };
-  var state = { count: -1, waiting: false, waitTimer: null, sheet: null, selected: null };
+  var state = { count: -1, waiting: false, waitTimer: null, sheet: null, selected: null, noShop: null };
 
-  function store(v) { try { if (v === undefined) return localStorage.getItem(KEY); if (v === null) localStorage.removeItem(KEY); else localStorage.setItem(KEY, v); } catch (e) { return null; } }
-  var phone = store() || CFG.defaultPhone;
-  function showMe() { $('me').textContent = 'You are +' + phone + (phone === CFG.defaultPhone ? (CFG.role === 'owner' ? ' (owner of Mama Put Kitchen)' : '') : ' (new)'); }
+  function read(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function store(v) { try { localStorage.setItem(KEY, v); } catch (e) { /* private mode: this tab only */ } }
+  function newPhone() { var n = '23480'; for (var i = 0; i < 8; i++) n += Math.floor(Math.random() * 10); return n; }
+  // The owner tab is always a new business owner until signup is done; the customer tab is a customer.
+  var phone = read(KEY) || (CFG.role === 'owner' ? newPhone() : CFG.defaultPhone);
+  store(phone);
+  var bot = CFG.botNumber;   // the customer tab learns its shop from the owner tab (see findShop)
+  var title = CFG.title;
+  function showMe() { $('me').textContent = 'You are +' + phone + (CFG.role === 'owner' ? ' (business owner)' : ' (customer)'); }
   showMe();
+  function setTitle(t) { title = t; $('title').textContent = t; $('avatar').textContent = t.charAt(0).toUpperCase(); }
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function html(tag, cls, markup) { var e = el(tag, cls); e.innerHTML = markup; return e; }
@@ -227,7 +232,10 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     var log = $('log'); log.innerHTML = '';
     log.appendChild(el('div', 'day', 'Today'));
     log.appendChild(el('div', 'notice', 'This business uses a secure service from Meta to manage this chat. Test mode: nothing is sent to a real phone.'));
-    if (!list.length) { log.appendChild(el('p', 'empty', CFG.role === 'owner' ? 'Say "hi" to Relay.' : 'Say "hi" to ' + CFG.title + '.')); return; }
+    if (!list.length) {
+      if (!bot && CFG.role === 'customer') { log.appendChild(el('p', 'empty', state.noShop || 'Looking for your shop…')); return; }
+      log.appendChild(el('p', 'empty', 'Say "hi" to ' + title + '.')); return;
+    }
     var prev = null;
     list.forEach(function (m) { log.appendChild(bubble(m, !prev || prev.direction !== m.direction)); prev = m; });
     log.scrollTop = log.scrollHeight;
@@ -241,9 +249,27 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     if (on) state.waitTimer = setTimeout(function () { typing(false); }, 8000);
   }
 
+  // Customer tab: the shop belongs to whoever is signing up in the owner tab (same browser).
+  function findShop() {
+    var owner = read('relay.chat.owner.phone');
+    if (!owner) { noShop('No shop yet. Open the owner chat and sign up a business first.'); return; }
+    fetch('/dev/shop?owner=' + owner).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.shop) {
+        if (bot !== res.shop.botNumber) { bot = res.shop.botNumber; state.count = -1; state.noShop = null; setTitle(res.shop.name); $('text').disabled = false; render([]); poll(); }
+        return;
+      }
+      bot = '';
+      noShop(res.reason === 'not_connected'
+        ? res.name + ' isn\\'t connected yet. In the owner chat, finish signup and open the connect link (it has a test-mode button).'
+        : 'No shop yet. Open the owner chat and sign up a business first.');
+    }).catch(function () {});
+  }
+  function noShop(msg) { if (state.noShop === msg) return; state.noShop = msg; setTitle('Shop'); $('text').disabled = true; state.count = -1; render([]); }
+
   function poll() {
     var p = phone;
-    fetch('/dev/messages?phone=' + p + '&bot=' + encodeURIComponent(CFG.botNumber)).then(function (r) { return r.json(); }).then(function (list) {
+    if (!bot) return;
+    fetch('/dev/messages?phone=' + p + '&bot=' + encodeURIComponent(bot)).then(function (r) { return r.json(); }).then(function (list) {
       if (p !== phone) return;
       if (list.length !== state.count) {
         var grew = list.length > state.count && state.count >= 0;
@@ -254,8 +280,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   }
 
   function send(text, choice) {
-    if (!choice && !text) return;
-    fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: CFG.botNumber, phone: phone, text: text, choice: choice }) })
+    if ((!choice && !text) || !bot) return;
+    fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: bot, phone: phone, text: text, choice: choice }) })
       .then(function () { poll(); })
       .catch(function () { alertNote('Could not reach the local server. Is npm run dev running?'); });
     typing(true);
@@ -288,7 +314,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 
   function fab() { $('fab').innerHTML = $('text').value.trim() ? ICON.send : ICON.mic; }
   function post(path, body) { return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); }); }
-  function switchTo(p) { phone = p; store(p === CFG.defaultPhone ? null : p); showMe(); state.count = -1; typing(false); render([]); poll(); }
+  function switchTo(p) { phone = p; store(p); showMe(); state.count = -1; typing(false); render([]); if (CFG.role === 'customer') findShop(); poll(); }
 
   $('text').oninput = fab;
   $('text').onkeydown = function (e) { if (e.key === 'Enter') send($('text').value.trim()); };
@@ -298,12 +324,11 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   $('sheetSend').onclick = function () { if (state.selected) { send(null, { id: state.selected.id, title: state.selected.title, kind: 'list' }); closeSheet(); } };
   $('menuBtn').onclick = function (e) { e.stopPropagation(); $('menu').classList.toggle('open'); };
   document.addEventListener('click', function (e) { if (!$('menu').contains(e.target)) $('menu').classList.remove('open'); });
-  $('clear').onclick = function () { $('menu').classList.remove('open'); post('/dev/clear', { botNumber: CFG.botNumber, phone: phone }).then(function () { state.count = -1; render([]); poll(); }); };
-  $('fresh').onclick = function () { $('menu').classList.remove('open'); var n = '23480'; for (var i = 0; i < 8; i++) n += Math.floor(Math.random() * 10); switchTo(n); };
-  $('restore').onclick = function () { $('menu').classList.remove('open'); switchTo(CFG.defaultPhone); };
-  $('reseed').onclick = function () { $('menu').classList.remove('open'); post('/dev/seed').then(function () { alertNote('Mama Put Kitchen products were reset.'); }); };
+  $('clear').onclick = function () { $('menu').classList.remove('open'); if (!bot) return; post('/dev/clear', { botNumber: bot, phone: phone }).then(function () { state.count = -1; render([]); poll(); }); };
+  $('fresh').onclick = function () { $('menu').classList.remove('open'); switchTo(newPhone()); };
 
   render([]);
+  if (CFG.role === 'customer') { findShop(); setInterval(findShop, 3000); }
   poll();
   setInterval(poll, 1000);
 })();
