@@ -30,6 +30,7 @@ export function parseAdminCommand(input: string): ToolChoice | null {
   let m: RegExpExecArray | null;
 
   if (/^(help|menu|commands|what can you do|\?)$/.test(t)) return { tool: 'help', args: {} };
+  if (/^(hi+|hello+|hey+|hiya|helo|good (morning|afternoon|evening|day)|howdy|yo|sup|what'?s up|how far|hi there|hello there)(\s+relay)?[\s!.]*$/.test(t)) return { tool: 'greet', args: {} };
   if (/^(products|product list|list products|stock|inventory|catalog(ue)?|my products)$/.test(t)) return { tool: 'listProducts', args: {} };
   if (/^(orders|recent orders|list orders)$/.test(t)) return { tool: 'listOrders', args: { filter: 'recent' } };
   if (/^(orders today|today'?s orders)$/.test(t)) return { tool: 'listOrders', args: { filter: 'today' } };

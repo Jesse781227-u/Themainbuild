@@ -22,7 +22,7 @@ import { createSignupSession } from '../services/signup';
 import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../services/broadcasts';
 import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
-import { findProducts, list, type BotDeps } from './common';
+import { buttons, findProducts, list, type BotDeps } from './common';
 
 export interface ToolCtx {
   db: Firestore; cfg: Config; deps: BotDeps;
@@ -349,6 +349,16 @@ export const adminTools = {
     },
   }),
   help: def({ spec: { name: 'help', description: 'Explain what the Admin Bot can do.', params: {} }, schema: z.object({}), async run() { return HELP; } }),
+  greet: def({
+    spec: { name: 'greet', description: 'The owner says hello.', params: {} },
+    schema: z.object({}),
+    async run(_a, ctx) {
+      const first = ctx.business.ownerName?.split(' ')[0];
+      const notConnected = ctx.business.status === 'onboarding' ? '\n\nYour WhatsApp number isn\'t connected yet, so customers can\'t order. Send CONNECT to get the link.' : '';
+      // Button titles are sent back as text, so they work as commands.
+      return buttons(`Hi${first ? ` ${first}` : ''} 👋 What would you like to do for ${ctx.business.name}?${notConnected}`, [['g:products', 'Products'], ['g:orders', 'Orders'], ['g:help', 'Help']]);
+    },
+  }),
   offTopic: def({ spec: { name: 'offTopic', description: 'Anything not about running this shop (general questions, chit-chat, other topics).', params: {} }, schema: z.object({}), async run() { return OFF_TOPIC; } }),
 };
 

@@ -120,6 +120,16 @@ test('onboarding: coming back after a break offers Continue or Start over', asyn
   assert.equal(await doc('businesses', businessId), null);
 });
 
+test('admin: an owner who is already set up gets a greeting, not "didn\'t understand"', async () => {
+  const bot = new Bot();
+  const o = fx.b.ownerPhone.slice(1);
+  const hi = await bot.send('admin', { from: o, text: 'Hi' });
+  assert.match(hi[0].text, /^Hi 👋 What would you like to do for Business biz-b\?/);
+  assert.deepEqual(opts(hi), ['g:products', 'g:orders', 'g:help']);
+  assert.match((await bot.send('admin', { from: o, choice: 'g:products', text: 'Products' }))[0].text, /Your products/);
+  assert.match((await bot.send('admin', { from: o, text: 'good morning!' }))[0].text, /What would you like to do/);
+});
+
 test('categories: owner commands, counts, and the delete-with-products guard', async () => {
   const bot = new Bot();
   const o = fx.a.ownerPhone.slice(1);
