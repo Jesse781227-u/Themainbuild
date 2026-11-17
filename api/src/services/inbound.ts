@@ -33,6 +33,24 @@ type Obj = Record<string, any>;
 const tsToIso = (t: unknown) => { const n = Number(t); return Number.isFinite(n) && n > 0 ? new Date(n < 1e12 ? n * 1000 : n).toISOString() : new Date().toISOString(); };
 
 // Extracts customer/owner messages. Status updates (sent/delivered/read) are ignored for now.
+// Meta accepts a send and reports delivery later in `statuses`. Failed deliveries are otherwise
+// invisible, so surface their error codes (no phone numbers) for the logs.
+export function failedStatuses(body: unknown): { messageId: string; code: number | null; title: string; details: string }[] {
+  const out: { messageId: string; code: number | null; title: string; details: string }[] = [];
+  const b = (body ?? {}) as Obj;
+  if (b.object !== 'whatsapp_business_account') return out;
+  for (const entry of Array.isArray(b.entry) ? b.entry : []) {
+    for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+      for (const s of Array.isArray(change?.value?.statuses) ? change.value.statuses : []) {
+        if (s?.status !== 'failed') continue;
+        const e = Array.isArray(s.errors) ? s.errors[0] : undefined;
+        out.push({ messageId: String(s.id ?? ''), code: typeof e?.code === 'number' ? e.code : null, title: String(e?.title ?? ''), details: String(e?.error_data?.details ?? '') });
+      }
+    }
+  }
+  return out;
+}
+
 export function parseMetaWebhook(body: unknown): InboundItem[] {
   const b = (body ?? {}) as Obj;
   const items: InboundItem[] = [];

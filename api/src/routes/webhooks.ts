@@ -4,7 +4,7 @@ import { getDb } from '../db';
 import type { Env } from '../env';
 import { safeEqual, verifyMetaSignature } from '../lib/crypto';
 import { log } from '../lib/logger';
-import { parseMetaWebhook, saveInbound } from '../services/inbound';
+import { failedStatuses, parseMetaWebhook, saveInbound } from '../services/inbound';
 import { recordBachsPayment } from '../services/payments';
 import { enqueue } from '../services/queue';
 import { bachsAdapter, type BachsAdapter } from '../services/bachs';
@@ -30,6 +30,7 @@ export function webhooks(deps: { bachs?: BachsAdapter } = {}) {
     if (!verifyMetaSignature(raw, c.req.header('x-hub-signature-256'), cfg.META_APP_SECRET)) return c.body(null, 401);
     let body: unknown;
     try { body = JSON.parse(new TextDecoder().decode(raw)); } catch { return c.body(null, 400); }
+    for (const s of failedStatuses(body)) log('warn', 'whatsapp_delivery_failed', s);
     const db = getDb(c.env);
     const ids: string[] = [];
     for (const item of parseMetaWebhook(body)) {
