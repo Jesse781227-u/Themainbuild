@@ -87,7 +87,22 @@ export const adminTools = {
     schema: z.object({ name: z.string().trim().min(1).max(120), price: naira, stock: qty.min(0).max(1_000_000).optional(), description: z.string().max(500).optional() }),
     async run(a, ctx) {
       const existing = (await findProducts(ctx.db, ctx.business.id, a.name)).find(p => p.name.toLowerCase() === a.name.toLowerCase());
-      if (existing) return `You already have ${existing.name}. To change it, send "price ${existing.name} 3000" or "restock ${existing.name} 5".`;
+      if (existing) {
+        // Sending the same product again with new numbers means "correct it".
+        const changes: string[] = [];
+        if (a.price !== existing.priceKobo) {
+          await ctx.db.update(ctx.db.doc(C.products, existing.id), { priceKobo: a.price, updatedAt: new Date().toISOString() });
+          changes.push(`price ${formatKobo(existing.priceKobo)} → ${formatKobo(a.price)}`);
+        }
+        if (a.stock !== undefined && a.stock !== existing.stock) {
+          const now = await adjustInventory(ctx.db, existing.id, ctx.business.id, a.stock - existing.stock, 'adjustment', 'owner');
+          changes.push(`stock ${existing.stock} → ${now}`);
+        }
+        if (!changes.length) return `You already have ${existing.name}: ${formatKobo(existing.priceKobo)}, ${existing.stock} in stock. Nothing changed.`;
+        return `Updated ${existing.name}: ${changes.join(', ')}.`;
+      }
+      // Never default a new product to 0 stock: customers would see it as sold out.
+      if (a.stock === undefined) return `How many ${a.name} do you have? Send it again with the stock at the end, e.g. "${a.name}, ${a.price / 100}, 10". For a service, use how many you can take on.`;
       const p = await createProduct(ctx.db, { businessId: ctx.business.id, name: a.name, priceKobo: a.price, stock: a.stock ?? 0, description: a.description ?? '', images: ctx.imageUrl ? [ctx.imageUrl] : [] });
       return `Added ${p.name}: ${formatKobo(p.priceKobo)}, ${p.stock} in stock${ctx.imageUrl ? ', with the photo' : ''}.`;
     },

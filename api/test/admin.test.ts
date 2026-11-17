@@ -10,6 +10,25 @@ before(async () => { await clearFirestore(); fx = await seed(); });
 
 const NEW_OWNER = '2348035550000';
 
+test('admin: onboarding rejects a product line as the name, asks for missing stock, and corrects a re-sent product', async () => {
+  const bot = new Bot();
+  const from = '2348035550099';
+  await bot.send('admin', { from, text: 'hi' });
+  assert.match((await bot.send('admin', { from, text: 'add Jollof rice, 2500, 10' }))[0].text, /looks like a product or a command\. First, what's your business called/);
+  assert.equal(await doc('ownerPhones', `+${from}`), null, 'no business was created from a product line');
+  assert.match((await bot.send('admin', { from, text: 'Shop 24' }))[0].text, /What do you sell/, 'a name with a number is still a name');
+  await bot.send('admin', { from, text: '5' });
+
+  assert.match((await bot.send('admin', { from, text: 'Haircut, 3000,' }))[0].text, /How many Haircut do you have\?[\s\S]*Haircut, 3000, 10/);
+  const owner = await doc('ownerPhones', `+${from}`);
+  const listed = await db.query('products', [['businessId', '==', owner.businessId]]);
+  assert.equal(listed.length, 0, 'nothing is created without a stock');
+
+  assert.match((await bot.send('admin', { from, text: 'Haircut, 3000, 5' }))[0].text, /Added Haircut: ₦3,000, 5 in stock/);
+  assert.match((await bot.send('admin', { from, text: 'Haircut, 3500, 50' }))[0].text, /Updated Haircut: price ₦3,000 → ₦3,500, stock 5 → 50/);
+  assert.match((await bot.send('admin', { from, text: 'Haircut, 3500, 50' }))[0].text, /already have Haircut: ₦3,500, 50 in stock\. Nothing changed/);
+});
+
 test('admin: new owner is onboarded by chat', async () => {
   const bot = new Bot();
   assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'hi' }))[0].text, /what's your business called/i);

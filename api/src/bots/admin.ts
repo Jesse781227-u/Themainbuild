@@ -11,7 +11,7 @@ import type { AdminContext } from '../services/router';
 import { createSignupSession } from '../services/signup';
 import { HELP, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
 import { buttons, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
-import { chooseAdminTool, parseAdminCommand } from './intent';
+import { chooseAdminTool, parseAdminCommand, parseProductLine } from './intent';
 
 const CONFIRM_MINUTES = 10;
 
@@ -48,6 +48,8 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     if (step === 'name') {
       const name = text.trim().slice(0, 80);
       if (name.length < 2) return reply("What's your business called?");
+      // A command or a full product line ("add Jollof rice, 2500, 10") is not a business name.
+      if (parseAdminCommand(name) || parseProductLine(name)?.stock !== undefined) return reply("That looks like a product or a command. First, what's your business called? You can add products right after.");
       const id = randomId(9).replace(/[^A-Za-z0-9]/g, 'x');
       const at = new Date().toISOString();
       const created = await db.create(db.doc(C.ownerPhones, ctx.ownerPhone), { businessId: id });
