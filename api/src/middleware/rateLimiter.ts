@@ -9,6 +9,8 @@ export const isWebhookPath = (path: string) => path.startsWith('/api/v1/webhooks
 export const rateLimiter: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
   const limiter = c.env?.RATE_LIMITER;
   if (!limiter || isWebhookPath(c.req.path)) return next();
+  // The local test chat polls every second from two tabs; it only exists in development.
+  if (c.env.RELAY_ENV === 'development' && (c.req.path === '/dev' || c.req.path.startsWith('/dev/'))) return next();
   const key = c.req.header('cf-connecting-ip') ?? 'unknown';
   const { success } = await limiter.limit({ key });
   if (!success) return c.json({ success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests.' } }, 429);

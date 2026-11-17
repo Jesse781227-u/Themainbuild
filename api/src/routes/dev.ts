@@ -1,16 +1,21 @@
-// Development only: a browser chat page for trying the bots without WhatsApp. Messages typed on the
-// page are turned into signed Meta webhooks and go through the real webhook → queue → bot path;
-// replies are captured by send() in log mode (devMessages) and shown on the page.
+// Development only: WhatsApp-style chat screens for trying the bots without WhatsApp.
+//   /dev/owner     the demo shop's owner chatting with the Relay Admin Bot
+//   /dev/customer  a customer chatting with the demo shop (Mama Put Kitchen)
+// Open both in two tabs: an order placed as the customer shows up in the owner's chat.
+// Messages typed on a page become signed Meta webhooks and go through the real webhook → queue →
+// bot path; replies are captured by send() in log mode (devMessages) and shown on the page.
 // Every route here 404s unless RELAY_ENV is development and META_SEND_MODE is log.
 import { Hono, type ExecutionContext } from 'hono';
 import { getConfig } from '../config';
 import { C, getDb } from '../db';
-import { seedDemoShop } from '../dev/seed';
-import { DEV_PAGE } from '../dev/page';
+import { DEMO, seedDemoShop } from '../dev/seed';
+import { chatPage } from '../dev/page';
 import type { Env } from '../env';
-import { hmacSha256Hex } from '../lib/crypto';
+import { decrypt, hmacSha256Hex } from '../lib/crypto';
+import { adminConversationId, customerConversationId } from '../services/conversations';
 
 type Choice = { id: string; title: string; kind: 'button' | 'list' };
+const CUSTOMER_PHONE = '2348090000001';
 
 function payload(o: { botNumber: string; from: string; text: string; choice?: Choice }) {
   const id = `wamid.dev.${crypto.randomUUID()}`;
@@ -18,8 +23,10 @@ function payload(o: { botNumber: string; from: string; text: string; choice?: Ch
   const message = o.choice
     ? { from: o.from, id, timestamp, type: 'interactive', interactive: o.choice.kind === 'list' ? { type: 'list_reply', list_reply: { id: o.choice.id, title: o.choice.title } } : { type: 'button_reply', button_reply: { id: o.choice.id, title: o.choice.title } } }
     : { from: o.from, id, timestamp, type: 'text', text: { body: o.text } };
-  return { object: 'whatsapp_business_account', entry: [{ id: 'waba-dev', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15550000000', phone_number_id: o.botNumber }, contacts: [{ wa_id: o.from, profile: { name: 'Test' } }], messages: [message] } }] }] };
+  return { object: 'whatsapp_business_account', entry: [{ id: 'waba-dev', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15550000000', phone_number_id: o.botNumber }, contacts: [{ wa_id: o.from, profile: { name: 'Ada' } }], messages: [message] } }] }] };
 }
+
+const digits = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 
 export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: ExecutionContext) => Response | Promise<Response> }) {
   const r = new Hono<{ Bindings: Env }>();
@@ -30,27 +37,39 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     await next();
   });
 
-  r.get('/', c => c.html(DEV_PAGE));
+  // The demo shop is created the first time a chat screen opens, and again if its connection can't
+  // be decrypted (e.g. the test suite recreated it with a different key).
+  async function ensureDemo(env: Env) {
+    const db = getDb(env);
+    const cfg = getConfig(env);
+    const conn = await db.get(db.doc(C.whatsappConnections, DEMO.businessId));
+    try {
+      if (conn?.accessTokenEncrypted && (await db.get(db.doc(C.businesses, DEMO.businessId)))) { decrypt(String(conn.accessTokenEncrypted), cfg); return; }
+    } catch { /* stale key: recreate below */ }
+    await seedDemoShop(db, cfg);
+  }
 
-  // The bots you can talk to: the Admin Bot and every shop with a WhatsApp number.
-  r.get('/bots', async c => {
-    const cfg = getConfig(c.env);
-    const db = getDb(c.env);
-    const accounts = await db.query(C.channelAccounts, [['channel', '==', 'whatsapp']]);
-    const shops = await Promise.all(accounts.map(async a => {
-      const b = await db.get(db.doc(C.businesses, String(a.businessId)));
-      return { botNumber: String(a.accountId), name: String(b?.name ?? a.businessId), owner: String(b?.ownerPhone ?? '') };
-    }));
-    return c.json({ admin: cfg.ADMIN_BOT_PHONE_NUMBER_ID ?? null, shops });
+  r.get('/', c => c.redirect('/dev/owner'));
+
+  r.get('/owner', async c => {
+    await ensureDemo(c.env);
+    const admin = getConfig(c.env).ADMIN_BOT_PHONE_NUMBER_ID ?? '';
+    return c.html(chatPage({ role: 'owner', botNumber: admin, title: 'Relay', subtitle: 'Business account', defaultPhone: DEMO.owner.replace('+', '') }));
   });
 
+  r.get('/customer', async c => {
+    await ensureDemo(c.env);
+    return c.html(chatPage({ role: 'customer', botNumber: DEMO.phoneNumberId, title: DEMO.name, subtitle: 'Business account', defaultPhone: CUSTOMER_PHONE }));
+  });
+
+  // Restock the demo shop and put it back to its starting products.
   r.post('/seed', async c => c.json(await seedDemoShop(getDb(c.env), getConfig(c.env))));
 
-  // A message typed on the page: record it, then deliver it exactly as Meta would.
+  // A message typed on a chat screen: record it, then deliver it exactly as Meta would.
   r.post('/send', async c => {
     const cfg = getConfig(c.env);
     const body = await c.req.json<{ botNumber: string; phone: string; text?: string; choice?: Choice }>();
-    const from = String(body.phone ?? '').replace(/\D/g, '');
+    const from = digits(body.phone);
     if (!body.botNumber || from.length < 8) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'botNumber and phone are required.' } }, 400);
     const text = String(body.choice?.title ?? body.text ?? '').slice(0, 4000);
     if (!text) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Type a message.' } }, 400);
@@ -67,12 +86,28 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
 
   // The conversation between one phone and one bot, oldest first.
   r.get('/messages', async c => {
-    const phone = `+${String(c.req.query('phone') ?? '').replace(/\D/g, '')}`;
+    const phone = `+${digits(c.req.query('phone'))}`;
     const botNumber = String(c.req.query('bot') ?? '');
     const db = getDb(c.env);
     const rows = (await db.query(C.devMessages, [['phone', '==', phone]])).filter(m => m.botNumber === botNumber);
     rows.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     return c.json(rows.map(m => ({ direction: m.direction, content: m.content, at: m.at })));
+  });
+
+  // "Clear chat": forget the messages and the bot's memory of this chat (cart, onboarding step).
+  r.post('/clear', async c => {
+    const body = await c.req.json<{ botNumber: string; phone: string }>();
+    const phone = `+${digits(body.phone)}`;
+    const db = getDb(c.env);
+    const rows = (await db.query(C.devMessages, [['phone', '==', phone]])).filter(m => m.botNumber === body.botNumber);
+    const admin = getConfig(c.env).ADMIN_BOT_PHONE_NUMBER_ID;
+    const account = await db.get(db.doc(C.channelAccounts, `whatsapp_${body.botNumber}`));
+    const conversationId = body.botNumber === admin ? adminConversationId(phone) : account ? customerConversationId(String(account.businessId), 'whatsapp', phone) : null;
+    const batch = db.batch();
+    for (const m of rows) batch.delete(db.doc(C.devMessages, m._id));
+    if (conversationId) { batch.delete(db.doc(C.conversations, conversationId)); batch.delete(db.doc(C.carts, conversationId)); }
+    await batch.commit();
+    return c.json({ success: true, cleared: rows.length });
   });
 
   return r;

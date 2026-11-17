@@ -31,7 +31,12 @@ The emulator needs Java 21; `npm run dev` fetches the Firebase CLI with npx. `wr
 
 With `META_SEND_MODE=log` in `api/.dev.vars`, replies are never sent to Meta. `ADMIN_BOT_ACCESS_TOKEN` still needs a value (any placeholder works in log mode).
 
-**In the browser:** open http://localhost:8787/dev for a WhatsApp-style test chat. Pick "business owner" (Admin Bot) or "customer" (Shop Bot), click "Create / reset Mama Put Kitchen" for a demo shop (its owner is 2348030000009), and chat; buttons and lists are clickable. Each message goes through the real signed webhook, queue and bot code. The page only exists when `RELAY_ENV=development` and `META_SEND_MODE=log`.
+**In the browser:** two WhatsApp-style chat screens (use the browser's mobile emulation for the real look):
+
+- http://localhost:8787/dev/owner is the owner of the demo shop "Mama Put Kitchen" chatting with the Relay Admin Bot.
+- http://localhost:8787/dev/customer is a customer chatting with Mama Put Kitchen.
+
+Open them in two tabs: an order placed as the customer arrives in the owner's chat. The ⋮ menu has Clear chat, start as a new owner/customer (a new number, e.g. to try onboarding), and reset the demo products. Each message goes through the real signed webhook, queue and bot code. These pages only exist when `RELAY_ENV=development` and `META_SEND_MODE=log`. Running `npm test` wipes the emulator; the screens recreate the demo shop on their next load.
 
 **From the terminal:** replies are also printed in the `wrangler dev` console. Send signed, Meta-shaped webhooks with the simulator (`npx tsx scripts/seed-local.ts` creates the demo shop, `pn-demo`):
 
