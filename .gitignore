@@ -12,3 +12,6 @@ tools/mvp-tracker/state.json
 .dev.vars.*
 .wrangler/
 !.dev.vars.example
+
+# Firebase service-account keys
+*-firebase-adminsdk-*.json
