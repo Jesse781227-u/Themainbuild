@@ -47,6 +47,8 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
       if (conn?.accessTokenEncrypted && (await db.get(db.doc(C.businesses, DEMO.businessId)))) { decrypt(String(conn.accessTokenEncrypted), cfg); return; }
     } catch { /* stale key: recreate below */ }
     await seedDemoShop(db, cfg);
+    // A wiped database may have left the demo owner mid-signup; they own a ready shop again.
+    await db.delete(db.doc(C.conversations, adminConversationId(DEMO.owner)));
   }
 
   r.get('/', c => c.redirect('/dev/owner'));
@@ -73,6 +75,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     if (!body.botNumber || from.length < 8) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'botNumber and phone are required.' } }, 400);
     const text = String(body.choice?.title ?? body.text ?? '').slice(0, 4000);
     if (!text) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Type a message.' } }, 400);
+    await ensureDemo(c.env); // e.g. after `npm test` wiped the emulator while a tab was open
     const db = getDb(c.env);
     const at = new Date().toISOString();
     await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: 'text', text }, at });

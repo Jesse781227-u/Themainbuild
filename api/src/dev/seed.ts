@@ -10,7 +10,7 @@ export const DEMO = { businessId: 'biz-demo', phoneNumberId: 'pn-demo', owner: '
 export async function seedDemoShop(db: Firestore, cfg: Pick<Config, 'RELAY_ENV' | 'TOKEN_ENCRYPTION_KEY'>) {
   const now = new Date().toISOString();
   const batch = db.batch();
-  batch.set(db.doc(C.businesses, DEMO.businessId), { id: DEMO.businessId, name: DEMO.name, category: 'food_beverage', ownerPhone: DEMO.owner, status: 'active', timezone: 'Africa/Lagos', bachsAccountId: null, createdAt: now, updatedAt: now });
+  batch.set(db.doc(C.businesses, DEMO.businessId), { id: DEMO.businessId, name: DEMO.name, category: 'food_beverage', ownerName: 'Funke Adeyemi', city: 'Lagos', area: 'Yaba', ownerPhone: DEMO.owner, status: 'active', timezone: 'Africa/Lagos', bachsAccountId: null, createdAt: now, updatedAt: now });
   batch.set(db.doc(C.ownerPhones, DEMO.owner), { businessId: DEMO.businessId });
   batch.set(db.doc(C.channelAccounts, `whatsapp_${DEMO.phoneNumberId}`), { id: `whatsapp_${DEMO.phoneNumberId}`, businessId: DEMO.businessId, channel: 'whatsapp', accountId: DEMO.phoneNumberId });
   batch.set(db.doc(C.whatsappConnections, DEMO.businessId), { businessId: DEMO.businessId, status: 'connected', phoneNumberId: DEMO.phoneNumberId, wabaId: 'waba-demo', accessTokenEncrypted: encrypt('local-log-mode-placeholder', cfg), createdAt: now, updatedAt: now });
