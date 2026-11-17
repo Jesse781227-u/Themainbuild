@@ -4,14 +4,25 @@ export type Channel = 'whatsapp' | 'instagram';
 
 export interface Product {
   id: string; businessId: string; name: string; description: string;
-  priceKobo: number; images: string[]; categoryId?: string | null;
+  priceKobo: number; images: string[];
+  categoryId: string | null;   // required for new products; null only on products created before categories
   available: boolean;
-  stock: number;               // sellable now; reserved units are already subtracted
+  stock: number | null;        // sellable now (reserved units already subtracted); null = not tracked, always available
   lowStockThreshold: number;
   createdAt: string; updatedAt: string; deletedAt?: string | null;
 }
 
-export interface Category { id: string; businessId: string; name: string; sortOrder: number }
+// Stock helpers: a product without a stock count is never sold out and never reserved.
+export const tracksStock = (p: Pick<Product, 'stock'>): p is Pick<Product, 'stock'> & { stock: number } => typeof p.stock === 'number';
+export const hasStock = (p: Pick<Product, 'stock'>, qty = 1) => !tracksStock(p) || p.stock >= qty;
+export const stockLabel = (p: Pick<Product, 'stock'>) => (tracksStock(p) ? `${p.stock} in stock` : 'no stock count');
+
+export interface Category {
+  id: string; businessId: string; name: string; slug: string; sortOrder: number;
+  productCount: number;        // live (not deleted) products; maintained in the same transaction as product writes
+  coverImage?: string | null; active: boolean;
+  createdAt: string; updatedAt: string;
+}
 
 export interface StockMovement { id: string; businessId: string; productId: string; delta: number; reason: 'restock' | 'adjustment' | 'hold' | 'release' | 'sale'; orderId?: string; actor: string; at: string }
 

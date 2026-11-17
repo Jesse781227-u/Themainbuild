@@ -5,6 +5,7 @@ import { formatKobo } from '../lib/money';
 import { lagosDate } from '../lib/time';
 import type { Business } from '../domain/business';
 import type { Customer, Order, Product } from '../domain/commerce';
+import { hasStock, tracksStock } from '../domain/commerce';
 import { claimId } from './orders';
 import { adminConversationId, customerConversationId } from './conversations';
 
@@ -42,9 +43,10 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   const at = payment.paidAt;
   if (late) {
     const products = (await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)))) as (Product | null)[];
-    const allThere = order.items.every((l, i) => products[i] && products[i]!.stock >= l.qty);
+    const allThere = order.items.every((l, i) => products[i] && hasStock(products[i]!, l.qty));
     if (allThere) {
-      order.items.forEach(l => {
+      order.items.forEach((l, i) => {
+        if (!tracksStock(products[i]!)) return; // no stock count: nothing to take
         tx.update(db.doc(C.products, l.productId), { stock: increment(-l.qty), updatedAt: at });
         const mid = `${order.id}_${l.productId}_late`;
         tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: l.productId, delta: -l.qty, reason: 'sale', orderId: order.id, actor: 'system', at });

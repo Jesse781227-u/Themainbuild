@@ -14,13 +14,20 @@ export async function seedDemoShop(db: Firestore, cfg: Pick<Config, 'RELAY_ENV' 
   batch.set(db.doc(C.ownerPhones, DEMO.owner), { businessId: DEMO.businessId });
   batch.set(db.doc(C.channelAccounts, `whatsapp_${DEMO.phoneNumberId}`), { id: `whatsapp_${DEMO.phoneNumberId}`, businessId: DEMO.businessId, channel: 'whatsapp', accountId: DEMO.phoneNumberId });
   batch.set(db.doc(C.whatsappConnections, DEMO.businessId), { businessId: DEMO.businessId, status: 'connected', phoneNumberId: DEMO.phoneNumberId, wabaId: 'waba-demo', accessTokenEncrypted: encrypt('local-log-mode-placeholder', cfg), createdAt: now, updatedAt: now });
-  const products = [
-    { id: 'demo-jollof', name: 'Jollof rice', priceKobo: 250_000, stock: 20 },
-    { id: 'demo-chicken', name: 'Fried chicken', priceKobo: 180_000, stock: 15 },
-    { id: 'demo-zobo', name: 'Zobo (50cl)', priceKobo: 50_000, stock: 40 },
+  const categories = [
+    { id: 'demo-cat-meals', name: 'Meals', slug: 'meals', sortOrder: 0 },
+    { id: 'demo-cat-drinks', name: 'Drinks', slug: 'drinks', sortOrder: 1 },
   ];
+  const products = [
+    { id: 'demo-jollof', name: 'Jollof rice', priceKobo: 250_000, stock: 20, categoryId: 'demo-cat-meals' },
+    { id: 'demo-chicken', name: 'Fried chicken', priceKobo: 180_000, stock: 15, categoryId: 'demo-cat-meals' },
+    { id: 'demo-zobo', name: 'Zobo (50cl)', priceKobo: 50_000, stock: 40, categoryId: 'demo-cat-drinks' },
+  ];
+  for (const c of categories) {
+    batch.set(db.doc(C.categories, c.id), { ...c, businessId: DEMO.businessId, productCount: products.filter(p => p.categoryId === c.id).length, coverImage: null, active: true, createdAt: now, updatedAt: now });
+  }
   for (const p of products) {
-    batch.set(db.doc(C.products, p.id), { ...p, businessId: DEMO.businessId, description: '', images: [], categoryId: null, available: true, lowStockThreshold: 3, createdAt: now, updatedAt: now, deletedAt: null });
+    batch.set(db.doc(C.products, p.id), { ...p, businessId: DEMO.businessId, description: '', images: [], available: true, lowStockThreshold: 3, createdAt: now, updatedAt: now, deletedAt: null });
   }
   await batch.commit();
   return { ...DEMO, products: products.length };

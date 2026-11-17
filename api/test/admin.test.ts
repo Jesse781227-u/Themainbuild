@@ -10,50 +10,15 @@ before(async () => { await clearFirestore(); fx = await seed(); });
 
 const NEW_OWNER = '2348035550000';
 
-test('admin: onboarding rejects a product line as the name, asks for missing stock, and corrects a re-sent product', async () => {
-  const bot = new Bot();
-  const from = '2348035550099';
-  await bot.send('admin', { from, text: 'hi' });
-  assert.match((await bot.send('admin', { from, text: 'add Jollof rice, 2500, 10' }))[0].text, /looks like a product or a command\. First, what's your business called/);
-  assert.equal(await doc('ownerPhones', `+${from}`), null, 'no business was created from a product line');
-  assert.match((await bot.send('admin', { from, text: 'Shop 24' }))[0].text, /What do you sell/, 'a name with a number is still a name');
-  await bot.send('admin', { from, text: '5' });
-
-  assert.match((await bot.send('admin', { from, text: 'Haircut, 3000,' }))[0].text, /How many Haircut do you have\?[\s\S]*Haircut, 3000, 10/);
-  const owner = await doc('ownerPhones', `+${from}`);
-  const listed = await db.query('products', [['businessId', '==', owner.businessId]]);
-  assert.equal(listed.length, 0, 'nothing is created without a stock');
-
-  assert.match((await bot.send('admin', { from, text: 'Haircut, 3000, 5' }))[0].text, /Added Haircut: ₦3,000, 5 in stock/);
-  assert.match((await bot.send('admin', { from, text: 'Haircut, 3500, 50' }))[0].text, /Updated Haircut: price ₦3,000 → ₦3,500, stock 5 → 50/);
-  assert.match((await bot.send('admin', { from, text: 'Haircut, 3500, 50' }))[0].text, /already have Haircut: ₦3,500, 50 in stock\. Nothing changed/);
-});
-
-test('admin: new owner is onboarded by chat', async () => {
-  const bot = new Bot();
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'hi' }))[0].text, /what's your business called/i);
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: "Mama Tee's Kitchen" }))[0].text, /What do you sell\?\n1\. Food/);
-  const owner = await doc('ownerPhones', `+${NEW_OWNER}`);
-  const business = await doc('businesses', owner.businessId);
-  assert.equal(business.name, "Mama Tee's Kitchen");
-  assert.equal(business.status, 'onboarding');
-  assert.equal(business.ownerPhone, `+${NEW_OWNER}`);
-
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: '1' }))[0].text, /first products/);
-  assert.equal((await doc('businesses', owner.businessId)).category, 'food_beverage');
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'Jollof rice, 2500, 10' }))[0].text, /Added Jollof rice: ₦2,500, 10 in stock\. Send another, or DONE/);
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'Small chops 1,500 20' }))[0].text, /Added Small chops: ₦1,500, 20/);
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'hello there' }))[0].text, /name, price and stock/);
-
-  const last = await bot.send('admin', { from: NEW_OWNER, text: 'done' });
-  const link = /\/connect\/([A-Za-z0-9]+)/.exec(last[0].text);
-  assert.ok(link, 'the owner gets an Embedded Signup link');
-  assert.ok(await doc('signupSessions', link![1]));
-  // Onboarding is over: normal commands work.
-  assert.match((await bot.send('admin', { from: NEW_OWNER, text: 'products' }))[0].text, /Jollof rice: ₦2,500, 10 in stock[\s\S]*Small chops/);
+// The full onboarding conversation is covered in onboarding.test.ts.
+test('admin: the connect link from onboarding renders and unknown ones 404', async () => {
+  const { createSignupSession } = await import('../src/services/signup');
+  const link = await createSignupSession(db, getConfig(env), fx.a.id);
+  const token = /\/connect\/([A-Za-z0-9]+)/.exec(link)![1];
+  assert.ok(await doc('signupSessions', token));
   // The connect page renders for a live link and refuses an unknown one.
   const e = testEnv({ META_APP_ID: '1234', META_ES_CONFIG_ID: '5678' });
-  const pageRes = await api('GET', `/connect/${link![1]}`, { env: e });
+  const pageRes = await api('GET', `/connect/${token}`, { env: e });
   assert.equal(pageRes.status, 200);
   assert.match(pageRes.body, /Connect WhatsApp/);
   assert.equal((await api('GET', '/connect/notarealtoken123', { env: e })).status, 404);
@@ -115,10 +80,13 @@ test('admin: owner commands manage stock, orders and payment details', async () 
 test('admin: delete my data removes the owner account after confirmation', async () => {
   const bot = new Bot();
   const o = '2348035559999';
-  await bot.send('admin', { from: o, text: 'hi' });
-  await bot.send('admin', { from: o, text: 'Shop To Delete' });
+  for (const text of ['hi', 'Tayo', 'Shop To Delete']) await bot.send('admin', { from: o, text });
+  await bot.send('admin', { from: o, choice: 'btype:other', text: 'Other' });
+  await bot.send('admin', { from: o, text: 'Lagos, Ikeja' });
   const { businessId } = await doc('ownerPhones', `+${o}`);
-  await bot.send('admin', { from: o, text: '6' });
+  await bot.send('admin', { from: o, choice: 'cat:use', text: 'Use these' });
+  await bot.send('admin', { from: o, choice: 'cat:ok', text: 'Looks good' });
+  await bot.send('admin', { from: o, text: 'Gift box 5000' });
   await bot.send('admin', { from: o, text: 'done' });
   await db.set(db.doc('channelAccounts', 'whatsapp_555'), { businessId, channel: 'whatsapp', accountId: '555' });
   assert.match((await bot.send('admin', { from: o, text: 'delete my data' }))[0].text, /Delete your Relay account\?/);

@@ -11,9 +11,10 @@ import { lagosDate, lagosDayBounds } from '../lib/time';
 import { normalisePhone } from '../lib/phone';
 import { randomId } from '../lib/crypto';
 import type { Business } from '../domain/business';
-import type { Conversation, Order, Product } from '../domain/commerce';
+import { stockLabel, tracksStock, type Conversation, type Order, type Product } from '../domain/commerce';
+import type { OutboundContent } from '../services/channel';
 import type { ToolSpec } from '../services/ai';
-import { adjustInventory, createProduct, listProducts } from '../services/catalog';
+import { adjustInventory, createCategories, deleteCategory, deleteProduct, findCategory, listCategories, listProducts, moveProduct, parseCategoryList, renameCategory, reorderCategory } from '../services/catalog';
 import { saveZone } from '../services/delivery';
 import { markOrderPaid } from '../services/on-paid';
 import { cancelOrder, findOrderByRef, recentOrders } from '../services/orders';
@@ -21,7 +22,7 @@ import { createSignupSession } from '../services/signup';
 import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../services/broadcasts';
 import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
-import { findProducts, type BotDeps } from './common';
+import { findProducts, list, type BotDeps } from './common';
 
 export interface ToolCtx {
   db: Firestore; cfg: Config; deps: BotDeps;
@@ -33,7 +34,7 @@ export interface AdminTool<S extends z.ZodTypeAny = z.ZodTypeAny> {
   spec: ToolSpec;
   schema: S;
   confirm?: (args: z.output<S>, ctx: ToolCtx) => Promise<string | null> | string | null; // prompt shown before a destructive action
-  run(args: z.output<S>, ctx: ToolCtx): Promise<string>;
+  run(args: z.output<S>, ctx: ToolCtx): Promise<string | OutboundContent>;
 }
 
 const naira = z.union([z.string(), z.number()]).transform((v, c) => {
@@ -62,13 +63,14 @@ async function oneOrder(ctx: ToolCtx, orderRef: string): Promise<Order> {
   return o;
 }
 
-const line = (p: Product) => `• ${p.name}: ${formatKobo(p.priceKobo)}, ${p.stock} in stock${p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
+const line = (p: Product) => `• ${p.name}: ${formatKobo(p.priceKobo)}, ${stockLabel(p)}${tracksStock(p) && p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
 const orderLine = (o: Order) => `• ${o.ref}: ${formatKobo(o.payAmountKobo)}, ${o.status.replace('_', ' ')}${o.status === 'paid' ? `, ${o.fulfilment.replace(/_/g, ' ')}` : ''}`;
 
 export const HELP = [
   'Here is what I can do:',
-  '• add Jollof rice, 2500, 10 (name, price, stock; send a photo with it to add a picture)',
-  '• restock Jollof rice 5 · price Jollof rice 3000',
+  '• add Black AF1 25k (send a photo with it as the caption; add a stock number at the end if you track stock)',
+  '• restock Black AF1 5 · price Black AF1 27k',
+  '• categories · add category Watches · rename category Bags to Handbags · move Bags to the top · move Black AF1 to Sneakers',
   '• products · orders · unpaid · sales today',
   '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
   '• delivery zone Lekki, 1500, same day',
@@ -85,27 +87,8 @@ export const adminTools = {
   addProduct: def({
     spec: { name: 'addProduct', description: 'Add a new product to the catalogue.', params: { name: { type: 'string', description: 'Product name' }, price: { type: 'string', description: 'Price in naira, e.g. "2500"' }, stock: { type: 'integer', description: 'Units in stock' }, description: { type: 'string', description: 'Short description' } }, required: ['name', 'price'] },
     schema: z.object({ name: z.string().trim().min(1).max(120), price: naira, stock: qty.min(0).max(1_000_000).optional(), description: z.string().max(500).optional() }),
-    async run(a, ctx) {
-      const existing = (await findProducts(ctx.db, ctx.business.id, a.name)).find(p => p.name.toLowerCase() === a.name.toLowerCase());
-      if (existing) {
-        // Sending the same product again with new numbers means "correct it".
-        const changes: string[] = [];
-        if (a.price !== existing.priceKobo) {
-          await ctx.db.update(ctx.db.doc(C.products, existing.id), { priceKobo: a.price, updatedAt: new Date().toISOString() });
-          changes.push(`price ${formatKobo(existing.priceKobo)} → ${formatKobo(a.price)}`);
-        }
-        if (a.stock !== undefined && a.stock !== existing.stock) {
-          const now = await adjustInventory(ctx.db, existing.id, ctx.business.id, a.stock - existing.stock, 'adjustment', 'owner');
-          changes.push(`stock ${existing.stock} → ${now}`);
-        }
-        if (!changes.length) return `You already have ${existing.name}: ${formatKobo(existing.priceKobo)}, ${existing.stock} in stock. Nothing changed.`;
-        return `Updated ${existing.name}: ${changes.join(', ')}.`;
-      }
-      // Never default a new product to 0 stock: customers would see it as sold out.
-      if (a.stock === undefined) return `How many ${a.name} do you have? Send it again with the stock at the end, e.g. "${a.name}, ${a.price / 100}, 10". For a service, use how many you can take on.`;
-      const p = await createProduct(ctx.db, { businessId: ctx.business.id, name: a.name, priceKobo: a.price, stock: a.stock ?? 0, description: a.description ?? '', images: ctx.imageUrl ? [ctx.imageUrl] : [] });
-      return `Added ${p.name}: ${formatKobo(p.priceKobo)}, ${p.stock} in stock${ctx.imageUrl ? ', with the photo' : ''}.`;
-    },
+    // admin.ts sends new products through products-flow (category, confirmation card); never reached.
+    async run() { return 'To add a product send its name and price, e.g. "add Black AF1 25k".'; },
   }),
   setPrice: def({
     spec: { name: 'setPrice', description: "Change a product's price.", params: { product: { type: 'string', description: 'Product name' }, price: { type: 'string', description: 'New price in naira' } }, required: ['product', 'price'] },
@@ -148,19 +131,91 @@ export const adminTools = {
   deleteProduct: def({
     spec: { name: 'deleteProduct', description: 'Permanently remove a product from the catalogue.', params: { product: { type: 'string', description: 'Product name' } }, required: ['product'] },
     schema: z.object({ product: z.string().min(1) }),
-    async confirm(a, ctx) { const p = await oneProduct(ctx, a.product); return `Delete ${p.name} (${p.stock} in stock)? Customers won't see it any more.`; },
+    async confirm(a, ctx) { const p = await oneProduct(ctx, a.product); return `Delete ${p.name} (${stockLabel(p)})? Customers won't see it any more.`; },
     async run(a, ctx) {
       const p = await oneProduct(ctx, a.product);
-      await ctx.db.update(ctx.db.doc(C.products, p.id), { deletedAt: new Date().toISOString(), available: false });
+      await deleteProduct(ctx.db, ctx.business.id, p.id);
       return `Deleted ${p.name}.`;
     },
   }),
   listProducts: def({
-    spec: { name: 'listProducts', description: 'List the products with price and stock.', params: {} },
+    spec: { name: 'listProducts', description: 'List the products with price and stock, grouped by category.', params: {} },
     schema: z.object({}),
     async run(_a, ctx) {
-      const ps = await listProducts(ctx.db, ctx.business.id);
-      return ps.length ? `Your products (${ps.length}):\n${ps.slice(0, 40).map(line).join('\n')}` : 'No products yet. Send e.g. "add Jollof rice, 2500, 10".';
+      const [ps, cats] = await Promise.all([listProducts(ctx.db, ctx.business.id), listCategories(ctx.db, ctx.business.id)]);
+      if (!ps.length) return 'No products yet. Send e.g. "add Black AF1 25k", with a photo if you have one.';
+      const groups = [...cats.map(c => ({ name: c.name, items: ps.filter(p => p.categoryId === c.id) })), { name: 'No category', items: ps.filter(p => !p.categoryId || !cats.some(c => c.id === p.categoryId)) }].filter(g => g.items.length);
+      return `Your products (${ps.length}):\n${groups.map(g => `\n*${g.name}*\n${g.items.slice(0, 25).map(line).join('\n')}`).join('\n')}`.slice(0, 4000);
+    },
+  }),
+  listCategories: def({
+    spec: { name: 'listCategories', description: 'List the product categories with how many products each has.', params: {} },
+    schema: z.object({}),
+    async run(_a, ctx) {
+      const cats = await listCategories(ctx.db, ctx.business.id);
+      return cats.length ? `Your categories:\n${cats.map((c, i) => `${i + 1}. ${c.name} (${c.productCount} product${c.productCount === 1 ? '' : 's'})`).join('\n')}\n\nSend e.g. "add category Watches", "rename category Bags to Handbags", "move Bags to the top".` : 'No categories yet. Send e.g. "add category Sneakers, Bags".';
+    },
+  }),
+  addCategories: def({
+    spec: { name: 'addCategories', description: 'Create one or more product categories.', params: { names: { type: 'string', description: 'Category names, comma separated' } }, required: ['names'] },
+    schema: z.object({ names: z.string().trim().min(1).max(400) }),
+    async run(a, ctx) {
+      const names = parseCategoryList(a.names);
+      if (!names.length) return 'Send the category names, e.g. "add category Sneakers, Bags".';
+      const created = await createCategories(ctx.db, ctx.business.id, names);
+      return created.length ? `Created ✅ ${created.map(c => c.name).join(' · ')}` : 'You already have those categories.';
+    },
+  }),
+  renameCategory: def({
+    spec: { name: 'renameCategory', description: 'Rename a product category.', params: { category: { type: 'string', description: 'Current name' }, name: { type: 'string', description: 'New name' } }, required: ['category', 'name'] },
+    schema: z.object({ category: z.string().min(1), name: z.string().trim().min(2).max(24) }),
+    async run(a, ctx) {
+      const c = findCategory(await listCategories(ctx.db, ctx.business.id), a.category);
+      if (!c) throw new ToolError(`I couldn't find a category called "${a.category}". Send CATEGORIES to see them.`);
+      try { return `Renamed ${c.name} to ${await renameCategory(ctx.db, ctx.business.id, c.id, a.name)}.`; }
+      catch (e) { if (String(e).includes('CATEGORY_EXISTS')) return `You already have a category called ${a.name}.`; throw e; }
+    },
+  }),
+  deleteCategory: def({
+    spec: { name: 'deleteCategory', description: 'Delete a product category (its products are moved first).', params: { category: { type: 'string', description: 'Category name' } }, required: ['category'] },
+    schema: z.object({ category: z.string().min(1) }),
+    async confirm(a, ctx) {
+      const c = findCategory(await listCategories(ctx.db, ctx.business.id), a.category);
+      if (!c) throw new ToolError(`I couldn't find a category called "${a.category}". Send CATEGORIES to see them.`);
+      return c.productCount ? null : `Delete the category ${c.name}?`;
+    },
+    async run(a, ctx) {
+      const cats = await listCategories(ctx.db, ctx.business.id);
+      const c = findCategory(cats, a.category)!;
+      if (c.productCount) {
+        const others = cats.filter(x => x.id !== c.id);
+        if (!others.length) return `${c.name} has ${c.productCount} product${c.productCount === 1 ? '' : 's'} and it's your only category. Add another category first.`;
+        return list(`${c.name} has ${c.productCount} product${c.productCount === 1 ? '' : 's'}. Move them to…`, 'Choose category', others.slice(0, 10).map(o => ({ id: `movecat:${c.id}:${o.id}`, title: o.name })), 'Move to');
+      }
+      await deleteCategory(ctx.db, ctx.business.id, c.id);
+      return `Deleted the category ${c.name}.`;
+    },
+  }),
+  reorderCategory: def({
+    spec: { name: 'reorderCategory', description: 'Change where a category appears in the customer menu.', params: { category: { type: 'string', description: 'Category name' }, position: { type: 'string', description: '"top", "bottom" or a number (1 = first)' } }, required: ['category', 'position'] },
+    schema: z.object({ category: z.string().min(1), position: z.union([z.string(), z.number()]).transform(v => String(v).toLowerCase().trim()) }),
+    async run(a, ctx) {
+      const cats = await listCategories(ctx.db, ctx.business.id);
+      const c = findCategory(cats, a.category);
+      if (!c) throw new ToolError(`I couldn't find a category called "${a.category}". Send CATEGORIES to see them.`);
+      const pos = /^(top|first)$/.test(a.position) ? 0 : /^(bottom|last|end)$/.test(a.position) ? cats.length : Number(a.position) - 1;
+      if (!Number.isInteger(pos) || pos < 0) return 'Say where: "move Bags to the top", "to the bottom", or "to position 2".';
+      return `New order: ${(await reorderCategory(ctx.db, ctx.business.id, c.id, pos)).join(' · ')}`;
+    },
+  }),
+  moveProduct: def({
+    spec: { name: 'moveProduct', description: 'Move a product to another category.', params: { product: { type: 'string', description: 'Product name' }, category: { type: 'string', description: 'Target category name' } }, required: ['product', 'category'] },
+    schema: z.object({ product: z.string().min(1), category: z.string().min(1) }),
+    async run(a, ctx) {
+      const c = findCategory(await listCategories(ctx.db, ctx.business.id), a.category);
+      if (!c) throw new ToolError(`I couldn't find a category called "${a.category}". Send CATEGORIES to see them.`);
+      const p = await oneProduct(ctx, a.product);
+      return (await moveProduct(ctx.db, ctx.business.id, p.id, c.id)) ? `Moved ${p.name} to ${c.name}.` : `${p.name} is already in ${c.name}.`;
     },
   }),
   listOrders: def({
@@ -317,7 +372,7 @@ export async function prepare(tool: string, rawArgs: Record<string, unknown>, ct
   } catch (e) { if (e instanceof ToolError) return { kind: 'reply', text: e.message }; throw e; }
 }
 
-export async function runTool(tool: AdminToolName, rawArgs: Record<string, unknown>, ctx: ToolCtx): Promise<string> {
+export async function runTool(tool: AdminToolName, rawArgs: Record<string, unknown>, ctx: ToolCtx): Promise<string | OutboundContent> {
   const t = adminTools[tool] as unknown as AdminTool;
   const parsed = t.schema.safeParse(rawArgs ?? {});
   if (!parsed.success) return "I didn't get all the details for that. Send HELP for examples.";

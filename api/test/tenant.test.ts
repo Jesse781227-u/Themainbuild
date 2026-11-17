@@ -31,7 +31,7 @@ test('tenant: batch assignment rejects another business order', async () => {
 });
 
 test('tenant: product create cannot overwrite another business product', async () => {
-  await assert.rejects(createProduct(db, { id: fx.a.product, businessId: fx.b.id, name: 'Hijacked', priceKobo: 1 }), /PRODUCT_ID_TAKEN/);
+  await assert.rejects(createProduct(db, { id: fx.a.product, businessId: fx.b.id, name: 'Hijacked', priceKobo: 1, categoryId: 'cat-biz-b' }), /PRODUCT_ID_TAKEN/);
   const product = await doc('products', fx.a.product);
   assert.equal(product.businessId, fx.a.id);
   assert.equal(product.name, `Product ${fx.a.id}`);
@@ -45,9 +45,9 @@ test('tenant: marking paid rejects another business order', async () => {
 });
 
 test('catalog: product input is validated', async () => {
-  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: '', priceKobo: 100 }));
-  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: 10.5 }));
-  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: -1 }));
-  const p = await createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: 5_000_00, stock: 10 });
+  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: '', priceKobo: 100, categoryId: 'cat-biz-a' }));
+  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: 10.5, categoryId: 'cat-biz-a' }));
+  await assert.rejects(createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: -1, categoryId: 'cat-biz-a' }));
+  const p = await createProduct(db, { businessId: fx.a.id, name: 'Rice', priceKobo: 5_000_00, stock: 10, categoryId: 'cat-biz-a' });
   assert.equal((await doc('products', p.id)).stock, 10);
 });

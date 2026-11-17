@@ -7,6 +7,7 @@ import { formatKobo } from '../lib/money';
 import { lagosDate } from '../lib/time';
 import type { Business } from '../domain/business';
 import type { Product } from '../domain/commerce';
+import { tracksStock } from '../domain/commerce';
 import { adminConversationId } from './conversations';
 import { recentOrders } from './orders';
 
@@ -17,7 +18,7 @@ export async function buildSummary(db: Firestore, businessId: string, now = new 
   const day = await db.get(db.doc(C.dailyStats, `${businessId}_${date}`));
   const unpaid = await recentOrders(db, [['businessId', '==', businessId], ['status', '==', 'awaiting_payment']], 100);
   const products = (await db.query(C.products, [['businessId', '==', businessId]])) as unknown as Product[];
-  const lowStock = products.filter(p => !p.deletedAt && p.available && p.stock <= p.lowStockThreshold).sort((a, b) => a.stock - b.stock).map(p => `${p.name} (${p.stock})`);
+  const lowStock = products.filter(p => !p.deletedAt && p.available && tracksStock(p) && p.stock <= p.lowStockThreshold).sort((a, b) => (a.stock ?? 0) - (b.stock ?? 0)).map(p => `${p.name} (${p.stock})`);
   return { date, ordersPaid: Number(day?.ordersPaid ?? 0), salesKobo: Number(day?.salesKobo ?? 0), deliveryKobo: Number(day?.deliveryKobo ?? 0), unpaid: unpaid.length, lowStock };
 }
 

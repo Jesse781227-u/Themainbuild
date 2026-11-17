@@ -12,7 +12,23 @@ export interface ToolSpec { name: string; description: string; params: Record<st
 export interface ToolChoice { tool: string; args: Record<string, unknown> }
 
 export interface LLMProvider {
-  chooseTool(input: { system: string; message: string; tools: ToolSpec[] }): Promise<ToolChoice | null>;
+  // imageUrl: a public product photo (our R2 media URL) the model may look at, e.g. to pick a category.
+  chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
+}
+
+const MAX_IMAGE_BYTES = 4_000_000;
+
+// Fetches a photo for the model as inline data. Any failure just means "no photo".
+async function inlineImage(url: string, doFetch: typeof fetch) {
+  try {
+    const res = await doFetch(url);
+    if (!res.ok) return null;
+    const mimeType = (res.headers.get('content-type') ?? '').split(';')[0];
+    if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) return null;
+    const bytes = await res.arrayBuffer();
+    if (bytes.byteLength > MAX_IMAGE_BYTES) return null;
+    return { inlineData: { mimeType, data: Buffer.from(bytes).toString('base64') } };
+  } catch { return null; }
 }
 
 export interface Transcriber {
@@ -24,7 +40,8 @@ const geminiType = { string: 'STRING', number: 'NUMBER', integer: 'INTEGER', boo
 export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODEL'>, doFetch: typeof fetch = (...a) => fetch(...a)): LLMProvider | null {
   if (!cfg.GEMINI_API_KEY) return null;
   return {
-    async chooseTool({ system, message, tools }) {
+    async chooseTool({ system, message, tools, imageUrl }) {
+      const image = imageUrl ? await inlineImage(imageUrl, doFetch) : null;
       const functionDeclarations = tools.map(t => ({
         name: t.name, description: t.description,
         ...(Object.keys(t.params).length ? { parameters: { type: 'OBJECT', properties: Object.fromEntries(Object.entries(t.params).map(([k, p]) => [k, { type: geminiType[p.type], description: p.description, ...(p.enum ? { enum: p.enum } : {}) }])), required: t.required ?? [] } } : {}),
@@ -34,7 +51,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: 'user', parts: [{ text: message }] }],
+          contents: [{ role: 'user', parts: [{ text: message }, ...(image ? [image] : [])] }],
           tools: [{ functionDeclarations }],
           toolConfig: { functionCallingConfig: { mode: 'ANY' } },
           generationConfig: { temperature: 0 },

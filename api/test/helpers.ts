@@ -113,6 +113,8 @@ export async function seed() {
   for (const f of [fixture.a, fixture.b]) {
     batch.set(db.doc('businesses', f.id), { id: f.id, name: `Business ${f.id}`, category: 'other', ownerPhone: f.ownerPhone, status: 'active', timezone: 'Africa/Lagos', bachsAccountId: f.bachs, createdAt: now(), updatedAt: now() });
     batch.set(db.doc('ownerPhones', f.ownerPhone), { businessId: f.id });
+    // An (empty) category per business; the seeded product predates categories, like legacy data.
+    batch.set(db.doc('categories', `cat-${f.id}`), { id: `cat-${f.id}`, businessId: f.id, name: 'General', slug: 'general', sortOrder: 0, productCount: 0, coverImage: null, active: true, createdAt: now(), updatedAt: now() });
     batch.set(db.doc('channelAccounts', `whatsapp_${f.pnid}`), { id: `whatsapp_${f.pnid}`, businessId: f.id, channel: 'whatsapp', accountId: f.pnid });
     batch.set(db.doc('products', f.product), { id: f.product, businessId: f.id, name: `Product ${f.id}`, description: '', priceKobo: 100_000, images: [], categoryId: null, available: true, stock: 5, lowStockThreshold: 2, createdAt: now(), updatedAt: now(), deletedAt: null });
     batch.set(db.doc('customers', f.customer), { id: f.customer, businessId: f.id, channel: 'whatsapp', phone: f.customerPhone, name: 'Ada', marketingOptIn: false, orderCount: 0, totalSpentKobo: 0, createdAt: now(), updatedAt: now() });

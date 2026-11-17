@@ -40,6 +40,14 @@ export function parseAdminCommand(input: string): ToolChoice | null {
   if (/^delete my (data|account)$/.test(t)) return { tool: 'deleteMyData', args: {} };
   if ((m = /^(?:hand ?back|resume(?: bot)?|bot on)(?:\s+(?:to\s+)?(\+?[\d\s-]{7,}))?$/i.exec(text))) return { tool: 'handBack', args: m[1] ? { customer: m[1] } : {} };
 
+  // Categories (before "add …" and "move …", which they would otherwise match).
+  if (/^(categories|my categories|list categories|show categories)$/.test(t)) return { tool: 'listCategories', args: {} };
+  if ((m = /^(?:add|new|create)\s+categor(?:y|ies)\s*:?\s+(.+)$/i.exec(text))) return { tool: 'addCategories', args: { names: m[1] } };
+  if ((m = /^rename\s+(?:the\s+)?categor(?:y|ies)\s+(.+?)\s+(?:to|as)\s+(.+)$/i.exec(text))) return { tool: 'renameCategory', args: { category: m[1], name: m[2] } };
+  if ((m = /^(?:delete|remove)\s+(?:the\s+)?categor(?:y|ies)\s+(.+)$/i.exec(text))) return { tool: 'deleteCategory', args: { category: m[1] } };
+  if ((m = /^move\s+(.+?)\s+to\s+(?:the\s+)?(top|bottom|first|last|end|position\s+\d+|\d+)$/i.exec(text))) return { tool: 'reorderCategory', args: { category: m[1], position: m[2].replace(/^position\s+/i, '') } };
+  if ((m = /^move\s+(.+?)\s+(?:to|into)\s+(.+)$/i.exec(text))) return { tool: 'moveProduct', args: { product: m[1], category: m[2] } };
+
   if ((m = /^add\s+(.+)$/i.exec(text)) && !/^add\s+stock\b/i.test(text)) {
     const p = parseProductLine(m[1]);
     return p ? { tool: 'addProduct', args: p } : { tool: 'addProduct', args: { name: m[1] } };

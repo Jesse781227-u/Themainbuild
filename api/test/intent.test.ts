@@ -31,7 +31,7 @@ test('intent: add product maps to addProduct', async () => {
   const bot = new Bot(llm);
   const replies = await bot.send('admin', { from: owner(), text: 'abeg put puff puff for 200 naira, I get 50' });
   assert.deepEqual(llm.calls, ['abeg put puff puff for 200 naira, I get 50']);
-  assert.match(replies[0].text, /Added Puff puff: ₦200, 50 in stock/);
+  assert.match(replies[0].text, /\*Puff puff\*\n₦200 · General\nStock: 50 in stock/);
   assert.ok((await listProducts(db, fx.a.id)).some(p => p.name === 'Puff puff' && p.priceKobo === 20_000 && p.stock === 50));
 });
 

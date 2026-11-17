@@ -157,11 +157,20 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   function html(tag, cls, markup) { var e = el(tag, cls); e.innerHTML = markup; return e; }
   function hhmm(at) { return new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase(); }
 
-  // Text with clickable links, built without innerHTML so bot text can never inject markup.
-  function richText(parent, text) {
+  // Text with clickable links and WhatsApp *bold*, built without innerHTML so bot text can never
+  // inject markup.
+  function linkify(parent, text) {
     String(text).split(/(https?:[^ ]+)/g).forEach(function (part, i) {
       if (i % 2) { var a = el('a', null, part); a.href = part; a.target = '_blank'; a.rel = 'noopener'; parent.appendChild(a); }
       else if (part) parent.appendChild(document.createTextNode(part));
+    });
+  }
+  function richText(parent, text) {
+    var parts = String(text).split('*');
+    var paired = parts.length % 2 === 1 ? parts.length : parts.length - 1;
+    parts.forEach(function (part, i) {
+      if (i % 2 === 1 && i < paired - 1 && part && part.indexOf(String.fromCharCode(10)) < 0) { var b = el('b'); linkify(b, part); parent.appendChild(b); }
+      else linkify(parent, (i % 2 === 1 ? '*' : '') + part + (i % 2 === 1 && !(i < paired - 1) ? '' : ''));
     });
   }
 
@@ -188,6 +197,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     else if (c.type === 'template') richText(b, 'Template: ' + c.name);
     else if (c.type === 'interactive') {
       var i = c.interactive || {};
+      if (i.header && i.header.type === 'image' && i.header.image) { var hi = el('img'); hi.src = i.header.image.link; hi.alt = ''; b.appendChild(hi); }
       if (i.header && i.header.text) { var h = el('b', null, i.header.text); b.appendChild(h); b.appendChild(document.createTextNode(String.fromCharCode(10))); }
       richText(b, (i.body && i.body.text) || '');
       if (i.footer && i.footer.text) { b.appendChild(document.createTextNode(String.fromCharCode(10))); b.appendChild(el('small', null, i.footer.text)); }

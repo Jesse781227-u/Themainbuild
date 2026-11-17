@@ -7,6 +7,7 @@ import { addMinutes } from '../lib/time';
 import { orderRef, randomId } from '../lib/crypto';
 import type { Business } from '../domain/business';
 import type { Cart, CartLine, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
+import { hasStock, tracksStock } from '../domain/commerce';
 
 export interface OrderPolicy extends FeePolicy { holdMinutes: number }
 
@@ -63,7 +64,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
       const wanted = qty.get(ids[i])!;
       if (!p || p.businessId !== cart.businessId || p.deletedAt || !p.available) throw new Error('PRODUCT_UNAVAILABLE');
       if (!Number.isSafeInteger(wanted) || wanted <= 0) throw new Error('INVALID_QTY');
-      if (p.stock < wanted) throw new Error('INSUFFICIENT_STOCK');
+      if (!hasStock(p, wanted)) throw new Error('INSUFFICIENT_STOCK');
       items.push({ productId: p.id, name: p.name, priceKobo: p.priceKobo, qty: wanted });
       subtotalKobo += p.priceKobo * wanted;
     });
@@ -86,6 +87,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
 
     products.forEach((p, i) => {
       const wanted = qty.get(ids[i])!;
+      if (!tracksStock(p!)) return; // no stock count: nothing to reserve
       tx.update(db.doc(C.products, p!.id), { stock: p!.stock - wanted, updatedAt: at });
       const mid = `${order.id}_${p!.id}_hold`;
       tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: p!.id, delta: -wanted, reason: 'hold', orderId: order.id, actor: 'system', at });
@@ -109,7 +111,7 @@ export async function releaseHold(db: Firestore, orderId: string, now = new Date
     const products = await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)));
     const at = now.toISOString();
     order.items.forEach((line, i) => {
-      if (!products[i]) return; // product removed entirely; nothing to restock
+      if (!products[i] || !tracksStock(products[i] as unknown as Product)) return; // removed, or no stock count: nothing to restock
       tx.update(db.doc(C.products, line.productId), { stock: increment(line.qty), updatedAt: at });
       const mid = `${order.id}_${line.productId}_release`;
       tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: line.productId, delta: line.qty, reason: 'release', orderId: order.id, actor: 'system', at });
@@ -138,7 +140,7 @@ export async function cancelOrder(db: Firestore, orderId: string, businessId: st
     if (order.status === 'awaiting_payment') {
       const products = await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)));
       order.items.forEach((line, i) => {
-        if (!products[i]) return;
+        if (!products[i] || !tracksStock(products[i] as unknown as Product)) return;
         tx.update(db.doc(C.products, line.productId), { stock: increment(line.qty), updatedAt: at });
         const mid = `${order.id}_${line.productId}_release`;
         tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId, productId: line.productId, delta: line.qty, reason: 'release', orderId: order.id, actor: 'owner', at });

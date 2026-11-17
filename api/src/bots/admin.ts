@@ -1,26 +1,23 @@
 // The Relay Admin Bot: the owner runs their business by chatting with it.
-//   1. Unknown number → onboarding by chat (business name → category → first products → connect link).
-//   2. A pending destructive action waits for YES/NO.
-//   3. Otherwise the message (typed or a voice note) becomes one validated tool call.
+//   1. Unknown number, or onboarding in progress → onboarding by chat (onboarding.ts).
+//   2. Product taps and follow-ups (category picker, Correct/Edit) → products-flow.ts.
+//   3. A pending destructive action waits for YES/NO.
+//   4. Otherwise the message (typed or a voice note) becomes one validated tool call.
 import { C } from '../db';
-import type { Business, BusinessCategory } from '../domain/business';
-import { randomId } from '../lib/crypto';
+import type { Business } from '../domain/business';
 import { log } from '../lib/logger';
 import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
-import { createSignupSession } from '../services/signup';
+import { deleteCategory, listCategories, moveCategoryProducts } from '../services/catalog';
 import { HELP, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
 import { buttons, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
-import { chooseAdminTool, parseAdminCommand, parseProductLine } from './intent';
+import { chooseAdminTool } from './intent';
+import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
+import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 
 const CONFIRM_MINUTES = 10;
 
-const CATEGORIES: [BusinessCategory, string][] = [
-  ['food_beverage', 'Food & drinks'], ['fashion_retail', 'Fashion & retail'], ['beauty_wellness', 'Beauty & wellness'],
-  ['photography_events', 'Photography & events'], ['general_services', 'Services'], ['other', 'Something else'],
-];
-
-interface AdminConversation { onboarding?: { step: 'name' | 'category' | 'products' } | null; pendingAction?: { tool: string; args: Record<string, unknown>; expiresAt: string } | null }
+interface AdminConversation extends ProductFlowState { onboarding?: unknown; pendingAction?: { tool: string; args: Record<string, unknown>; expiresAt: string } | null }
 
 export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const { db, cfg } = ctx;
@@ -35,54 +32,47 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     if (!heard) return reply("Sorry, I couldn't listen to that voice note. Please type it instead.");
     text = heard;
   }
-  if (input.choiceId === 'yes' || input.choiceId === 'no') text = input.choiceId;
+  const choiceId = input.choiceId;
+  if (choiceId === 'yes' || choiceId === 'no') text = choiceId;
+
+  let business = ctx.businessId ? ((await db.get(db.doc(C.businesses, ctx.businessId))) as Business | null) : null;
+  const state: ProductFlowState = { productDraft: conv.productDraft ?? null, awaiting: conv.awaiting ?? null, editingProductId: conv.editingProductId ?? null };
+  // Stored once per message, only if a photo came with it.
+  let imageUrl: string | null | undefined;
+  const photo = async () => {
+    if (imageUrl === undefined) imageUrl = business && input.imageId ? await storeImage(ctx, deps, business, input.imageId) : null;
+    return imageUrl;
+  };
 
   // ── Onboarding ──
-  let business = ctx.businessId ? ((await db.get(db.doc(C.businesses, ctx.businessId))) as Business | null) : null;
-  if (!business || conv.onboarding) {
-    const step = conv.onboarding?.step;
-    if (!business && !step) {
-      await db.set(convRef, { onboarding: { step: 'name' } }, { merge: true });
-      return reply("Welcome to Relay 👋 I'll help you sell on WhatsApp. First, what's your business called?");
-    }
-    if (step === 'name') {
-      const name = text.trim().slice(0, 80);
-      if (name.length < 2) return reply("What's your business called?");
-      // A command or a full product line ("add Jollof rice, 2500, 10") is not a business name.
-      if (parseAdminCommand(name) || parseProductLine(name)?.stock !== undefined) return reply("That looks like a product or a command. First, what's your business called? You can add products right after.");
-      const id = randomId(9).replace(/[^A-Za-z0-9]/g, 'x');
-      const at = new Date().toISOString();
-      const created = await db.create(db.doc(C.ownerPhones, ctx.ownerPhone), { businessId: id });
-      if (!created) return reply('This number already has a Relay business. Send HELP.');
-      await db.create(db.doc(C.businesses, id), { id, name, category: 'other', ownerPhone: ctx.ownerPhone, status: 'onboarding', timezone: 'Africa/Lagos', createdAt: at, updatedAt: at });
-      await db.set(convRef, { businessId: id, onboarding: { step: 'category' } }, { merge: true });
-      return reply(`Great, ${name}! What do you sell?\n${CATEGORIES.map(([, label], i) => `${i + 1}. ${label}`).join('\n')}\nReply with a number.`);
-    }
-    if (!business) return; // unreachable: a business exists after the name step
-    if (step === 'category') {
-      const n = Number(text.trim());
-      const cat = CATEGORIES[n - 1] ?? CATEGORIES.find(([, label]) => label.toLowerCase().startsWith(text.trim().toLowerCase()));
-      if (!cat) return reply('Reply with a number from 1 to 6.');
-      await db.update(db.doc(C.businesses, business.id), { category: cat[0], updatedAt: new Date().toISOString() });
-      await db.set(convRef, { onboarding: { step: 'products' } }, { merge: true });
-      return reply('Now add your first products, one per message: name, price, stock. For example:\nJollof rice, 2500, 10\nSend a photo with the text as its caption to add a picture. Send DONE when you\'ve added a few.');
-    }
-    if (step === 'products') {
-      if (/^(done|finish(ed)?|skip|that'?s all)$/i.test(text.trim())) {
-        await db.set(convRef, { onboarding: null }, { merge: true });
-        const link = await createSignupSession(db, cfg, business.id);
-        return reply(`Last step: connect your WhatsApp Business number so customers can order from it. Open this link (valid 24 hours):\n${link}\nYou keep using the WhatsApp Business app as normal. Meanwhile, send HELP to see everything I can do.`);
-      }
-      const choice = parseAdminCommand(/^add\s/i.test(text) ? text : `add ${text}`);
-      if (choice?.tool !== 'addProduct') return reply('Send a product as: name, price, stock (e.g. Jollof rice, 2500, 10), or DONE.');
-      const toolCtx = await makeToolCtx(ctx, deps, business, input.imageId);
-      const prepared = await prepare('addProduct', choice.args, toolCtx);
-      if (prepared.kind === 'reply') return reply(prepared.text);
-      return reply(`${await runTool('addProduct', choice.args, toolCtx)} Send another, or DONE.`);
-    }
+  const ob = normalise(conv.onboarding);
+  if (!business || ob) {
+    if (business?.status === 'deleted') return;
+    return handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo);
   }
   business = business!;
   if (business.status === 'deleted') return;
+  const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
+
+  // ── Product follow-ups (category picker, Correct/Edit, new category name) ──
+  if (choiceId?.startsWith('pok:')) return reply('👍 Saved.');
+  const handled = await handleProductInput(flow, choiceId, text);
+  if (handled) { for (const o of handled) await reply(o); return; }
+  if (state.editingProductId && !choiceId) {
+    const parsed = parseProduct(text);
+    if (parsed) { for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o); return; }
+  }
+
+  // ── Moving a category's products before deleting it ──
+  if (choiceId?.startsWith('movecat:')) {
+    const [, from, to] = choiceId.split(':');
+    const cats = await listCategories(db, business.id);
+    const [a, b] = [cats.find(c => c.id === from), cats.find(c => c.id === to)];
+    if (!a || !b) return reply('That category no longer exists.');
+    const moved = await moveCategoryProducts(db, business.id, a.id, b.id);
+    await deleteCategory(db, business.id, a.id);
+    return reply(`Moved ${moved} product${moved === 1 ? '' : 's'} to ${b.name} and deleted ${a.name}.`);
+  }
 
   // ── Confirmation of a destructive action ──
   const pending = conv.pendingAction;
@@ -102,7 +92,16 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (!text && !input.imageId) return reply(HELP);
   const choice = await chooseAdminTool(text, deps.llm).catch(e => { log('warn', 'llm_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
   if (!choice) return reply(`Sorry, I didn't understand that.\n\n${HELP}`);
-  const toolCtx = await makeToolCtx(ctx, deps, business, choice.tool === 'addProduct' ? input.imageId : null);
+
+  // New products go through the shared flow (category guess, confirmation card).
+  if (choice.tool === 'addProduct') {
+    const parsed = parseProduct(`${choice.args.name ?? ''} ${choice.args.price ?? ''} ${choice.args.stock ?? ''}`) ?? parseProduct(text);
+    if (!parsed) return reply('To add a product send its name and price, e.g. "add Black AF1 25k" (add a stock number at the end if you track it).');
+    for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o);
+    return;
+  }
+
+  const toolCtx = await makeToolCtx(ctx, deps, business, null);
   const prepared = await prepare(choice.tool, choice.args, toolCtx);
   if (prepared.kind === 'reply') return reply(prepared.text);
   if (prepared.kind === 'confirm') {
@@ -113,10 +112,11 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   return reply(await runTool(prepared.tool, prepared.args, toolCtx));
 }
 
-async function makeToolCtx(ctx: AdminContext, deps: BotDeps, business: Business, imageId: string | null): Promise<ToolCtx> {
-  let imageUrl: string | null = null;
-  if (imageId && ctx.cfg.ADMIN_BOT_ACCESS_TOKEN) {
-    imageUrl = await storeProductImage(ctx.cfg, deps, ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, imageId, business.id, 'p').catch(e => { log('warn', 'image_store_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
-  }
+async function storeImage(ctx: AdminContext, deps: BotDeps, business: Business, imageId: string) {
+  if (!ctx.cfg.ADMIN_BOT_ACCESS_TOKEN) return null;
+  return storeProductImage(ctx.cfg, deps, ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, imageId, business.id, 'p').catch(e => { log('warn', 'image_store_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
+}
+
+async function makeToolCtx(ctx: AdminContext, deps: BotDeps, business: Business, imageUrl: string | null): Promise<ToolCtx> {
   return { db: ctx.db, cfg: ctx.cfg, deps, business, ownerPhone: ctx.ownerPhone, imageUrl };
 }

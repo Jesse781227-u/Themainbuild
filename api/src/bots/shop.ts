@@ -9,6 +9,7 @@ import { log } from '../lib/logger';
 import { maskPhone } from '../lib/phone';
 import type { Business } from '../domain/business';
 import type { Cart, Category, Conversation, Customer, Order, OrderDelivery, Product } from '../domain/commerce';
+import { hasStock, tracksStock } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
 import { listProducts } from '../services/catalog';
 import { listZones, quoteDelivery } from '../services/delivery';
@@ -178,8 +179,9 @@ async function showProduct(db: Firestore, business: Business, productId: string,
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
   if (p.images[0]) await reply({ type: 'image', link: p.images[0], caption: p.name });
-  const body = `${p.name}: ${formatKobo(p.priceKobo)}${p.description ? `\n${p.description}` : ''}${p.stock <= 0 ? '\nSold out right now.' : ''}`;
-  return reply(buttons(body, p.stock > 0 ? [[`add:${p.id}`, 'Add to cart'], ['menu', 'Menu'], ['cart', 'View cart']] : [['menu', 'Menu']]));
+  const soldOut = !hasStock(p);
+  const body = `${p.name}: ${formatKobo(p.priceKobo)}${p.description ? `\n${p.description}` : ''}${soldOut ? '\nSold out right now.' : ''}`;
+  return reply(buttons(body, soldOut ? [['menu', 'Menu']] : [[`add:${p.id}`, 'Add to cart'], ['menu', 'Menu'], ['cart', 'View cart']]));
 }
 
 async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {
@@ -195,7 +197,7 @@ async function addToCart(ctx: ShopContext, business: Business, productId: string
   const items = cart?.items.filter(i => i.productId !== p.id) ?? [];
   const already = cart?.items.find(i => i.productId === p.id)?.qty ?? 0;
   const want = already + qty;
-  if (want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'View cart'], ['menu', 'Menu']]));
+  if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'View cart'], ['menu', 'Menu']]));
   const now = new Date();
   await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString() });
   return showCart(ctx, business, reply, `Added ${qty} × ${p.name}.`);
