@@ -138,5 +138,10 @@ export async function send(db: Firestore, cfg: Config, transport: Transport, arg
   const sender = await resolveSender(db, cfg, args.from);
   const result = await transport.sendWhatsApp(sender, args.to, args.content);
   log('info', 'message_sent', { conversationId: args.conversationId, to: maskPhone(args.to), type: args.content.type });
+  // Local testing: keep what would have been sent, so the /dev chat page can show it.
+  if (cfg.RELAY_ENV === 'development' && cfg.META_SEND_MODE === 'log') {
+    const at = (args.now ?? new Date()).toISOString();
+    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: args.to, botNumber: sender.phoneNumberId, direction: 'out', content: args.content, at });
+  }
   return result;
 }

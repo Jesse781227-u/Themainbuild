@@ -25,11 +25,15 @@ cp .dev.vars.example .dev.vars   # secrets for `wrangler dev`; RELAY_ENV etc. co
 cd .. && npm run dev             # Firestore emulator + `wrangler dev` (http://localhost:8787)
 ```
 
-The emulator needs Java 21 and the Firebase CLI. `wrangler dev` runs the Worker locally with a local queue, R2 bucket and rate limiter. To fire the cron handler locally, run `npx wrangler dev --test-scheduled` and open `/__scheduled?cron=*+*+*+*+*`.
+The emulator needs Java 21; `npm run dev` fetches the Firebase CLI with npx. `wrangler dev` runs the Worker locally with a local queue, R2 bucket and rate limiter. To fire the cron handler locally, run `npx wrangler dev --test-scheduled` and open `/__scheduled?cron=*+*+*+*+*`.
 
 ## Trying the bots locally
 
-With `META_SEND_MODE=log` in `api/.dev.vars`, replies are printed in the `wrangler dev` console instead of being sent to Meta. Send signed, Meta-shaped webhooks with the simulator:
+With `META_SEND_MODE=log` in `api/.dev.vars`, replies are never sent to Meta. `ADMIN_BOT_ACCESS_TOKEN` still needs a value (any placeholder works in log mode).
+
+**In the browser:** open http://localhost:8787/dev for a WhatsApp-style test chat. Pick "business owner" (Admin Bot) or "customer" (Shop Bot), click "Create / reset Mama Put Kitchen" for a demo shop (its owner is 2348030000009), and chat; buttons and lists are clickable. Each message goes through the real signed webhook, queue and bot code. The page only exists when `RELAY_ENV=development` and `META_SEND_MODE=log`.
+
+**From the terminal:** replies are also printed in the `wrangler dev` console. Send signed, Meta-shaped webhooks with the simulator (`npx tsx scripts/seed-local.ts` creates the demo shop, `pn-demo`):
 
 ```text
 cd api

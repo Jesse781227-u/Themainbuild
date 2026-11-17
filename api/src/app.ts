@@ -7,6 +7,7 @@ import { health } from './routes/health';
 import { media } from './routes/media';
 import { webhooks } from './routes/webhooks';
 import { signupRoutes } from './routes/signup';
+import { devRoutes } from './routes/dev';
 import type { BachsAdapter } from './services/bachs';
 
 // Static files in public/ (Privacy, Terms, Data Deletion) are served by Workers Assets before the
@@ -31,6 +32,7 @@ export function createApp(deps: { bachs?: BachsAdapter; fetch?: typeof fetch } =
   app.route('/health', health);
   app.route('/media', media);
   app.route('/api/v1/webhooks', webhooks(deps));
+  app.route('/dev', devRoutes(() => app)); // 404s unless RELAY_ENV=development with META_SEND_MODE=log
   app.route('/', signupRoutes(deps));
 
   app.notFound(c => c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }, 404));
