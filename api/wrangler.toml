@@ -56,7 +56,7 @@ simple = { limit = 100, period = 60 }
 # ── staging ───────────────────────────────────────────────────────────────────
 [env.staging]
 name = "relay-api-staging"
-vars = { RELAY_ENV = "staging", API_BASE_URL = "https://relay-api-staging.example.workers.dev" }
+vars = { RELAY_ENV = "staging", API_BASE_URL = "https://relay-api-staging.0xjave.workers.dev" }
 triggers = { crons = ["* * * * *", "0 19 * * *"] }
 
 [[env.staging.queues.producers]]
