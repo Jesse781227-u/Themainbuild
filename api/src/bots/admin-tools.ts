@@ -78,6 +78,7 @@ export const HELP = [
   '• categories · add category Watches · rename category Bags to Handbags · move Bags to the top · move Black AF1 to Sneakers',
   '• messages (see or change your welcome, payment thank-you and order update messages)',
   '• customers (who buys, what they like, where they live) · customer Kemi · customers recent · customers quiet',
+  '• pair Jollof rice with Zobo, Plantain (what to suggest when customers add it) · unpair Jollof rice · suggestions off',
   '• products · orders · unpaid · sales today',
   '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
   '• delivery zone Lekki, 1500, same day',
@@ -224,6 +225,38 @@ export const adminTools = {
     spec: { name: 'findCustomer', description: 'Look up one customer by name or phone number: their address, spending, favourite products and last purchases.', params: { query: { type: 'string', description: 'Name or phone number' } }, required: ['query'] },
     schema: z.object({ query: z.string().trim().min(1).max(60) }),
     async run(a, ctx) { return findCustomer(ctx.db, ctx.business, a.query); },
+  }),
+  pairProducts: def({
+    spec: { name: 'pairProducts', description: 'Set what to suggest to customers who add a product to their cart ("pair Jollof rice with Zobo, Plantain").', params: { product: { type: 'string', description: 'The product customers add' }, with: { type: 'string', description: 'Products to suggest with it, comma separated' } }, required: ['product', 'with'] },
+    schema: z.object({ product: z.string().trim().min(1).max(120), with: z.string().trim().min(1).max(500) }),
+    async run(a, ctx) {
+      const p = await oneProduct(ctx, a.product);
+      const picks: Product[] = [];
+      for (const name of a.with.split(/,|\band\b/i).map(s => s.trim()).filter(Boolean).slice(0, 4)) {
+        const q = await oneProduct(ctx, name);
+        if (q.id !== p.id && !picks.some(x => x.id === q.id)) picks.push(q);
+      }
+      if (!picks.length) throw new ToolError('Tell me what to suggest with it, e.g. "pair Jollof rice with Zobo, Plantain".');
+      await ctx.db.update(ctx.db.doc(C.products, p.id), { pairsWith: picks.map(x => x.id), updatedAt: new Date().toISOString() });
+      return `Done ✅ When a customer adds ${p.name}, I'll suggest ${picks.map(x => x.name).join(', ')} first.`;
+    },
+  }),
+  unpairProduct: def({
+    spec: { name: 'unpairProduct', description: 'Remove the owner\'s own suggestions for a product.', params: { product: { type: 'string', description: 'Product name' } }, required: ['product'] },
+    schema: z.object({ product: z.string().trim().min(1).max(120) }),
+    async run(a, ctx) {
+      const p = await oneProduct(ctx, a.product);
+      await ctx.db.update(ctx.db.doc(C.products, p.id), { pairsWith: [], aiPairs: null, updatedAt: new Date().toISOString() });
+      return `Cleared. I'll go back to suggesting what customers usually buy with ${p.name}.`;
+    },
+  }),
+  setSuggestions: def({
+    spec: { name: 'setSuggestions', description: 'Turn "goes well with" suggestions to customers on or off.', params: { on: { type: 'boolean', description: 'true = on' } }, required: ['on'] },
+    schema: z.object({ on: z.boolean() }),
+    async run(a, ctx) {
+      await ctx.db.update(ctx.db.doc(C.businesses, ctx.business.id), { suggestions: a.on, updatedAt: new Date().toISOString() });
+      return a.on ? 'Suggestions are on ✅ After a customer adds something, I show a few items that go with it.' : 'Suggestions are off. Send SUGGESTIONS ON to turn them back on.';
+    },
   }),
   shopMessages: def({
     spec: { name: 'shopMessages', description: 'See or change the messages customers get (welcome, payment thank-you, order ready, out for delivery, delivered).', params: {} },

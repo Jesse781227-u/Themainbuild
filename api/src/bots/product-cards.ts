@@ -69,3 +69,16 @@ export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: 
   if (shown < categories.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*More sections*\n${categories.length - shown} more`, buttons: [[`cats:${page + 1}`, 'See more ➡️']] });
   return carousel(page ? 'More sections 👇' : `${opts.intro} Swipe to pick a section 👇`, cards);
 }
+
+// After "Added to cart": what goes with it, then (at the end) a slightly better version of it.
+export function suggestionMessage(cfg: Pick<Config, 'API_BASE_URL'>, anchor: Pick<Product, 'name'>, s: { cross: Product[]; upsell: Product | null }): OutboundContent | null {
+  const cards = s.cross.map(p => cardFor(cfg, p));
+  if (s.upsell) {
+    const up = cardFor(cfg, s.upsell);
+    cards.push({ ...up, body: clip(`⬆️ Upgrade\n${up.body}`, CAROUSEL.cardBodyMax) });
+  }
+  if (!cards.length) return null;
+  const intro = s.cross.length ? `Goes well with your ${anchor.name} 👇` : `Want to upgrade your ${anchor.name}?`;
+  if (cards.length === 1) return productDetails(cfg, s.cross[0] ?? s.upsell!, intro)[0];
+  return carousel(intro, cards);
+}

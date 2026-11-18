@@ -14,6 +14,8 @@ export interface ToolChoice { tool: string; args: Record<string, unknown> }
 // One line read from a menu or price list. Prices are naira as written (validated by the caller).
 export interface CatalogItem { name: string; price: number | null; category: string | null; stock?: number | null; description?: string | null; image?: number | null /* 1-based index into the photos passed in */ }
 
+export interface PairItem { id: string; name: string; category: string; priceNaira: number }
+
 export interface LLMProvider {
   // imageUrl: a public product photo (our R2 media URL) the model may look at, e.g. to pick a category.
   chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
@@ -21,6 +23,8 @@ export interface LLMProvider {
   // extracts what is written; the owner confirms before anything is saved.
   // Drafts short texts (e.g. the shop's welcome message) as { key: text }. The owner approves them.
   writeTexts?(input: { prompt: string; keys: readonly string[] }): Promise<Record<string, string>>;
+  // Picks items that go with what a customer just added (cross) and maybe one dearer version (upsell). Ids only.
+  pickPairs?(input: { shop: string; shopType: string; anchor: PairItem; candidates: PairItem[] }): Promise<{ cross: string[]; upsell: string | null }>;
   readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
 }
 
@@ -117,6 +121,36 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         const out = JSON.parse(raw) as Record<string, unknown>;
         return Object.fromEntries(keys.filter(k => typeof out[k] === 'string' && (out[k] as string).trim()).map(k => [k, (out[k] as string).trim()]));
       } catch { return {}; }
+    },
+
+    async pickPairs({ shop, shopType, anchor, candidates }) {
+      const prompt = [
+        `A customer at "${shop}" (a small ${shopType.replace(/_/g, ' ')} business in Nigeria) just added this to their cart: ${JSON.stringify(anchor)}.`,
+        'From the shop items below, pick up to 4 that genuinely go WITH it: things people buy together (a drink or side with food, socks or a cleaner with sneakers, a bag that matches a dress). Best first.',
+        'Do not pick near-identical alternatives to it (another shoe instead of this shoe). If nothing really goes with it, return an empty list.',
+        'Separately, pick at most one upsell: a better, bigger or premium version of the same kind of item, a bit more expensive. Or null.',
+        'Use only ids from the list.',
+        'Shop items: ' + JSON.stringify(candidates),
+      ].join('\n');
+      const res = await gemini({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+            responseSchema: { type: 'OBJECT', properties: { cross: { type: 'ARRAY', items: { type: 'STRING' } }, upsell: { type: 'STRING', nullable: true } }, required: ['cross'] },
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+      try {
+        const out = JSON.parse(raw) as { cross?: unknown; upsell?: unknown };
+        return { cross: Array.isArray(out.cross) ? out.cross.filter((x): x is string => typeof x === 'string') : [], upsell: typeof out.upsell === 'string' && out.upsell ? out.upsell : null };
+      } catch { return { cross: [], upsell: null }; }
     },
 
     async readCatalog({ file, text, businessType, categories, images }) {

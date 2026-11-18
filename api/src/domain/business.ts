@@ -16,6 +16,7 @@ export interface Business {
   id: string; name: string; category: BusinessCategory;
   ownerName?: string | null; city?: string | null; area?: string | null;
   profilePhotoUrl?: string | null;    // the shop's logo/photo (R2); pushed to the WhatsApp profile once connected
+  suggestions?: boolean;              // "goes well with" suggestions after add-to-cart; on unless false (SUGGESTIONS OFF)
   messages?: import('../services/shop-messages').ShopMessages | null; // the shop's own wording for welcome, receipts, …
   ownerPhone: string;                 // E.164; the owner talks to the Admin Bot from this number
   status: 'onboarding' | 'active' | 'suspended' | 'deleted';

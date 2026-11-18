@@ -43,6 +43,9 @@ export function parseAdminCommand(input: string): ToolChoice | null {
 
   // Categories (before "add …" and "move …", which they would otherwise match).
   if (/^(messages|my messages|edit messages|customer messages|welcome message|receipt message|thank you message)$/.test(t)) return { tool: 'shopMessages', args: {} };
+  if (/^suggestions? (on|off)$/.test(t)) return { tool: 'setSuggestions', args: { on: t.endsWith('on') } };
+  { const m = /^pair (.{1,120}?) with (.{1,500})$/.exec(t); if (m) return { tool: 'pairProducts', args: { product: m[1], with: m[2] } }; }
+  { const m = /^unpair (.{1,120})$/.exec(t); if (m) return { tool: 'unpairProduct', args: { product: m[1] } }; }
   if (/^(customers|my customers|customer list|list customers|all customers|show customers|top customers)$/.test(t)) return { tool: 'listCustomers', args: { sort: 'top' } };
   { const m = /^customers? (recent|new|latest|quiet|inactive|gone quiet)$/.exec(t); if (m) return { tool: 'listCustomers', args: { sort: /quiet|inactive/.test(m[1]) ? 'quiet' : 'recent' } }; }
   { const m = /^(?:customer|find customer|search customer|look up) (.{2,60})$/.exec(t); if (m) return { tool: 'findCustomer', args: { query: m[1] } }; }

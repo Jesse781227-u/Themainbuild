@@ -12,7 +12,8 @@ import type { Cart, Category, Conversation, Customer, Order, OrderDelivery, Prod
 import { hasStock, tracksStock } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
 import { listCategories, listProducts } from '../services/catalog';
-import { categoryCarousel, productCarousel, productDetails } from './product-cards';
+import { categoryCarousel, productCarousel, productDetails, suggestionMessage } from './product-cards';
+import { suggestFor } from '../services/suggestions';
 import { renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { listZones, quoteDelivery } from '../services/delivery';
@@ -26,7 +27,8 @@ import { deleteShopperData, deletionCode } from './deletion';
 const CART_HOURS = 24;
 
 type Step = 'browse' | 'await_address' | 'confirm' | 'confirm_delete';
-interface ShopState { step: Step; options?: string[]; delivery?: OrderDelivery | null }
+interface ShopState { step: Step; options?: string[]; delivery?: OrderDelivery | null; suggested?: string[] /* products we've already suggested pairings for */ }
+interface Run { deps: BotDeps; state: ShopState }
 type ShopConversation = Conversation & { shop?: ShopState | null };
 
 const SHOP_TOOLS: ToolSpec[] = [
@@ -60,9 +62,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     const c: OutboundContent = typeof content === 'string' ? { type: 'text', text: content } : content;
     await send(db, cfg, deps.transport, { from: { businessId }, conversationId, to, content: c });
     const options = optionIds(c);
-    if (next || options.length) await setState({ ...(next ?? state), options });
+    if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, options });
   };
 
+  const run: Run = { deps, state };
   const input = readInput(ctx.event);
   let text = input.text;
   if (input.audioId) {
@@ -109,8 +112,8 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'cat') return showCategory(ctx, business, id, reply);
     if (kind === 'more') return showCategory(ctx, business, id, reply, Number(choice.split(':')[2]) || 0);
     if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
-    if (kind === 'buy') return buy(ctx, business, id, reply);
-    if (kind === 'add') return addToCart(ctx, business, id, 1, reply);
+    if (kind === 'buy') return buy(ctx, run, business, id, reply);
+    if (kind === 'add') return addToCart(ctx, run, business, id, 1, reply);
     if (kind === 'cart') return showCart(ctx, business, reply);
     if (kind === 'clear') { await db.delete(db.doc(C.carts, conversationId)); return reply(buttons('Cart cleared.', [['menu', 'See the menu']]), { step: 'browse' }); }
     if (kind === 'checkout') return startCheckout(ctx, business, reply);
@@ -140,7 +143,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
       const asked = String(intent.args.product ?? '');
       const found = await findProducts(db, businessId, asked);
       const available = found.filter(p => p.available);
-      if (available.length === 1) return addToCart(ctx, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
+      if (available.length === 1) return addToCart(ctx, run, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
       const matches = available.length > 1 ? available : await search(db, businessId, asked);
       if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
       return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
@@ -201,11 +204,11 @@ async function showProduct(ctx: ShopContext, business: Business, productId: stri
 }
 
 // Tapping Buy on a card: sold out says so; otherwise one goes into the cart.
-async function buy(ctx: ShopContext, business: Business, productId: string, reply: Reply) {
+async function buy(ctx: ShopContext, run: Run, business: Business, productId: string, reply: Reply) {
   const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
   if (!hasStock(p)) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'View cart']]));
-  return addToCart(ctx, business, p.id, 1, reply);
+  return addToCart(ctx, run, business, p.id, 1, reply);
 }
 
 // Free-text search across product names and their categories: "black sneakers", "zobo".
@@ -232,7 +235,7 @@ async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {
   return cart && cart.expiresAt > new Date().toISOString() && cart.businessId === ctx.businessId ? cart : null;
 }
 
-async function addToCart(ctx: ShopContext, business: Business, productId: string, qty: number, reply: Reply) {
+async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply) {
   const { db } = ctx;
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
@@ -243,7 +246,14 @@ async function addToCart(ctx: ShopContext, business: Business, productId: string
   if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'View cart'], ['menu', 'Menu']]));
   const now = new Date();
   await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString() });
-  return showCart(ctx, business, reply, `Added ${qty} × ${p.name}.`);
+  // Then, once per item per chat: what goes with it (remembered with the cart reply).
+  const suggest = business.suggestions !== false && !run.state.suggested?.includes(p.id);
+  if (suggest) run.state.suggested = [...(run.state.suggested ?? []), p.id].slice(-30);
+  await showCart(ctx, business, reply, `Added ${qty} × ${p.name}.`);
+  if (!suggest) return;
+  const picks = await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
+  const out = picks ? suggestionMessage(ctx.cfg, p, picks) : null;
+  if (out) await reply(out, { step: 'browse' });
 }
 
 async function cartLines(db: Firestore, cart: Cart) {
