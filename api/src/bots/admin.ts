@@ -17,6 +17,7 @@ import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
 import { handleMessageInput } from './messages-flow';
+import { handleCustomerChoice } from './customers';
 
 const CONFIRM_MINUTES = 10;
 
@@ -77,6 +78,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     for (const o of msg.out) await reply(o);
     return;
   }
+
+  // ── Taps on the customer list (CUSTOMERS) ──
+  const custOut = await handleCustomerChoice(db, business, choiceId ?? null);
+  if (custOut) return reply(custOut);
 
   // ── Moving a category's products before deleting it ──
   if (choiceId?.startsWith('movecat:')) {

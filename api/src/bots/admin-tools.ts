@@ -25,6 +25,7 @@ import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
 import { messagesMenu } from './messages-flow';
+import { customerList, findCustomer } from './customers';
 import { renderMessage } from '../services/shop-messages';
 
 export interface ToolCtx {
@@ -76,6 +77,7 @@ export const HELP = [
   '• restock Black AF1 5 · price Black AF1 27k',
   '• categories · add category Watches · rename category Bags to Handbags · move Bags to the top · move Black AF1 to Sneakers',
   '• messages (see or change your welcome, payment thank-you and order update messages)',
+  '• customers (who buys, what they like, where they live) · customer Kemi · customers recent · customers quiet',
   '• products · orders · unpaid · sales today',
   '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
   '• delivery zone Lekki, 1500, same day',
@@ -212,6 +214,16 @@ export const adminTools = {
       if (!Number.isInteger(pos) || pos < 0) return 'Say where: "move Bags to the top", "to the bottom", or "to position 2".';
       return `New order: ${(await reorderCategory(ctx.db, ctx.business.id, c.id, pos)).join(' · ')}`;
     },
+  }),
+  listCustomers: def({
+    spec: { name: 'listCustomers', description: 'Show the owner\'s customers: who spent most, who ordered recently, or who has gone quiet.', params: { sort: { type: 'string', description: 'How to sort', enum: ['top', 'recent', 'quiet'] } } },
+    schema: z.object({ sort: z.enum(['top', 'recent', 'quiet']).default('top') }),
+    async run(a, ctx) { return customerList(ctx.db, ctx.business, a.sort); },
+  }),
+  findCustomer: def({
+    spec: { name: 'findCustomer', description: 'Look up one customer by name or phone number: their address, spending, favourite products and last purchases.', params: { query: { type: 'string', description: 'Name or phone number' } }, required: ['query'] },
+    schema: z.object({ query: z.string().trim().min(1).max(60) }),
+    async run(a, ctx) { return findCustomer(ctx.db, ctx.business, a.query); },
   }),
   shopMessages: def({
     spec: { name: 'shopMessages', description: 'See or change the messages customers get (welcome, payment thank-you, order ready, out for delivery, delivered).', params: {} },

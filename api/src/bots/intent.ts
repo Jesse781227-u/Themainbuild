@@ -43,6 +43,9 @@ export function parseAdminCommand(input: string): ToolChoice | null {
 
   // Categories (before "add …" and "move …", which they would otherwise match).
   if (/^(messages|my messages|edit messages|customer messages|welcome message|receipt message|thank you message)$/.test(t)) return { tool: 'shopMessages', args: {} };
+  if (/^(customers|my customers|customer list|list customers|all customers|show customers|top customers)$/.test(t)) return { tool: 'listCustomers', args: { sort: 'top' } };
+  { const m = /^customers? (recent|new|latest|quiet|inactive|gone quiet)$/.exec(t); if (m) return { tool: 'listCustomers', args: { sort: /quiet|inactive/.test(m[1]) ? 'quiet' : 'recent' } }; }
+  { const m = /^(?:customer|find customer|search customer|look up) (.{2,60})$/.exec(t); if (m) return { tool: 'findCustomer', args: { query: m[1] } }; }
   if (/^(categories|my categories|list categories|show categories)$/.test(t)) return { tool: 'listCategories', args: {} };
   if ((m = /^(?:add|new|create)\s+categor(?:y|ies)\s*:?\s+(.+)$/i.exec(text))) return { tool: 'addCategories', args: { names: m[1] } };
   if ((m = /^rename\s+(?:the\s+)?categor(?:y|ies)\s+(.+?)\s+(?:to|as)\s+(.+)$/i.exec(text))) return { tool: 'renameCategory', args: { category: m[1], name: m[2] } };
