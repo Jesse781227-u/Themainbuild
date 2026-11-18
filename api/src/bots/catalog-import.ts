@@ -7,16 +7,37 @@ import { C } from '../db';
 import { BUSINESS_TYPES } from '../domain/business';
 import type { Product } from '../domain/commerce';
 import { log } from '../lib/logger';
+import { randomId } from '../lib/crypto';
+import { extractPdfImages, type PdfImage } from '../services/pdf-images';
+import { productImageKey } from '../routes/media';
 import { formatKobo, nairaToKobo } from '../lib/money';
 import { CATALOG_MIME, MAX_CATALOG_BYTES, type CatalogItem } from '../services/ai';
 import { createCategories, createProduct, findCategory, listCategories, listProducts, tidyCategoryName } from '../services/catalog';
 import { buttons, fetchMedia, type Input } from './common';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
-export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string }
+export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
 export interface ImportDraft { items: ImportItem[]; skippedNoPrice: string[]; source: string }
 
 const MAX_ITEMS = 200;
+const MAX_PHOTOS = 40;
+
+// Saves photos taken from an uploaded file in R2 as product images. Returns their public URLs, in order.
+async function storePhotos(f: FlowCtx, photos: PdfImage[]): Promise<string[]> {
+  if (!f.deps.images || !photos.length) return [];
+  const urls: string[] = [];
+  for (const p of photos) {
+    const key = productImageKey(f.business.id, `imp-${randomId(9).replace(/[^A-Za-z0-9]/g, 'x')}.jpg`);
+    try {
+      await f.deps.images.put(key, p.bytes.slice().buffer as ArrayBuffer, { httpMetadata: { contentType: p.mimeType } });
+      urls.push(`${f.cfg.API_BASE_URL}/media/${key}`);
+    } catch (e) {
+      log('warn', 'import_photo_store_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) });
+      break;
+    }
+  }
+  return urls;
+}
 const looksLikeMenuWord = (t: string) => /^(menu|price ?list|prices|catalogue|catalog|inventory|stock list|my products)\b/i.test(t.trim());
 
 // One CSV row → fields, honouring quotes ("2,500" stays one field). Also accepts ; and tab.
@@ -60,7 +81,9 @@ export function parsePastedMenu(text: string, opts: { csv?: boolean } = {}): Imp
 }
 
 // LLM output → validated items (prices as kobo, trimmed names, deduplicated).
-export function cleanItems(raw: CatalogItem[], fallbackCategory: string): { items: ImportItem[]; skippedNoPrice: string[] } {
+// photoUrls: stored photos from the file, in the order given to the model (item.image is 1-based).
+export function cleanItems(raw: CatalogItem[], fallbackCategory: string, photoUrls: string[] = []): { items: ImportItem[]; skippedNoPrice: string[] } {
+  const usedPhotos = new Set<number>();
   const seen = new Set<string>();
   const items: ImportItem[] = [];
   const skippedNoPrice: string[] = [];
@@ -71,7 +94,10 @@ export function cleanItems(raw: CatalogItem[], fallbackCategory: string): { item
     if (!priceKobo || priceKobo <= 0) { skippedNoPrice.push(name); continue; }
     seen.add(name.toLowerCase());
     const stock = Number.isInteger(r.stock) && (r.stock as number) >= 0 ? (r.stock as number) : null;
-    items.push({ name, priceKobo, stock, category: tidyCategoryName(String(r.category ?? '')) || fallbackCategory, description: String(r.description ?? '').slice(0, 300) });
+    const n = Number(r.image);
+    const photo = Number.isInteger(n) && n >= 1 && n <= photoUrls.length && !usedPhotos.has(n) ? n : null;
+    if (photo) usedPhotos.add(photo);
+    items.push({ name, priceKobo, stock, category: tidyCategoryName(String(r.category ?? '')) || fallbackCategory, description: String(r.description ?? '').slice(0, 300), imageUrl: photo ? photoUrls[photo - 1] : null });
   }
   return { items: items.slice(0, MAX_ITEMS), skippedNoPrice };
 }
@@ -96,7 +122,9 @@ async function preview(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
     if (list.length > 8) lines.push(`…and ${list.length - 8} more`);
   }
   let text = `I found *${draft.items.length} product${draft.items.length === 1 ? '' : 's'}* in ${groups.size} categor${groups.size === 1 ? 'y' : 'ies'}:\n${lines.join('\n')}`;
-  if (updates) text += `\n\n${updates} already in your shop will get the new price.`;
+  const withPhotos = draft.items.filter(i => i.imageUrl).length;
+  if (withPhotos) text += `\n\n📷 ${withPhotos === draft.items.length ? 'All' : withPhotos} come${withPhotos === 1 ? 's' : ''} with a photo from your file.`;
+  if (updates) text += `\n\n${updates} already in your shop will get the new price${withPhotos ? ' and photo' : ''}.`;
   if (draft.skippedNoPrice.length) text += `\n\nNo price found for: ${draft.skippedNoPrice.slice(0, 10).join(', ')}${draft.skippedNoPrice.length > 10 ? '…' : ''}. Add those one by one.`;
   if (text.length > 1000) text = `${text.slice(0, 990)}…`; // WhatsApp button messages allow 1,024 characters
   return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', 'Cancel']])];
@@ -116,10 +144,10 @@ async function apply(f: FlowCtx): Promise<{ out: Out[]; created: number }> {
     const existing = byName.get(it.name.toLowerCase());
     try {
       if (existing) {
-        await f.db.update(f.db.doc(C.products, existing.id), { priceKobo: it.priceKobo, ...(it.stock !== null ? { stock: it.stock } : {}), updatedAt: new Date().toISOString() });
+        await f.db.update(f.db.doc(C.products, existing.id), { priceKobo: it.priceKobo, ...(it.stock !== null ? { stock: it.stock } : {}), ...(it.imageUrl ? { images: [it.imageUrl, ...existing.images.filter(u => u !== it.imageUrl)].slice(0, 10) } : {}), updatedAt: new Date().toISOString() });
         updated++;
       } else {
-        await createProduct(f.db, { businessId: f.business.id, name: it.name, priceKobo: it.priceKobo, stock: it.stock, categoryId: cat.id, description: it.description });
+        await createProduct(f.db, { businessId: f.business.id, name: it.name, priceKobo: it.priceKobo, stock: it.stock, categoryId: cat.id, description: it.description, images: it.imageUrl ? [it.imageUrl] : [] });
         created++;
       }
     } catch (e) { log('warn', 'import_item_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) }); }
@@ -173,8 +201,11 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     if (media.bytes.byteLength > MAX_CATALOG_BYTES) return { out: ['That file is too big (over 15 MB). Send a smaller PDF or a photo of each page.'], created: 0 };
     const mimeType = input.document ? input.document.mimeType : media.mimeType;
     const cats = (await listCategories(f.db, f.business.id)).map(c => c.name);
-    const raw = await f.deps.llm.readCatalog({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats });
-    const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f));
+    // Product photos inside a PDF are saved and offered to the model to match with items.
+    const photos = mimeType === 'application/pdf' ? await extractPdfImages(media.bytes, MAX_PHOTOS).catch(() => []) : [];
+    const photoUrls = await storePhotos(f, photos);
+    const raw = await f.deps.llm.readCatalog({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats, images: photos.slice(0, photoUrls.length) });
+    const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f), photoUrls);
     if (!items.length) {
       return { out: [input.imageId && !input.document
         ? "I couldn't find products with prices in that photo. To add one product, send its photo with the name and price as the caption, e.g. *Black AF1 25k*."

@@ -12,19 +12,21 @@ export interface ToolSpec { name: string; description: string; params: Record<st
 export interface ToolChoice { tool: string; args: Record<string, unknown> }
 
 // One line read from a menu or price list. Prices are naira as written (validated by the caller).
-export interface CatalogItem { name: string; price: number | null; category: string | null; stock?: number | null; description?: string | null }
+export interface CatalogItem { name: string; price: number | null; category: string | null; stock?: number | null; description?: string | null; image?: number | null /* 1-based index into the photos passed in */ }
 
 export interface LLMProvider {
   // imageUrl: a public product photo (our R2 media URL) the model may look at, e.g. to pick a category.
   chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
   // Reads a whole menu / price list (a PDF, a photo of a printed menu, or text) into items. It only
   // extracts what is written; the owner confirms before anything is saved.
-  readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[] }): Promise<CatalogItem[]>;
+  readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
 }
 
 export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)|text\/(plain|csv))$/;
 export const MAX_CATALOG_BYTES = 15_000_000;
-const GEMINI_TIMEOUT_MS = 45_000;
+// Quick replies (choosing what an owner meant) vs reading a whole catalogue with photos.
+const CHAT_TIMEOUT_MS = 30_000;
+const CATALOG_TIMEOUT_MS = 120_000;
 
 const MAX_IMAGE_BYTES = 4_000_000;
 
@@ -51,7 +53,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
   if (!cfg.GEMINI_API_KEY) return null;
   // Gemini sometimes answers 429/500/503 ("high demand") or hangs. Each call gets a time limit; a busy
   // or slow main model gets one quick retry, then the fallback model.
-  const gemini = async (init: RequestInit) => {
+  const gemini = async (init: RequestInit, timeoutMs = CHAT_TIMEOUT_MS) => {
     const models = [...new Set([cfg.GEMINI_MODEL, cfg.GEMINI_FALLBACK_MODEL].filter(Boolean))];
     let last: Response | null = null;
     for (const [i, model] of models.entries()) {
@@ -59,7 +61,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       for (let attempt = 0; attempt < (i === 0 ? 2 : 1); attempt++) {
         if (attempt) await new Promise(r => setTimeout(r, 800));
         try {
-          last = await doFetch(url, { ...init, signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) });
+          last = await doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
           if (![429, 500, 503].includes(last.status)) return last;
         } catch (e) {
           if (!(e instanceof Error && /abort|timeout/i.test(`${e.name} ${e.message}`))) throw e; // timed out: try again / next model
@@ -93,7 +95,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       return call ? { tool: call.name, args: call.args ?? {} } : null;
     },
 
-    async readCatalog({ file, text, businessType, categories }) {
+    async readCatalog({ file, text, businessType, categories, images }) {
       if (file && (!CATALOG_MIME.test(file.mimeType) || file.bytes.byteLength > MAX_CATALOG_BYTES)) throw new Error('CATALOG_FILE_UNSUPPORTED');
       const parts: Record<string, unknown>[] = [{ text: [
         'Extract every product or service with its price from this menu / price list of a small business in Nigeria.',
@@ -102,8 +104,10 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         categories?.length ? `The shop already has these categories; reuse them when they fit: ${categories.join(', ')}.` : '',
         'Prices are in naira: "2.5k" is 2500, "₦2,500" is 2500. If an item lists several sizes with prices, add one item per size, e.g. "Zobo (50cl)". If an item has no price, set price to null.',
         'Only include what is written. Do not invent items, prices or stock. Ignore addresses, phone numbers, opening hours and promotions.',
+        images?.length ? `After the document come ${images.length} product photos taken from it, in order, labelled Photo 1 to Photo ${images.length}. For each item set image to the number of the photo that shows that item (look at the photo and where it sits next to the item), or null if none does. Use each photo for at most one item.` : '',
       ].filter(Boolean).join(' ') }];
       if (file) parts.push({ inlineData: { mimeType: file.mimeType, data: Buffer.from(file.bytes).toString('base64') } });
+      (images ?? []).forEach((img, i) => parts.push({ text: `Photo ${i + 1}:` }, { inlineData: { mimeType: img.mimeType, data: Buffer.from(img.bytes).toString('base64') } }));
       if (text) parts.push({ text: text.slice(0, 30_000) });
       const res = await gemini({
         method: 'POST',
@@ -113,10 +117,10 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
           generationConfig: {
             temperature: 0,
             responseMimeType: 'application/json',
-            responseSchema: { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, price: { type: 'NUMBER', nullable: true }, category: { type: 'STRING', nullable: true }, stock: { type: 'INTEGER', nullable: true }, description: { type: 'STRING', nullable: true } }, required: ['name', 'price', 'category'] } } }, required: ['items'] },
+            responseSchema: { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, price: { type: 'NUMBER', nullable: true }, category: { type: 'STRING', nullable: true }, stock: { type: 'INTEGER', nullable: true }, description: { type: 'STRING', nullable: true }, image: { type: 'INTEGER', nullable: true } }, required: ['name', 'price', 'category'] } } }, required: ['items'] },
           },
         }),
-      });
+      }, CATALOG_TIMEOUT_MS);
       if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
       const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
       const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
