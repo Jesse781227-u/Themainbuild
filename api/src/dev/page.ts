@@ -1,7 +1,7 @@
 // The /dev/owner and /dev/customer chat screens (development only), styled after the WhatsApp
 // mobile app. Plain HTML + JS, no build step. The client script avoids template literals and
 // backslashes so it can live inside this template string.
-export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string; boot?: string }
+export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string; boot?: string; photoUrl?: string }
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 4l1.4 1.4L7.8 11H20v2H7.8l5.6 5.6L12 20l-8-8z"/></svg>',
@@ -126,7 +126,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 <div class="screen">
   <header>
     <button aria-label="Back" tabindex="-1">${ICON.back}</button>
-    <div class="avatar" id="avatar">${initial}</div>
+    <div class="avatar" id="avatar">${cfg.photoUrl ? `<img src="${cfg.photoUrl}" alt="">` : initial}</div>
     <div class="peer"><b id="title">${cfg.title}</b><small id="sub">${cfg.subtitle}</small></div>
     <button aria-label="Video call" tabindex="-1">${ICON.video}</button>
     <button aria-label="Voice call" tabindex="-1">${ICON.call}</button>
