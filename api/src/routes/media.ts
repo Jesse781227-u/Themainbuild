@@ -3,7 +3,8 @@ import type { Env } from '../env';
 
 // Product images live in R2. They're public because WhatsApp and Instagram fetch carousel and
 // product images by URL. Only product image keys are served; uploads happen server-side (Phase 3).
-export const PRODUCT_IMAGE_KEY = /^businesses\/[A-Za-z0-9_-]{1,64}\/products\/[A-Za-z0-9_-]{1,64}\.(jpg|jpeg|png|webp)$/;
+// Product photos and the shop's profile picture.
+export const PRODUCT_IMAGE_KEY = /^businesses\/[A-Za-z0-9_-]{1,64}\/(products|profile)\/[A-Za-z0-9_-]{1,64}\.(jpg|jpeg|png|webp)$/;
 export const productImageKey = (businessId: string, file: string) => `businesses/${businessId}/products/${file}`;
 
 export const media = new Hono<{ Bindings: Env }>();

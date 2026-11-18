@@ -16,6 +16,7 @@ import { chooseAdminTool } from './intent';
 import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
+import { handleMessageInput } from './messages-flow';
 
 const CONFIRM_MINUTES = 10;
 
@@ -67,6 +68,14 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (state.editingProductId && !choiceId) {
     const parsed = parseProduct(text);
     if (parsed) { for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o); return; }
+  }
+
+  // ── The shop's messages to customers (MESSAGES) ──
+  const msg = await handleMessageInput(flow, choiceId, text);
+  if (msg) {
+    if (msg.done) return reply('Saved ✅ Customers will get that message from now on. Send MESSAGES to change another.');
+    for (const o of msg.out) await reply(o);
+    return;
   }
 
   // ── Moving a category's products before deleting it ──

@@ -50,6 +50,11 @@ export function toText(content: OutboundContent): string {
   if (content.type === 'text') return content.text;
   if (content.type === 'image') return [content.caption, content.link].filter(Boolean).join(NEWLINE);
   if (content.type === 'template') return `[template ${content.name}]`;
+  // A link button (e.g. "Pay ₦3,030"): text plus the link, for Instagram and logs.
+  if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'cta_url') {
+    const i = content.interactive as { body?: { text?: string }; action?: { parameters?: { display_text?: string; url?: string } } };
+    return [i.body?.text ?? '', `${i.action?.parameters?.display_text ?? 'Open'}: ${i.action?.parameters?.url ?? ''}`].filter(Boolean).join(NEWLINE);
+  }
   if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'carousel') {
     const c = content.interactive as CarouselShape;
     const cards = (c.action?.cards ?? []).map((card, n) => `${n + 1}. ${String(card.body?.text ?? '').replace(/\*/g, '').split(NEWLINE).filter(Boolean).join(' · ')}`);

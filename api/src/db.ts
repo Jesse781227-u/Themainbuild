@@ -42,6 +42,7 @@ export const C = {
   ledger: 'ledger',
   dailyStats: 'dailyStats',
   outbox: 'outbox',
+  payLinks: 'payLinks',                 // simulated payment links (PAYMENTS_MODE=simulated)
   devMessages: 'devMessages',           // development only: replies captured in log mode for the /dev chat page
   inboundEvents: 'inboundEvents',
   deliveryZones: 'deliveryZones',

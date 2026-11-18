@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { api, Bot, clearFirestore, db, doc, env, seed, testEnv } from './helpers';
+import { api, Bot, clearFirestore, db, doc, env, seed, testEnv, passBranding } from './helpers';
 import { getConfig } from '../src/config';
 import { decrypt } from '../src/lib/crypto';
 import { before, test } from 'node:test';
@@ -83,6 +83,7 @@ test('admin: delete my data removes the owner account after confirmation', async
   for (const text of ['hi', 'Tayo', 'Shop To Delete']) await bot.send('admin', { from: o, text });
   await bot.send('admin', { from: o, choice: 'btype:other', text: 'Other' });
   await bot.send('admin', { from: o, text: 'Lagos, Ikeja' });
+  await passBranding(bot, o);
   const { businessId } = await doc('ownerPhones', `+${o}`);
   await bot.send('admin', { from: o, choice: 'cat:use', text: 'Use these' });
   await bot.send('admin', { from: o, choice: 'cat:ok', text: 'Looks good' });

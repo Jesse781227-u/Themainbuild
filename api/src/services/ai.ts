@@ -19,6 +19,8 @@ export interface LLMProvider {
   chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
   // Reads a whole menu / price list (a PDF, a photo of a printed menu, or text) into items. It only
   // extracts what is written; the owner confirms before anything is saved.
+  // Drafts short texts (e.g. the shop's welcome message) as { key: text }. The owner approves them.
+  writeTexts?(input: { prompt: string; keys: readonly string[] }): Promise<Record<string, string>>;
   readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
 }
 
@@ -93,6 +95,28 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       const json = (await res.json()) as { candidates?: { content?: { parts?: { functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[] };
       const call = json.candidates?.[0]?.content?.parts?.find(p => p.functionCall)?.functionCall;
       return call ? { tool: call.name, args: call.args ?? {} } : null;
+    },
+
+    async writeTexts({ prompt, keys }) {
+      const res = await gemini({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.9,
+            responseMimeType: 'application/json',
+            responseSchema: { type: 'OBJECT', properties: Object.fromEntries(keys.map(k => [k, { type: 'STRING' }])), required: [...keys] },
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+      try {
+        const out = JSON.parse(raw) as Record<string, unknown>;
+        return Object.fromEntries(keys.filter(k => typeof out[k] === 'string' && (out[k] as string).trim()).map(k => [k, (out[k] as string).trim()]));
+      } catch { return {}; }
     },
 
     async readCatalog({ file, text, businessType, categories, images }) {

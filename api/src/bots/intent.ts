@@ -42,6 +42,7 @@ export function parseAdminCommand(input: string): ToolChoice | null {
   if ((m = /^(?:hand ?back|resume(?: bot)?|bot on)(?:\s+(?:to\s+)?(\+?[\d\s-]{7,}))?$/i.exec(text))) return { tool: 'handBack', args: m[1] ? { customer: m[1] } : {} };
 
   // Categories (before "add …" and "move …", which they would otherwise match).
+  if (/^(messages|my messages|edit messages|customer messages|welcome message|receipt message|thank you message)$/.test(t)) return { tool: 'shopMessages', args: {} };
   if (/^(categories|my categories|list categories|show categories)$/.test(t)) return { tool: 'listCategories', args: {} };
   if ((m = /^(?:add|new|create)\s+categor(?:y|ies)\s*:?\s+(.+)$/i.exec(text))) return { tool: 'addCategories', args: { names: m[1] } };
   if ((m = /^rename\s+(?:the\s+)?categor(?:y|ies)\s+(.+?)\s+(?:to|as)\s+(.+)$/i.exec(text))) return { tool: 'renameCategory', args: { category: m[1], name: m[2] } };

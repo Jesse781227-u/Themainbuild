@@ -69,6 +69,19 @@ export async function transcribeVoice(cfg: Config, deps: BotDeps, accessToken: s
   }
 }
 
+// Downloads the photo the owner sent for their shop's profile picture and stores it in R2.
+// TODO(jesse): once the number is connected, push it to the WhatsApp Business profile (Resumable
+// Upload API for a handle, then POST /{phone-number-id}/whatsapp_business_profile with
+// profile_picture_handle); verify that coexistence numbers allow this.
+export async function storeProfilePhoto(cfg: Config, deps: BotDeps, accessToken: string, mediaId: string, businessId: string) {
+  if (!deps.images) return null;
+  const { bytes, mimeType } = await fetchMedia(cfg, deps, accessToken, mediaId);
+  const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+  const key = `businesses/${businessId}/profile/photo-${randomId(4).replace(/[^A-Za-z0-9]/g, 'x')}.${ext}`;
+  await deps.images.put(key, bytes, { httpMetadata: { contentType: mimeType } });
+  return `${cfg.API_BASE_URL}/media/${key}`;
+}
+
 // Downloads a WhatsApp photo and stores it in R2 as a product image. Returns its public URL.
 export async function storeProductImage(cfg: Config, deps: BotDeps, accessToken: string, mediaId: string, businessId: string, productId: string) {
   if (!deps.images) return null;

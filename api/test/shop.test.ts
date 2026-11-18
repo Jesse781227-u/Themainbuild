@@ -43,8 +43,9 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   assert.match(confirm[0].text, /Pickup: free\nService fee: ₦30\nTotal: about ₦3,030/);
   const stockBefore = (await doc('products', fx.a.product)).stock;
   const paid = await shop(bot, me, { choice: 'confirm', text: 'Confirm order' });
-  assert.match(paid[0].text, /Order RLY-[A-Z0-9]{5}: please transfer exactly ₦3,0\d\d(\.\d\d)?\.\nPay to: GTBank 0123456789 Business A/);
-  assert.match(paid[0].text, /holding your items for 30 minutes/);
+  // Test environments use simulated payments: a "Pay ₦X" button to the payment page.
+  assert.equal((paid[0].content as unknown as { interactive: { type: string } }).interactive.type, 'cta_url');
+  assert.match(paid[0].text, /Order RLY-[A-Z0-9]{5}\n3 × Product biz-a\n\nTotal: \*₦3,0\d\d(\.\d\d)?\*[\s\S]*holding your items for 30 minutes\.\nPay ₦3,0[\d.,]*: https?:\/\/[^/]+\/pay\/[A-Za-z0-9]+/);
 
   const [order] = await recentOrders(db, [['customerId', '==', convId(me)]], 1);
   assert.equal(order.status, 'awaiting_payment');

@@ -18,7 +18,7 @@ import { productCarousel } from './product-cards';
 export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null }
 export interface ProductFlowState {
   productDraft?: ProductDraft | null;      // waiting for the owner to pick its category
-  awaiting?: 'newCategory' | null;         // the next text is a new category's name
+  awaiting?: string | null;                // 'newCategory' (a category name) or 'msg:<key>' (a shop message)
   editingProductId?: string | null;        // the next product line corrects this product
   importDraft?: import('./catalog-import').ImportDraft | null; // a menu read in bulk, waiting for Add all
 }

@@ -1,4 +1,4 @@
-import { Bot, clearFirestore, db, doc, env, fakeLLM, seed } from './helpers';
+import { Bot, clearFirestore, db, doc, env, fakeLLM, seed, passBranding } from './helpers';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanItems, handleImport, parsePastedMenu } from '../src/bots/catalog-import';
@@ -116,8 +116,9 @@ test('import: pasting a menu at the categories step of signup sets everything up
   const from = '2348035553333';
   for (const text of ['hi', 'Kemi', 'Kemi Kitchen']) await bot.send('admin', { from, text });
   await bot.send('admin', { from, choice: 'btype:food_beverage', text: 'Food' });
-  const cat = await bot.send('admin', { from, text: 'Lagos, Ikeja' });
-  assert.match(cat[0].text, /Have a menu or price list\? Send it now/);
+  await bot.send('admin', { from, text: 'Lagos, Ikeja' });
+  const cat = await passBranding(bot, from);
+  assert.match(cat[cat.length - 1].text, /Have a menu or price list\? Send it now/);
   assert.match((await bot.send('admin', { from, text: MENU }))[0].text, /I found \*4 products\*/);
   const done = await bot.send('admin', { from, choice: 'imp:all', text: 'Add all 4' });
   assert.match(done[0].text, /Added 4 products in 2 categories/);

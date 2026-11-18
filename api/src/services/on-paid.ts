@@ -7,6 +7,7 @@ import type { Business } from '../domain/business';
 import type { Customer, Order, Product } from '../domain/commerce';
 import { hasStock, tracksStock } from '../domain/commerce';
 import { claimId } from './orders';
+import { renderMessage } from './shop-messages';
 import { adminConversationId, customerConversationId } from './conversations';
 
 // Template names live in config (they're created in Meta), resolved when the message is sent.
@@ -82,7 +83,8 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     conversationId: customerConversationId(order.businessId, order.channel, customer.phone), kind: 'order_paid_receipt',
     // Template body (Y11): {{1}} order number, {{2}} amount paid.
     template: { key: 'receipt', params: [order.ref, formatKobo(order.payAmountKobo)] },
-    text: `Payment received for order ${order.ref}: ${formatKobo(order.payAmountKobo)}. Thank you! We'll update you on ${order.delivery?.method === 'pickup' ? 'pickup' : 'delivery'}.`,
+    // The shop's own thank-you (MESSAGES); inside the 24-hour window, else the receipt template.
+    text: business ? renderMessage(business, 'paymentThanks', { customer: customer.name, order: order.ref, amount: formatKobo(order.payAmountKobo) }) : `Payment received for order ${order.ref}: ${formatKobo(order.payAmountKobo)}. Thank you!`,
   });
   if (business?.ownerPhone) queue({
     id: `${order.id}_owner_paid`, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,

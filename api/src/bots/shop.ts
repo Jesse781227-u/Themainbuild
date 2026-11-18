@@ -13,6 +13,8 @@ import { hasStock, tracksStock } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
 import { listCategories, listProducts } from '../services/catalog';
 import { productCarousel, productDetails } from './product-cards';
+import { renderMessage } from '../services/shop-messages';
+import { createPayLink, payMessage } from '../services/paylinks';
 import { listZones, quoteDelivery } from '../services/delivery';
 import { checkout, policyFor, recentOrders } from '../services/orders';
 import { paymentInstructions } from '../services/bachs';
@@ -170,7 +172,8 @@ const visible = async (db: Firestore, businessId: string) => (await listProducts
 
 async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply) {
   const name = customer?.name?.split(' ')[0];
-  const hello = (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : `Hi${name ? ` ${name}` : ''}, welcome to ${business.name} 👋`;
+  // New customers get the shop's own welcome message (set during signup, MESSAGES to change).
+  const hello = (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
   const products = await visible(ctx.db, business.id);
   if (!products.length) return reply(`${hello} We're updating our menu right now. Please check back soon.`, { step: 'browse' });
   const cats = (await listCategories(ctx.db, business.id)).filter(c => products.some(p => p.categoryId === c.id));
@@ -289,7 +292,13 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
     throw e;
   }
   const minutes = Math.round((new Date(order.holdExpiresAt).getTime() - Date.now()) / 60_000);
-  await reply(`${paymentInstructions(order, (business as Business & { paymentDetails?: string | null }).paymentDetails ?? null)}\nWe're holding your items for ${minutes} minutes.`, { step: 'browse' });
+  if (ctx.cfg.PAYMENTS_MODE === 'simulated') {
+    // A "Pay ₦X" button to the test payment page (until Bachs payment links exist).
+    const link = await createPayLink(ctx.db, order);
+    await reply(payMessage(ctx.cfg, order, link.token, minutes), { step: 'browse' });
+  } else {
+    await reply(`${paymentInstructions(order, (business as Business & { paymentDetails?: string | null }).paymentDetails ?? null)}\nWe're holding your items for ${minutes} minutes.`, { step: 'browse' });
+  }
   await notifyOwner(ctx.db, deps, business, 'order_placed', `New order ${order.ref}: ${formatKobo(order.payAmountKobo)} awaiting payment (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).`, order.id);
 }
 

@@ -86,6 +86,8 @@ header button { background: none; border: 0; color: inherit; padding: 8px; borde
 .cbtns { display: flex; flex-direction: column; border-top: 1px solid var(--sep); }
 .cbtns button { display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: var(--btn); font: inherit; font-size: 14.5px; font-weight: 500; padding: 9px; cursor: pointer; }
 .cbtns button + button { border-top: 1px solid var(--sep); }
+.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+a.listbtn { text-decoration: none; }
 .listbtn { border-top: 1px solid var(--sep); border-radius: 0 0 8px 8px; box-shadow: none; margin: 7px -8px -7px -9px; width: calc(100% + 17px); background: transparent; }
 footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
 .field { flex: 1; display: flex; align-items: center; gap: 2px; background: var(--field); border-radius: 24px; padding: 4px 6px; box-shadow: var(--shadow); min-height: 48px; }
@@ -157,7 +159,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 <script>
 (function () {
   var CFG = ${json(cfg)};
-  var ICON = ${json({ ticks: '<svg viewBox="0 0 16 11" width="16" height="11"><path fill="currentColor" d="M11.1.3 4.8 7.5 2.3 5 1.2 6.1l3.7 3.6L12.2 1.4zm3.6 0L8.4 7.5l-.8-.8-1.1 1.1 1.9 1.9L15.8 1.4z"/></svg>', reply: ICON.reply, list: ICON.list, mic: ICON.mic, send: ICON.send })};
+  var ICON = ${json({ ticks: '<svg viewBox="0 0 16 11" width="16" height="11"><path fill="currentColor" d="M11.1.3 4.8 7.5 2.3 5 1.2 6.1l3.7 3.6L12.2 1.4zm3.6 0L8.4 7.5l-.8-.8-1.1 1.1 1.9 1.9L15.8 1.4z"/></svg>', reply: ICON.reply, list: ICON.list, mic: ICON.mic, send: ICON.send, link: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3zm5 16H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z"/></svg>' })};
   var KEY = 'relay.chat.' + CFG.role + '.phone';
   var $ = function (id) { return document.getElementById(id); };
   var state = { count: -1, waiting: false, waitTimer: null, sheet: null, selected: null, noShop: null };
@@ -172,7 +174,11 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   var title = CFG.title;
   function showMe() { $('me').textContent = 'You are +' + phone + (CFG.role === 'owner' ? ' (business owner)' : ' (customer)'); }
   showMe();
-  function setTitle(t) { title = t; $('title').textContent = t; $('avatar').textContent = t.charAt(0).toUpperCase(); }
+  function setTitle(t, photo) {
+    title = t; $('title').textContent = t;
+    var av = $('avatar'); av.innerHTML = '';
+    if (photo) { var im = el('img'); im.src = photo; im.alt = ''; av.appendChild(im); } else av.textContent = t.charAt(0).toUpperCase();
+  }
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function html(tag, cls, markup) { var e = el(tag, cls); e.innerHTML = markup; return e; }
@@ -230,6 +236,14 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       if (i.footer && i.footer.text) { b.appendChild(document.createTextNode(String.fromCharCode(10))); b.appendChild(el('small', null, i.footer.text)); }
     }
     b.appendChild(meta(m, mine));
+    // A link button ("Pay ₦3,030"): opens in the browser, like WhatsApp does.
+    var cta = c.type === 'interactive' && c.interactive && c.interactive.type === 'cta_url' && c.interactive.action ? c.interactive.action.parameters : null;
+    if (cta) {
+      var ab = html('a', 'listbtn', ICON.link);
+      ab.appendChild(document.createTextNode(cta.display_text || 'Open'));
+      ab.href = cta.url; ab.target = '_blank'; ab.rel = 'noopener';
+      b.appendChild(ab);
+    }
     if (opts && opts.kind === 'list') {
       var lb = html('button', 'listbtn', ICON.list);
       lb.appendChild(document.createTextNode(opts.label));
@@ -300,7 +314,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     if (!owner) { noShop('No shop yet. Open the owner chat and sign up a business first.'); return; }
     fetch('/dev/shop?owner=' + owner).then(function (r) { return r.json(); }).then(function (res) {
       if (res.shop) {
-        if (bot !== res.shop.botNumber) { bot = res.shop.botNumber; state.count = -1; state.noShop = null; setTitle(res.shop.name); $('text').disabled = false; render([]); poll(); }
+        if (bot !== res.shop.botNumber || res.shop.photoUrl !== state.photo) { state.photo = res.shop.photoUrl; bot = res.shop.botNumber; state.count = -1; state.noShop = null; setTitle(res.shop.name, res.shop.photoUrl); $('text').disabled = false; render([]); poll(); }
         return;
       }
       bot = '';

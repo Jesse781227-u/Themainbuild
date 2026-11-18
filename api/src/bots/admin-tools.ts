@@ -24,6 +24,8 @@ import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
+import { messagesMenu } from './messages-flow';
+import { renderMessage } from '../services/shop-messages';
 
 export interface ToolCtx {
   db: Firestore; cfg: Config; deps: BotDeps;
@@ -73,6 +75,7 @@ export const HELP = [
   '• send your whole menu or price list as a PDF or photo (or paste it) to add everything at once',
   '• restock Black AF1 5 · price Black AF1 27k',
   '• categories · add category Watches · rename category Bags to Handbags · move Bags to the top · move Black AF1 to Sneakers',
+  '• messages (see or change your welcome, payment thank-you and order update messages)',
   '• products · orders · unpaid · sales today',
   '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
   '• delivery zone Lekki, 1500, same day',
@@ -210,6 +213,11 @@ export const adminTools = {
       return `New order: ${(await reorderCategory(ctx.db, ctx.business.id, c.id, pos)).join(' · ')}`;
     },
   }),
+  shopMessages: def({
+    spec: { name: 'shopMessages', description: 'See or change the messages customers get (welcome, payment thank-you, order ready, out for delivery, delivered).', params: {} },
+    schema: z.object({}),
+    async run() { return messagesMenu(); },
+  }),
   previewCategory: def({
     spec: { name: 'previewCategory', description: 'Show the owner the carousel customers see for a category (or the whole shop).', params: { category: { type: 'string', description: 'Category name (optional)' } } },
     schema: z.object({ category: z.string().trim().optional() }),
@@ -284,8 +292,22 @@ export const adminTools = {
     async run(a, ctx) {
       const o = await oneOrder(ctx, a.order);
       if (o.status !== 'paid') return `${o.ref} isn't paid yet.`;
-      await ctx.db.update(ctx.db.doc(C.orders, o.id), { fulfilment: a.status, updatedAt: new Date().toISOString() });
-      return `${o.ref}: ${a.status.replace(/_/g, ' ')}.`;
+      const at = new Date().toISOString();
+      await ctx.db.update(ctx.db.doc(C.orders, o.id), { fulfilment: a.status, updatedAt: at });
+      // Tell the customer, in the shop's own words (MESSAGES). Once per status; inside the 24-hour window only.
+      const key = ({ ready: 'orderReady', out_for_delivery: 'outForDelivery', delivered: 'delivered', picked_up: 'delivered' } as const)[a.status];
+      const customer = (await ctx.db.get(ctx.db.doc(C.customers, o.customerId))) as { phone?: string; name?: string } | null;
+      let told = false;
+      if (customer?.phone) {
+        const id = `${o.id}_${a.status}`;
+        told = await ctx.db.create(ctx.db.doc(C.outbox, id), {
+          id, businessId: o.businessId, audience: 'customer', channel: o.channel, to: customer.phone,
+          conversationId: customerConversationId(o.businessId, o.channel, customer.phone), kind: `order_${a.status}`,
+          text: renderMessage(ctx.business, key, { customer: customer.name, order: o.ref }), status: 'pending', attempts: 0, createdAt: at,
+        });
+        if (told) await ctx.deps.enqueue([{ kind: 'outbox', messageId: id }]);
+      }
+      return `${o.ref}: ${a.status.replace(/_/g, ' ')}.${told ? ' The customer has been told.' : ''}`;
     },
   }),
   addDeliveryZone: def({

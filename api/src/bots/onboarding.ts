@@ -12,22 +12,25 @@ import type { OutboundContent } from '../services/channel';
 import { createCategories, listCategories, listProducts, parseCategoryList } from '../services/catalog';
 import { createSignupSession } from '../services/signup';
 import type { AdminContext } from '../services/router';
-import { buttons, list, type BotDeps, type Input } from './common';
+import { buttons, list, storeProfilePhoto, type BotDeps, type Input } from './common';
 import { handleImport } from './catalog-import';
+import { draftAllMessages, handleMessageInput, review } from './messages-flow';
+import { log } from '../lib/logger';
 import { parseAdminCommand, parseProductLine } from './intent';
 import { addProduct, customerPreview, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
 
-export type Stage = 'basics' | 'categories' | 'products' | 'connect';
-type Step = 'owner_name' | 'business_name' | 'type' | 'city' | 'area' | 'categories' | 'categories_type' | 'products' | 'connect';
+export type Stage = 'basics' | 'branding' | 'categories' | 'products' | 'connect';
+type Step = 'owner_name' | 'business_name' | 'type' | 'city' | 'area' | 'photo' | 'messages' | 'categories' | 'categories_type' | 'products' | 'connect';
 
 export interface Onboarding {
   stage: Stage; step: Step;
   draft?: { ownerName?: string; businessName?: string; type?: BusinessCategory; city?: string };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number;
+  msgKey?: 'welcome' | 'paymentThanks';  // which drafted message is being reviewed
 }
 
 const RESUME_AFTER_MS = 30 * 60_000;
-const STAGE_LABEL: Record<Stage, string> = { basics: 'your shop details', categories: 'your categories', products: 'adding products', connect: 'connecting your WhatsApp number' };
+const STAGE_LABEL: Record<Stage, string> = { basics: 'your shop details', branding: 'your profile picture and messages', categories: 'your categories', products: 'adding products', connect: 'connecting your WhatsApp number' };
 const DONE = /^(done|i'?m done|finish(ed)?|that'?s all|next|continue)$/i;
 
 const typeOf = (id?: string) => BUSINESS_TYPES.find(t => t.id === id);
@@ -108,6 +111,37 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (area.length < 2) return c.reply(`Which area in ${c.ob.draft?.city ?? 'your city'}?`);
       return finishBasics(c, c.ob.draft?.city ?? '', area);
     }
+    case 'photo': {
+      const biz = c.business!;
+      if (input?.imageId) {
+        const url = ctx.cfg.ADMIN_BOT_ACCESS_TOKEN ? await storeProfilePhoto(ctx.cfg, c.deps, ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, input.imageId, biz.id).catch(e => { log('warn', 'profile_photo_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; }) : null;
+        if (!url) return c.reply(buttons("Sorry, I couldn't save that photo. Try sending it again, or skip for now.", [['photo:skip', 'Skip for now']]));
+        await ctx.db.update(ctx.db.doc(C.businesses, biz.id), { profilePhotoUrl: url, updatedAt: new Date().toISOString() });
+        biz.profilePhotoUrl = url;
+        await c.reply('Lovely, that\'s your profile picture now ✅ Customers see it next to your shop\'s name.');
+      } else if (choiceId !== 'photo:skip') return prompt(c);
+      await setOb(c, { step: 'messages', msgKey: 'welcome' });
+      return startMessages(c);
+    }
+    case 'messages': {
+      const f = flowFor(c);
+      const res = await handleMessageInput(f, choiceId, text);
+      if (!res && !choiceId && text.trim()) {
+        // Typed straight away: that's their own version of the message on screen.
+        await f.db.set(f.convRef, { awaiting: `msg:${c.ob.msgKey ?? 'welcome'}` }, { merge: true });
+        f.state.awaiting = `msg:${c.ob.msgKey ?? 'welcome'}`;
+        const own = await handleMessageInput(f, null, text);
+        if (own) return sendAll(c, own.out);
+      }
+      if (!res) return prompt(c);
+      if (res.done === 'welcome') { await setOb(c, { msgKey: 'paymentThanks' }); return c.reply(review(f, 'paymentThanks', 'Next, the message customers get when they pay:\n\n')); }
+      if (res.done === 'paymentThanks') {
+        await c.reply('Done ✅ I\'ve also written messages for when an order is ready, out for delivery and delivered. Send MESSAGES any time to see or change any of them.');
+        await setStage(c, 'categories', 'categories');
+        return prompt(c);
+      }
+      return sendAll(c, res.out);
+    }
     case 'categories':
     case 'categories_type': {
       const biz = c.business!;
@@ -158,6 +192,19 @@ async function afterCreate(c: Ctx, f: FlowCtx, out: Out[]): Promise<Out[]> {
   return preview ? [...out, "Here's what your customers will see 👇", preview, buttons('Keep adding products, or move on?', [['prod:more', 'Add more'], ['prod:done', "I'm done"]])] : out;
 }
 
+const flowFor = (c: Ctx): FlowCtx => ({ db: c.ctx.db, cfg: c.ctx.cfg, deps: c.deps, business: c.business!, convRef: c.ctx.db.doc(C.conversations, c.ctx.conversationId), state: c.state });
+
+// The messages step: AI drafts all five (once), then the owner reviews welcome and payment thank-you.
+async function startMessages(c: Ctx, again = false) {
+  const f = flowFor(c);
+  if (!again || !c.business?.messages) {
+    await c.reply('Next, the messages your customers get. Writing them in your shop\'s voice… ✍️');
+    await draftAllMessages(f);
+  }
+  const key = c.ob.msgKey === 'paymentThanks' ? 'paymentThanks' : 'welcome';
+  return c.reply(review(f, key, key === 'welcome' ? 'Here\'s how I\'d greet new customers:\n\n' : ''));
+}
+
 async function finishBasics(c: Ctx, city: string, area: string) {
   const { ctx } = c;
   const d = c.ob.draft ?? {};
@@ -170,7 +217,7 @@ async function finishBasics(c: Ctx, city: string, area: string) {
   await ctx.db.create(ctx.db.doc(C.businesses, id), { ...business });
   c.business = business;
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { businessId: id }, { merge: true });
-  await setStage(c, 'categories', 'categories');
+  await setStage(c, 'branding', 'photo');
   return prompt(c);
 }
 
@@ -179,6 +226,8 @@ async function prompt(c: Ctx): Promise<unknown> {
   const d = c.ob.draft ?? {};
   switch (c.ob.step) {
     case 'owner_name': return c.reply("Welcome to Relay 👋 I'll get your shop taking orders on WhatsApp in about 10 minutes.\n\nFirst, what's your name?");
+    case 'photo': return c.reply(buttons(`Now a profile picture for ${c.business?.name ?? 'your shop'}. Send your logo or a nice photo of your shop or products. Customers see it next to your name in WhatsApp.`, [['photo:skip', 'Skip for now']]));
+    case 'messages': return startMessages(c, true);
     case 'business_name': return c.reply("What's your business called?");
     case 'type': return c.reply(list(`What kind of business is ${d.businessName ?? 'it'}?`, 'Choose type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
     case 'city': return c.reply('Which city and area are you in? For example: *Lagos, Yaba*');

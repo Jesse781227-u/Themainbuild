@@ -83,7 +83,7 @@ simple = { limit = 100, period = 60 }
 [env.production]
 name = "relay-api-production"
 # TODO(jesse): the production hostname (custom domain or workers.dev) once the Cloudflare account exists.
-vars = { RELAY_ENV = "production", API_BASE_URL = "https://relay-api-production.example.workers.dev" }
+vars = { RELAY_ENV = "production", API_BASE_URL = "https://relay-api-production.example.workers.dev", PAYMENTS_MODE = "transfer" }
 triggers = { crons = ["* * * * *", "0 19 * * *"] }
 
 [[env.production.queues.producers]]

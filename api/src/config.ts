@@ -48,6 +48,9 @@ const schema = z.object({
   FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
   FEE_CAP_KOBO: z.coerce.number().int().min(0).default(200_000),
   HOLD_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(30),
+  // How customers pay. "simulated": a test payment page (no real money) until Bachs is wired in;
+  // "transfer": bank details in the chat. Never "simulated" in production.
+  PAYMENTS_MODE: z.enum(['simulated', 'transfer']).optional(), // default: simulated, except transfer in production
 });
 
 export type Config = z.infer<typeof schema>;
@@ -56,6 +59,7 @@ export function parseConfig(env: Record<string, unknown>): Config {
   // Workers pass bindings alongside vars; only string values are config.
   const strings = Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === 'string' || v === undefined));
   const parsed = schema.parse(strings);
+  parsed.PAYMENTS_MODE ??= parsed.RELAY_ENV === 'production' ? 'transfer' : 'simulated';
   if (parsed.RELAY_ENV !== 'development') {
     if (!parsed.FIREBASE_PROJECT_ID || !parsed.FIREBASE_CLIENT_EMAIL || !parsed.FIREBASE_PRIVATE_KEY) throw new Error('Missing Firebase service-account credentials for non-development environment.');
     if (!parsed.TOKEN_ENCRYPTION_KEY || !hexKey.test(parsed.TOKEN_ENCRYPTION_KEY)) throw new Error('TOKEN_ENCRYPTION_KEY must be exactly 64 hex characters outside development.');
@@ -63,6 +67,7 @@ export function parseConfig(env: Record<string, unknown>): Config {
     if (!parsed.META_VERIFY_TOKEN || parsed.META_VERIFY_TOKEN.length < 16) throw new Error('META_VERIFY_TOKEN must be at least 16 characters outside development.');
     if (parsed.FIRESTORE_EMULATOR_HOST) throw new Error('FIRESTORE_EMULATOR_HOST must not be set outside development.');
     if (parsed.META_SEND_MODE !== 'live') throw new Error('META_SEND_MODE must be "live" outside development.');
+    if (parsed.RELAY_ENV === 'production' && parsed.PAYMENTS_MODE === 'simulated') throw new Error('PAYMENTS_MODE must not be "simulated" in production.');
   }
   return parsed;
 }

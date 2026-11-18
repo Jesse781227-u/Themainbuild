@@ -1,4 +1,4 @@
-import { Bot, clearFirestore, db, doc, seed } from './helpers';
+import { Bot, clearFirestore, db, doc, passBranding, seed } from './helpers';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseProduct, stripVariantWords } from '../src/bots/products-flow';
@@ -48,14 +48,33 @@ test('onboarding: basics → categories → products → connect, by chat', asyn
   assert.ok(opts(type).includes('btype:fashion_retail') && opts(type).includes('btype:electronics') && opts(type).includes('btype:photography_events'));
   assert.match((await bot.send('admin', { from: OWNER, choice: 'btype:fashion_retail', text: 'Fashion' }))[0].text, /Which city and area/);
   assert.match((await bot.send('admin', { from: OWNER, text: 'Lagos' }))[0].text, /which area in Lagos/i);
-  const cats = await bot.send('admin', { from: OWNER, text: 'Yaba' });
-  assert.match(cats[0].text, /Clothing · Shoes · Bags · Accessories/);
-  assert.deepEqual(opts(cats), ['cat:use', 'cat:own']);
+  const photo = await bot.send('admin', { from: OWNER, text: 'Yaba' });
+  assert.match(photo[0].text, /profile picture for Ada Kicks\. Send your logo/);
+  assert.deepEqual(opts(photo), ['photo:skip']);
 
   const owner = await doc('ownerPhones', `+${OWNER}`);
   const biz = await doc('businesses', owner.businessId);
   assert.deepEqual([biz.name, biz.category, biz.ownerName, biz.city, biz.area, biz.status], ['Ada Kicks', 'fashion_retail', 'Ada Obi', 'Lagos', 'Yaba', 'onboarding']);
-  assert.equal(owner.onboardingStage, 'categories');
+  assert.equal(owner.onboardingStage, 'branding');
+
+  // Branding: drafted messages (the defaults here, no AI), reviewed one by one.
+  const welcome = await bot.send('admin', { from: OWNER, choice: 'photo:skip', text: 'Skip for now' });
+  assert.match(welcome[0].text, /messages your customers get/);
+  assert.match(welcome[1].text, /\*Welcome message\* \(sent when a new customer says hi\):\n\nHi \{customer\}, welcome to \{shop\} 👋\n\nHow a customer sees it:\nHi Ada, welcome to Ada Kicks 👋/);
+  assert.deepEqual(opts([welcome[1]]), ['msgok:welcome', 'msgedit:welcome', 'msgnew:welcome']);
+  assert.match((await bot.send('admin', { from: OWNER, choice: 'msgedit:welcome', text: 'Edit' }))[0].text, /Type your welcome message\. You can use \{customer\}, \{shop\}/);
+  const mine = await bot.send('admin', { from: OWNER, text: 'Hey {customer}! Welcome to {shop}, home of clean kicks {oops}' });
+  assert.match(mine[0].text, /Saved ✅[\s\S]*Hey Ada! Welcome to Ada Kicks, home of clean kicks$/m, 'unknown blanks are dropped');
+  const thanks = await bot.send('admin', { from: OWNER, choice: 'msgok:welcome', text: 'Use this' });
+  assert.match(thanks[0].text, /\*Payment thank-you message\*[\s\S]*Payment received for order RLY-7KQ2M: ₦12,500\. Thank you, Ada!/);
+  const cats = await bot.send('admin', { from: OWNER, choice: 'msgok:paymentThanks', text: 'Use this' });
+  assert.match(cats[0].text, /also written messages for when an order is ready, out for delivery and delivered/);
+  assert.match(cats[1].text, /Clothing · Shoes · Bags · Accessories/);
+  assert.deepEqual(opts([cats[1]]), ['cat:use', 'cat:own']);
+  const saved = (await doc('businesses', owner.businessId)).messages;
+  assert.equal(saved.welcome, 'Hey {customer}! Welcome to {shop}, home of clean kicks');
+  assert.ok(saved.orderReady && saved.outForDelivery && saved.delivered, 'all five are saved');
+  assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'categories');
 
   assert.match((await bot.send('admin', { from: OWNER, choice: 'cat:use', text: 'Use these' }))[0].text, /Created ✅ Clothing · Shoes · Bags · Accessories/);
   assert.match((await bot.send('admin', { from: OWNER, choice: 'cat:edit', text: 'Edit' }))[0].text, /separated by commas/);
@@ -104,6 +123,7 @@ test('onboarding: coming back after a break offers Continue or Start over', asyn
   for (const text of ['hi', 'Bola', 'Bola Bakes']) await bot.send('admin', { from, text });
   await bot.send('admin', { from, choice: 'btype:food_beverage', text: 'Food' });
   await bot.send('admin', { from, text: 'Ibadan, Bodija' });
+  await passBranding(bot, from);
   const businessId = (await doc('ownerPhones', `+${from}`)).businessId;
   const c = await conv(from);
   await db.set(db.doc('conversations', `admin_${from}`), { onboarding: { ...c.onboarding, lastSeenAt: new Date(Date.now() - 2 * 3600_000).toISOString() } }, { merge: true });

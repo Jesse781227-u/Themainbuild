@@ -129,3 +129,11 @@ export async function doc(collection: string, id: string) { return (await db.get
 export async function seedCart(id: string, businessId: string, customerId: string, items: { productId: string; qty: number }[], expiresAt = new Date(Date.now() + 3600_000).toISOString()) {
   await db.set(db.doc('carts', id), { id, businessId, customerId, channel: 'whatsapp', items, expiresAt, updatedAt: now() });
 }
+
+// Signup's branding step for tests that don't care about it: skip the photo, keep the drafted messages.
+// Returns the replies to the last tap (which end with the categories question).
+export async function passBranding(bot: Bot, from: string) {
+  await bot.send('admin', { from, choice: 'photo:skip', text: 'Skip for now' });
+  await bot.send('admin', { from, choice: 'msgok:welcome', text: 'Use this' });
+  return bot.send('admin', { from, choice: 'msgok:paymentThanks', text: 'Use this' });
+}
