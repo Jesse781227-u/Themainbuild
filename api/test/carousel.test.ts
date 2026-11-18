@@ -3,11 +3,11 @@ import { getConfig } from '../src/config';
 import { saveWhatsAppConnection } from '../src/services/whatsapp';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { carousel, CAROUSEL, clip } from '../src/services/carousel';
+import { carousel, CAROUSEL, clip, type CarouselShape } from '../src/services/carousel';
 import { optionIds, toText } from '../src/services/channel';
-import { cardFor, productCarousel, PLACEHOLDER_IMAGE } from '../src/bots/product-cards';
+import { cardFor, categoryCarousel, productCarousel, PLACEHOLDER_IMAGE } from '../src/bots/product-cards';
 import { createCategories, createProduct } from '../src/services/catalog';
-import type { Product } from '../src/domain/commerce';
+import type { Category, Product } from '../src/domain/commerce';
 
 let fx: Awaited<ReturnType<typeof seed>>;
 before(async () => { await clearFirestore(); fx = await seed(); });
@@ -72,6 +72,10 @@ test('shop: customers browse categories as carousels, Buy adds to the cart, sear
   const hi = await bot.send('shop', { ...c, text: 'hi' });
   assert.match(hi[0].text, /welcome to Business biz-b 👋 What are you looking for\?/);
   assert.ok(hi[0].options.includes(`cat:${kicks.id}`) && hi[0].options.includes(`cat:${bags.id}`));
+  assert.equal(ia(hi[0].content).type, 'carousel', 'categories are swipeable cards too');
+  assert.match(hi[0].text, /Sneakers · 3 items · from ₦25,000\n2\. Bags · 1 item · from ₦9,000\nReply with a number to choose\./);
+  const back = await bot.send('shop', { ...c, choice: 'menu', text: 'Menu' });
+  assert.match(back[0].text, /^Here is everything we have\. What are you looking for\?/, 'no second welcome');
 
   const list = await bot.send('shop', { ...c, choice: `cat:${kicks.id}`, text: 'Sneakers' });
   assert.equal(ia(list[0].content).type, 'carousel');
@@ -85,4 +89,20 @@ test('shop: customers browse categories as carousels, Buy adds to the cart, sear
 
   const found = await bot.send('shop', { ...c, text: 'af1 sneakers' });
   assert.match(found[0].text, /Results for "af1 sneakers"[\s\S]*Black AF1[\s\S]*White AF1/);
+});
+
+test('carousel: categories page at 10 cards, with cover photos from their products', () => {
+  const cats = Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, name: `Section ${i}`, coverImage: i === 1 ? 'https://img/cover.jpg' : null }) as unknown as Category);
+  const prods = [{ ...product(1), categoryId: 'c0', images: ['https://img/p1.jpg'] }, { ...product(2), categoryId: 'c0', stock: 0 }] as Product[];
+  const p0 = categoryCarousel(cfg, cats, prods, { intro: 'Hi!' });
+  const cards = (ia(p0) as CarouselShape).action!.cards!;
+  assert.equal(cards.length, 10);
+  assert.equal(cards[0].header!.image!.link, 'https://img/p1.jpg', 'first product photo as cover');
+  assert.equal(cards[1].header!.image!.link, 'https://img/cover.jpg', 'own cover wins');
+  assert.match(cards[2].header!.image!.link!, /product-placeholder\.png$/);
+  assert.match(cards[0].body!.text!, /^\*Section 0\*\n2 items · from ₦1,000\.01$/);
+  assert.match(cards[2].body!.text!, /0 items · sold out/);
+  assert.equal(cards[9].action!.buttons![0].quick_reply!.id, 'cats:1');
+  const p1 = (ia(categoryCarousel(cfg, cats, prods, { intro: 'Hi!', page: 1 })) as CarouselShape).action!.cards!;
+  assert.deepEqual(p1.map(c => c.action!.buttons![0].quick_reply!.id), ['cat:c9', 'cat:c10', 'cat:c11']);
 });

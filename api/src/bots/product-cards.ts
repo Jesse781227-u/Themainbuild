@@ -5,7 +5,7 @@
 // Choice ids: buy:<productId>, det:<productId>, more:<categoryId|all>:<page>, menu.
 import type { Config } from '../config';
 import type { Business } from '../domain/business';
-import { hasStock, type Product } from '../domain/commerce';
+import { hasStock, type Category, type Product } from '../domain/commerce';
 import { formatKobo } from '../lib/money';
 import type { OutboundContent } from '../services/channel';
 import { CAROUSEL, carousel, clip, type CarouselCard } from '../services/carousel';
@@ -48,4 +48,24 @@ export function productDetails(cfg: Pick<Config, 'API_BASE_URL'>, p: Product, in
   const content = buttons(clip(body, 1000), soldOut ? [['menu', 'Menu']] : [[`buy:${p.id}`, 'Buy'], ['menu', 'Menu'], ['cart', 'View cart']]);
   (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: imageFor(cfg, p) } };
   return [content];
+}
+
+// The shop's sections as swipeable cards: cover photo (the category's own, else its first product's),
+// *name*, how many items and the lowest price; [View]. More than 10: 9 + a "More sections" card.
+// Choice ids: cat:<categoryId>, cats:<page>.
+export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: Category[], products: Product[], opts: { intro: string; page?: number }): OutboundContent {
+  const page = Math.max(0, opts.page ?? 0);
+  const rest = categories.length - page * PER_PAGE;
+  const slice = categories.slice(page * PER_PAGE, page * PER_PAGE + (rest > CAROUSEL.maxCards ? PER_PAGE : CAROUSEL.maxCards));
+  const cards: CarouselCard[] = slice.map(c => {
+    const items = browseOrder(products.filter(p => p.categoryId === c.id));
+    const inStock = items.filter(hasStock);
+    const from = inStock.length ? Math.min(...inStock.map(p => p.priceKobo)) : null;
+    const cover = c.coverImage || items.find(p => p.images[0])?.images[0] || `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`;
+    const count = `${items.length} item${items.length === 1 ? '' : 's'}`;
+    return { imageUrl: cover, body: `*${c.name}*\n${count}${from != null ? ` · from ${formatKobo(from)}` : ' · sold out'}`, buttons: [[`cat:${c.id}`, 'View']] };
+  });
+  const shown = page * PER_PAGE + slice.length;
+  if (shown < categories.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*More sections*\n${categories.length - shown} more`, buttons: [[`cats:${page + 1}`, 'See more ➡️']] });
+  return carousel(page ? 'More sections 👇' : `${opts.intro} Swipe to pick a section 👇`, cards);
 }

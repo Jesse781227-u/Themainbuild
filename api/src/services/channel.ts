@@ -58,7 +58,7 @@ export function toText(content: OutboundContent): string {
   if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'carousel') {
     const c = content.interactive as CarouselShape;
     const cards = (c.action?.cards ?? []).map((card, n) => `${n + 1}. ${String(card.body?.text ?? '').replace(/\*/g, '').split(NEWLINE).filter(Boolean).join(' · ')}`);
-    return [c.body?.text ?? '', ...cards, cards.length ? 'Reply with a number to buy.' : ''].filter(Boolean).join(NEWLINE);
+    return [c.body?.text ?? '', ...cards, cards.length ? (c.action?.cards?.[0]?.action?.buttons?.[0]?.quick_reply?.id?.startsWith('buy:') ? 'Reply with a number to buy.' : 'Reply with a number to choose.') : ''].filter(Boolean).join(NEWLINE);
   }
   const i = content.interactive as { body?: { text?: string }; action?: { buttons?: { reply: { title: string } }[]; sections?: { title?: string; rows: { title: string; description?: string }[] }[] } };
   const titles = i.action?.buttons ? i.action.buttons.map(b => b.reply.title) : (i.action?.sections ?? []).flatMap(sec => sec.rows.map(r => (r.description ? `${r.title} (${r.description})` : r.title)));

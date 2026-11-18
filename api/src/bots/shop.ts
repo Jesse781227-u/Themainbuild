@@ -12,7 +12,7 @@ import type { Cart, Category, Conversation, Customer, Order, OrderDelivery, Prod
 import { hasStock, tracksStock } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
 import { listCategories, listProducts } from '../services/catalog';
-import { productCarousel, productDetails } from './product-cards';
+import { categoryCarousel, productCarousel, productDetails } from './product-cards';
 import { renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { listZones, quoteDelivery } from '../services/delivery';
@@ -104,7 +104,8 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   // ── Choices from lists and buttons ──
   if (choice) {
     const [kind, id] = choice.split(':');
-    if (kind === 'menu') return greet(ctx, business, customer, reply);
+    if (kind === 'menu') return greet(ctx, business, customer, reply, { again: true });
+    if (kind === 'cats') return greet(ctx, business, customer, reply, { again: true, page: Number(id) || 0 });
     if (kind === 'cat') return showCategory(ctx, business, id, reply);
     if (kind === 'more') return showCategory(ctx, business, id, reply, Number(choice.split(':')[2]) || 0);
     if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
@@ -170,16 +171,18 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
 // Products customers can see: everything not hidden or deleted, including sold-out items (shown marked).
 const visible = async (db: Firestore, businessId: string) => (await listProducts(db, businessId)).filter(p => p.available);
 
-async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply) {
+async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply, opts: { again?: boolean; page?: number } = {}) {
+  const page = opts.page ?? 0;
   const name = customer?.name?.split(' ')[0];
   // New customers get the shop's own welcome message (set during signup, MESSAGES to change).
-  const hello = (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
+  // Back to the menu mid-chat: no second welcome.
+  const hello = opts.again ? 'Here is everything we have.' : (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
   const products = await visible(ctx.db, business.id);
   if (!products.length) return reply(`${hello} We're updating our menu right now. Please check back soon.`, { step: 'browse' });
   const cats = (await listCategories(ctx.db, business.id)).filter(c => products.some(p => p.categoryId === c.id));
   // One category (or none yet): go straight to the products.
   if (cats.length <= 1) return sendAll(reply, productCarousel(ctx.cfg, business, cats.length ? products.filter(p => p.categoryId === cats[0].id) : products, { title: cats[0]?.name ?? 'Our products', key: cats[0]?.id ?? 'all', intro: hello }));
-  return reply(list(`${hello} What are you looking for?`, 'Categories', cats.slice(0, 10).map(c => ({ id: `cat:${c.id}`, title: c.name, description: `${products.filter(p => p.categoryId === c.id).length} items` })), 'Categories'), { step: 'browse' });
+  return reply(categoryCarousel(ctx.cfg, cats, products, { intro: `${hello} What are you looking for?`, page }), { step: 'browse' });
 }
 
 async function showCategory(ctx: ShopContext, business: Business, key: string, reply: Reply, page = 0) {
