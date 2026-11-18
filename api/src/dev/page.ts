@@ -171,7 +171,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   // Text with clickable links and WhatsApp *bold*, built without innerHTML so bot text can never
   // inject markup.
   function linkify(parent, text) {
-    String(text).split(/(https?:[^ ]+)/g).forEach(function (part, i) {
+    String(text).split(/(https?:[^\\s<>"]+)/g).forEach(function (part, i) {
       if (i % 2) { var a = el('a', null, part); a.href = part; a.target = '_blank'; a.rel = 'noopener'; parent.appendChild(a); }
       else if (part) parent.appendChild(document.createTextNode(part));
     });
