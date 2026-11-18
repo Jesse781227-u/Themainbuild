@@ -26,6 +26,7 @@ import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
 import { messagesMenu } from './messages-flow';
 import { customerList, findCustomer } from './customers';
+import { receiptFilename, receiptPath } from '../services/receipt';
 import { renderMessage } from '../services/shop-messages';
 
 export interface ToolCtx {
@@ -80,7 +81,7 @@ export const HELP = [
   '• customers (who buys, what they like, where they live) · customer Kemi · customers recent · customers quiet',
   '• pair Jollof rice with Zobo, Plantain (what to suggest when customers add it) · unpair Jollof rice · suggestions off',
   '• products · orders · unpaid · sales today',
-  '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE',
+  '• RLY-ABCDE paid · RLY-ABCDE delivered · cancel RLY-ABCDE · receipt RLY-ABCDE (the PDF)',
   '• delivery zone Lekki, 1500, same day',
   '• payment details GTBank 0123456789 Mama Kitchen',
   '• broadcast <message> (to customers who opted in; you see the cost first) · link (a wa.me link for your Status)',
@@ -225,6 +226,20 @@ export const adminTools = {
     spec: { name: 'findCustomer', description: 'Look up one customer by name or phone number: their address, spending, favourite products and last purchases.', params: { query: { type: 'string', description: 'Name or phone number' } }, required: ['query'] },
     schema: z.object({ query: z.string().trim().min(1).max(60) }),
     async run(a, ctx) { return findCustomer(ctx.db, ctx.business, a.query); },
+  }),
+  orderReceipt: def({
+    spec: { name: 'orderReceipt', description: 'Get the PDF receipt of a paid order.', params: { order: { type: 'string', description: 'Order number like RLY-ABCDE' } }, required: ['order'] },
+    schema: z.object({ order: ref }),
+    async run(a, ctx) {
+      const o = await oneOrder(ctx, a.order);
+      if (o.status !== 'paid') return `${o.ref} isn't paid yet, so there's no receipt.`;
+      let token = (o as Order & { receiptToken?: string | null }).receiptToken;
+      if (!token) { // paid before receipts existed
+        token = randomId(18).replace(/[^A-Za-z0-9]/g, 'x');
+        await ctx.db.update(ctx.db.doc(C.orders, o.id), { receiptToken: token });
+      }
+      return { type: 'document', link: `${ctx.cfg.API_BASE_URL}${receiptPath(token)}`, filename: receiptFilename(o), caption: `Receipt for ${o.ref}: ${formatKobo(o.payAmountKobo)}.` };
+    },
   }),
   pairProducts: def({
     spec: { name: 'pairProducts', description: 'Set what to suggest to customers who add a product to their cart ("pair Jollof rice with Zobo, Plantain").', params: { product: { type: 'string', description: 'The product customers add' }, with: { type: 'string', description: 'Products to suggest with it, comma separated' } }, required: ['product', 'with'] },

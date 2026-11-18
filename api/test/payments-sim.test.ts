@@ -1,5 +1,6 @@
 import { api, Bot, clearFirestore, db, doc, env, seed, testEnv } from './helpers';
 import { getConfig, parseConfig } from '../src/config';
+import { createApp } from '../src/app';
 import { saveWhatsAppConnection } from '../src/services/whatsapp';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,9 +50,21 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
 
   // The queued messages go out: the shop's own thank-you to the customer, "Paid" to the owner.
   await bot.drain();
-  const sent = bot.transport.sent.map(m => (m.content as { text?: string }).text ?? '');
-  assert.ok(sent.some(t => /^Thank you Kemi! We got ₦1,0[\d.,]* for RLY-[A-Z0-9]{5} 💛$/.test(t)), sent.join(' | '));
-  assert.ok(await doc('outbox', `${order.id}_owner_paid`), 'the owner alert is queued (sent when their 24-hour window is open)');
+  const receipt = bot.transport.sent.map(m => m.content as { type: string; caption?: string; link?: string; filename?: string }).find(c => c.type === 'document');
+  assert.ok(receipt, 'the thank-you comes with the PDF receipt');
+  assert.match(receipt.caption!, /^Thank you Kemi! We got ₦1,0[\d.,]* for RLY-[A-Z0-9]{5} 💛$/);
+  assert.equal(receipt.filename, `Receipt-${order.ref}.pdf`);
+  assert.ok(receipt.link!.endsWith(`/receipts/${order.receiptToken}`));
+  const pdf = await createApp().request(`/receipts/${order.receiptToken}`, {}, env);
+  assert.equal(pdf.status, 200);
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+  assert.equal((await api('GET', '/receipts/notarealtokenatall123', {})).status, 404);
+
+  assert.equal((await doc('outbox', `${order.id}_owner_paid`)).document.filename, `Receipt-${order.ref}.pdf`, 'the owner alert carries the receipt too');
+  const again = await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: `receipt ${order.ref}` });
+  assert.equal((again[0].content as { type: string }).type, 'document');
+  assert.match(again[0].text, new RegExp(`Receipt for ${order.ref}`));
 
   assert.deepEqual((await api('POST', `/pay/${token}`, {})).body, { success: true, alreadyPaid: true }, 'paying twice is harmless');
   assert.match((await api('GET', `/pay/${token}`, {})).body, /Payment successful/);

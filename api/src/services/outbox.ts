@@ -2,6 +2,7 @@
 // transaction as the change that caused them, then sent from the queue. A message is sent at most
 // once: it is claimed with a lease before sending and marked sent afterwards.
 import { C } from '../db';
+import type { OutboundContent } from './channel';
 import type { Config } from '../config';
 import type { Firestore } from '../lib/firestore';
 import { increment } from '../lib/firestore';
@@ -30,7 +31,10 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
     let messageId: string;
     let viaTemplate = false;
     try {
-      ({ messageId } = await send(db, cfg, transport, { ...base, content: { type: 'text', text: claimed.text } }));
+      const content: OutboundContent = claimed.document
+        ? { type: 'document', link: `${cfg.API_BASE_URL}${claimed.document.path}`, filename: claimed.document.filename, caption: claimed.text.slice(0, 1024) }
+        : { type: 'text', text: claimed.text };
+      ({ messageId } = await send(db, cfg, transport, { ...base, content }));
     } catch (e) {
       if (!(e instanceof WindowClosedError) || !claimed.template || claimed.channel !== 'whatsapp') throw e;
       // Outside the window: the approved template (Y11) carries the same information.

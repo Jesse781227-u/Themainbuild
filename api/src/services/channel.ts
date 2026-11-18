@@ -14,6 +14,7 @@ export const WINDOW_MS = 24 * 60 * 60 * 1000;
 export type OutboundContent =
   | { type: 'text'; text: string }
   | { type: 'image'; link: string; caption?: string }
+  | { type: 'document'; link: string; filename: string; caption?: string }
   | { type: 'interactive'; interactive: Record<string, unknown> }
   | { type: 'template'; name: string; language: string; components?: unknown[] };
 
@@ -49,6 +50,7 @@ export function optionIds(content: OutboundContent): string[] {
 export function toText(content: OutboundContent): string {
   if (content.type === 'text') return content.text;
   if (content.type === 'image') return [content.caption, content.link].filter(Boolean).join(NEWLINE);
+  if (content.type === 'document') return [content.caption, `${content.filename}: ${content.link}`].filter(Boolean).join(NEWLINE);
   if (content.type === 'template') return `[template ${content.name}]`;
   // A link button (e.g. "Pay ₦3,030"): text plus the link, for Instagram and logs.
   if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'cta_url') {
@@ -74,7 +76,7 @@ export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION' | 'INSTAGR
       const payload = type === 'template'
         ? { name: (rest as { name: string }).name, language: { code: (rest as { language: string }).language }, ...((rest as { components?: unknown[] }).components ? { components: (rest as { components?: unknown[] }).components } : {}) }
         : type === 'text' ? { body: (rest as { text: string }).text, preview_url: false }
-        : type === 'image' ? rest
+        : type === 'image' || type === 'document' ? rest
         : (rest as { interactive: unknown }).interactive;
       const res = await doFetch(`https://graph.facebook.com/${cfg.META_GRAPH_VERSION}/${sender.phoneNumberId}/messages`, {
         method: 'POST',

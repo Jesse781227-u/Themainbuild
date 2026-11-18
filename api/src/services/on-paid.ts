@@ -8,6 +8,8 @@ import type { Customer, Order, Product } from '../domain/commerce';
 import { hasStock, tracksStock } from '../domain/commerce';
 import { claimId } from './orders';
 import { renderMessage } from './shop-messages';
+import { receiptFilename, receiptPath } from './receipt';
+import { randomId } from '../lib/crypto';
 import { adminConversationId, customerConversationId } from './conversations';
 
 // Template names live in config (they're created in Meta), resolved when the message is sent.
@@ -21,6 +23,8 @@ export interface OutboxMessage {
   // Sent instead of the text when the 24-hour window is closed. Body parameters fill the template's
   // {{1}}, {{2}}, … in order. Messages without one are not sent outside the window.
   template?: { key: TemplateKey; params: string[] } | null;
+  // Sent as a document with the text as its caption (e.g. the PDF receipt). path is under API_BASE_URL.
+  document?: { path: string; filename: string } | null;
 }
 
 export type PaidResult = { applied: false; reason: 'not_found' | 'already_paid' | 'cancelled' } | { applied: true; order: Order; late: boolean; outboxIds: string[] };
@@ -55,7 +59,10 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     } else needsAttention = 'paid_after_expiry_out_of_stock';
   }
 
-  tx.update(db.doc(C.orders, order.id), { status: 'paid', paidAt: at, paymentId: payment.paymentId, needsAttention, updatedAt: at });
+  // The receipt PDF's private link (/receipts/<token>), made on request from the order.
+  const receiptToken = randomId(18).replace(/[^A-Za-z0-9]/g, 'x');
+  const receipt = { path: receiptPath(receiptToken), filename: receiptFilename(order) };
+  tx.update(db.doc(C.orders, order.id), { status: 'paid', paidAt: at, paymentId: payment.paymentId, needsAttention, receiptToken, updatedAt: at });
   tx.delete(db.doc(C.amountClaims, claimId(order.businessId, order.payAmountKobo)));
 
   const spent = order.subtotalKobo + order.deliveryFeeKobo;
@@ -83,12 +90,13 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     conversationId: customerConversationId(order.businessId, order.channel, customer.phone), kind: 'order_paid_receipt',
     // Template body (Y11): {{1}} order number, {{2}} amount paid.
     template: { key: 'receipt', params: [order.ref, formatKobo(order.payAmountKobo)] },
+    document: receipt,
     // The shop's own thank-you (MESSAGES); inside the 24-hour window, else the receipt template.
     text: business ? renderMessage(business, 'paymentThanks', { customer: customer.name, order: order.ref, amount: formatKobo(order.payAmountKobo) }) : `Payment received for order ${order.ref}: ${formatKobo(order.payAmountKobo)}. Thank you!`,
   });
   if (business?.ownerPhone) queue({
     id: `${order.id}_owner_paid`, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,
-    conversationId: adminConversationId(business.ownerPhone), kind: 'owner_order_paid',
+    conversationId: adminConversationId(business.ownerPhone), kind: 'owner_order_paid', document: receipt,
     text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
   });
 
