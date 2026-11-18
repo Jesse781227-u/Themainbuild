@@ -11,10 +11,19 @@ export interface ToolParam { type: 'string' | 'number' | 'integer' | 'boolean'; 
 export interface ToolSpec { name: string; description: string; params: Record<string, ToolParam>; required?: string[] }
 export interface ToolChoice { tool: string; args: Record<string, unknown> }
 
+// One line read from a menu or price list. Prices are naira as written (validated by the caller).
+export interface CatalogItem { name: string; price: number | null; category: string | null; stock?: number | null; description?: string | null }
+
 export interface LLMProvider {
   // imageUrl: a public product photo (our R2 media URL) the model may look at, e.g. to pick a category.
   chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
+  // Reads a whole menu / price list (a PDF, a photo of a printed menu, or text) into items. It only
+  // extracts what is written; the owner confirms before anything is saved.
+  readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[] }): Promise<CatalogItem[]>;
 }
+
+export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)|text\/(plain|csv))$/;
+export const MAX_CATALOG_BYTES = 15_000_000;
 
 const MAX_IMAGE_BYTES = 4_000_000;
 
@@ -61,6 +70,36 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       const json = (await res.json()) as { candidates?: { content?: { parts?: { functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[] };
       const call = json.candidates?.[0]?.content?.parts?.find(p => p.functionCall)?.functionCall;
       return call ? { tool: call.name, args: call.args ?? {} } : null;
+    },
+
+    async readCatalog({ file, text, businessType, categories }) {
+      if (file && (!CATALOG_MIME.test(file.mimeType) || file.bytes.byteLength > MAX_CATALOG_BYTES)) throw new Error('CATALOG_FILE_UNSUPPORTED');
+      const parts: Record<string, unknown>[] = [{ text: [
+        'Extract every product or service with its price from this menu / price list of a small business in Nigeria.',
+        'Use the section headings as categories (e.g. "Rice dishes", "Drinks"); keep them short and title case. If there are no headings, group items into a few sensible categories.',
+        businessType ? `The business type is ${businessType}.` : '',
+        categories?.length ? `The shop already has these categories; reuse them when they fit: ${categories.join(', ')}.` : '',
+        'Prices are in naira: "2.5k" is 2500, "₦2,500" is 2500. If an item lists several sizes with prices, add one item per size, e.g. "Zobo (50cl)". If an item has no price, set price to null.',
+        'Only include what is written. Do not invent items, prices or stock. Ignore addresses, phone numbers, opening hours and promotions.',
+      ].filter(Boolean).join(' ') }];
+      if (file) parts.push({ inlineData: { mimeType: file.mimeType, data: Buffer.from(file.bytes).toString('base64') } });
+      if (text) parts.push({ text: text.slice(0, 30_000) });
+      const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${cfg.GEMINI_MODEL}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: 'application/json',
+            responseSchema: { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, price: { type: 'NUMBER', nullable: true }, category: { type: 'STRING', nullable: true }, stock: { type: 'INTEGER', nullable: true }, description: { type: 'STRING', nullable: true } }, required: ['name', 'price', 'category'] } } }, required: ['items'] },
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+      try { return ((JSON.parse(raw) as { items?: CatalogItem[] }).items ?? []).slice(0, 300); } catch { return []; }
     },
   };
 }

@@ -16,16 +16,26 @@ import { hmacSha256Hex } from '../lib/crypto';
 import { adminConversationId, customerConversationId } from '../services/conversations';
 import { getSignupSession } from '../services/signup';
 import { saveWhatsAppConnection } from '../services/whatsapp';
+import { DEV_MEDIA_PREFIX, devMediaKey } from '../bots/common';
+
+const MAX_UPLOAD_BYTES = 15_000_000;
 
 type Choice = { id: string; title: string; kind: 'button' | 'list' };
 const CUSTOMER_PHONE = '2348090000001';
 
 export const isDevChat = (cfg: Pick<Config, 'RELAY_ENV' | 'META_SEND_MODE'>) => cfg.RELAY_ENV === 'development' && cfg.META_SEND_MODE === 'log';
 
-function payload(o: { botNumber: string; from: string; text: string; choice?: Choice }) {
+type Upload = { mediaId: string; kind: 'image' | 'document'; mimeType: string; filename: string; caption: string };
+
+function payload(o: { botNumber: string; from: string; text: string; choice?: Choice; upload?: Upload }) {
   const id = `wamid.dev.${crypto.randomUUID()}`;
   const timestamp = String(Math.floor(Date.now() / 1000));
-  const message = o.choice
+  const u = o.upload;
+  const message = u
+    ? (u.kind === 'image'
+      ? { from: o.from, id, timestamp, type: 'image', image: { id: u.mediaId, mime_type: u.mimeType, ...(u.caption ? { caption: u.caption } : {}) } }
+      : { from: o.from, id, timestamp, type: 'document', document: { id: u.mediaId, mime_type: u.mimeType, filename: u.filename, ...(u.caption ? { caption: u.caption } : {}) } })
+    : o.choice
     ? { from: o.from, id, timestamp, type: 'interactive', interactive: o.choice.kind === 'list' ? { type: 'list_reply', list_reply: { id: o.choice.id, title: o.choice.title } } : { type: 'button_reply', button_reply: { id: o.choice.id, title: o.choice.title } } }
     : { from: o.from, id, timestamp, type: 'text', text: { body: o.text } };
   return { object: 'whatsapp_business_account', entry: [{ id: 'waba-dev', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15550000000', phone_number_id: o.botNumber }, contacts: [{ wa_id: o.from, profile: { name: 'Ada' } }], messages: [message] } }] }] };
@@ -88,6 +98,40 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     try { ctx = c.executionCtx; } catch { ctx = undefined; }
     const res = await getApp().fetch(req, c.env, ctx);
     return c.json({ success: res.status === 200, status: res.status });
+  });
+
+  // A photo or file attached on a chat screen (📎 / 📷): kept in R2 like Meta would keep it, then
+  // delivered as a WhatsApp image or document message with that media id.
+  r.post('/upload', async c => {
+    const cfg = getConfig(c.env);
+    const body = await c.req.json<{ botNumber: string; phone: string; filename?: string; mimeType?: string; data?: string; caption?: string }>();
+    const from = digits(body.phone);
+    const mimeType = String(body.mimeType ?? 'application/octet-stream').slice(0, 100);
+    const bytes = body.data ? Buffer.from(body.data, 'base64') : null;
+    if (!body.botNumber || from.length < 8 || !bytes?.byteLength) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'botNumber, phone and a file are required.' } }, 400);
+    if (bytes.byteLength > MAX_UPLOAD_BYTES) return c.json({ success: false, error: { code: 'FILE_TOO_BIG', message: 'Files up to 15 MB.' } }, 413);
+    if (!c.env.PRODUCT_IMAGES) return c.json({ success: false, error: { code: 'NO_STORAGE', message: 'The R2 binding is missing.' } }, 500);
+    const mediaId = `${DEV_MEDIA_PREFIX}${crypto.randomUUID().replace(/-/g, '')}`;
+    await c.env.PRODUCT_IMAGES.put(devMediaKey(mediaId), bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, { httpMetadata: { contentType: mimeType } });
+    const upload: Upload = { mediaId, kind: /^image\/(jpeg|png|webp)$/.test(mimeType) ? 'image' : 'document', mimeType, filename: String(body.filename ?? 'file').slice(0, 120), caption: String(body.caption ?? '').slice(0, 1000) };
+    const db = getDb(c.env);
+    const at = new Date().toISOString();
+    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: upload.kind === 'image' ? 'image' : 'document', link: `/dev/media/${mediaId}`, filename: upload.filename, caption: upload.caption }, at });
+    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text: '', upload }));
+    const req = new Request(new URL('/api/v1/webhooks/meta', c.req.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${hmacSha256Hex(cfg.META_APP_SECRET ?? '', raw)}` }, body: raw });
+    let ctx: ExecutionContext | undefined;
+    try { ctx = c.executionCtx; } catch { ctx = undefined; }
+    const res = await getApp().fetch(req, c.env, ctx);
+    return c.json({ success: res.status === 200, status: res.status, mediaId });
+  });
+
+  // Shows an uploaded photo or file back on the chat screen.
+  r.get('/media/:id', async c => {
+    const id = c.req.param('id');
+    if (!id.startsWith(DEV_MEDIA_PREFIX) || !c.env.PRODUCT_IMAGES) return c.body(null, 404);
+    const obj = await c.env.PRODUCT_IMAGES.get(devMediaKey(id));
+    if (!obj) return c.body(null, 404);
+    return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream', 'x-content-type-options': 'nosniff' } });
   });
 
   // The conversation between one phone and one bot, oldest first.

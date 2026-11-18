@@ -14,6 +14,7 @@ import { buttons, NO, readInput, storeProductImage, transcribeVoice, YES, type B
 import { chooseAdminTool } from './intent';
 import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
+import { handleImport } from './catalog-import';
 
 const CONFIRM_MINUTES = 10;
 
@@ -36,7 +37,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (choiceId === 'yes' || choiceId === 'no') text = choiceId;
 
   let business = ctx.businessId ? ((await db.get(db.doc(C.businesses, ctx.businessId))) as Business | null) : null;
-  const state: ProductFlowState = { productDraft: conv.productDraft ?? null, awaiting: conv.awaiting ?? null, editingProductId: conv.editingProductId ?? null };
+  const state: ProductFlowState = { productDraft: conv.productDraft ?? null, awaiting: conv.awaiting ?? null, editingProductId: conv.editingProductId ?? null, importDraft: conv.importDraft ?? null };
   // Stored once per message, only if a photo came with it.
   let imageUrl: string | null | undefined;
   const photo = async () => {
@@ -48,11 +49,15 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const ob = normalise(conv.onboarding);
   if (!business || ob) {
     if (business?.status === 'deleted') return;
-    return handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo);
+    return handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo, input);
   }
   business = business!;
   if (business.status === 'deleted') return;
   const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
+
+  // ── A whole menu / price list (PDF, photo or pasted list), and its Add all / Cancel ──
+  const imported = await handleImport(flow, input, text, cfg.ADMIN_BOT_ACCESS_TOKEN, reply);
+  if (imported) { for (const o of imported.out) await reply(o); return; }
 
   // ── Product follow-ups (category picker, Correct/Edit, new category name) ──
   if (choiceId?.startsWith('pok:')) return reply('👍 Saved.');

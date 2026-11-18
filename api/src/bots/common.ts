@@ -21,28 +21,46 @@ export interface BotDeps {
   now?: () => Date;
 }
 
-export interface Input { text: string; choiceId: string | null; imageId: string | null; audioId: string | null }
+export interface Input {
+  text: string; choiceId: string | null; imageId: string | null; audioId: string | null;
+  document: { id: string; mimeType: string; filename: string } | null; // a file, e.g. a PDF menu
+}
 
 type Obj = Record<string, any>;
 
-// What the person sent, reduced to text plus the id of a tapped option, photo or voice note.
+// What the person sent, reduced to text plus the id of a tapped option, photo, voice note or file.
 export function readInput(event: InboundEvent): Input {
   const m = (event.message ?? {}) as Obj;
   const reply = m.interactive?.list_reply ?? m.interactive?.button_reply ?? null;
-  const caption = typeof m.image?.caption === 'string' ? m.image.caption : '';
+  const caption = typeof m.image?.caption === 'string' ? m.image.caption : typeof m.document?.caption === 'string' ? m.document.caption : '';
   return {
     text: String(event.text ?? reply?.title ?? m.button?.text ?? caption ?? '').trim(),
     choiceId: reply?.id ? String(reply.id) : null,
     imageId: m.image?.id ? String(m.image.id) : null,
     audioId: m.audio?.id ? String(m.audio.id) : null,
+    document: m.document?.id ? { id: String(m.document.id), mimeType: String(m.document.mime_type ?? 'application/octet-stream'), filename: String(m.document.filename ?? 'file').slice(0, 120) } : null,
   };
+}
+
+// Files uploaded in the local test chat are kept in R2 under dev-uploads/ instead of Meta.
+export const DEV_MEDIA_PREFIX = 'devmedia_';
+export const devMediaKey = (id: string) => `dev-uploads/${id}`;
+
+// Downloads a photo, voice note or file the person sent.
+export async function fetchMedia(cfg: Config, deps: BotDeps, accessToken: string, mediaId: string): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
+  if (mediaId.startsWith(DEV_MEDIA_PREFIX) && cfg.RELAY_ENV === 'development' && deps.images) {
+    const obj = await deps.images.get(devMediaKey(mediaId));
+    if (!obj) throw new Error('MEDIA_LOOKUP_FAILED: 404');
+    return { bytes: await new Response(obj.body).arrayBuffer(), mimeType: obj.httpMetadata?.contentType ?? 'application/octet-stream' };
+  }
+  return downloadMedia(cfg, accessToken, mediaId, deps.fetch);
 }
 
 // Voice notes become text. Returns null when transcription isn't available or fails.
 export async function transcribeVoice(cfg: Config, deps: BotDeps, accessToken: string, audioId: string) {
   if (!deps.transcriber) return null;
   try {
-    const { bytes, mimeType } = await downloadMedia(cfg, accessToken, audioId, deps.fetch);
+    const { bytes, mimeType } = await fetchMedia(cfg, deps, accessToken, audioId);
     return (await deps.transcriber.transcribe(bytes, mimeType)) || null;
   } catch (e) {
     log('warn', 'transcription_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) });
@@ -53,7 +71,7 @@ export async function transcribeVoice(cfg: Config, deps: BotDeps, accessToken: s
 // Downloads a WhatsApp photo and stores it in R2 as a product image. Returns its public URL.
 export async function storeProductImage(cfg: Config, deps: BotDeps, accessToken: string, mediaId: string, businessId: string, productId: string) {
   if (!deps.images) return null;
-  const { bytes, mimeType } = await downloadMedia(cfg, accessToken, mediaId, deps.fetch);
+  const { bytes, mimeType } = await fetchMedia(cfg, deps, accessToken, mediaId);
   const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
   const key = `businesses/${businessId}/products/${productId}-${randomId(4).replace(/[^A-Za-z0-9]/g, 'x')}.${ext}`;
   await deps.images.put(key, bytes, { httpMetadata: { contentType: mimeType } });

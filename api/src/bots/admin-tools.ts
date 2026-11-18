@@ -69,6 +69,7 @@ const orderLine = (o: Order) => `• ${o.ref}: ${formatKobo(o.payAmountKobo)}, $
 export const HELP = [
   'Here is what I can do:',
   '• add Black AF1 25k (send a photo with it as the caption; add a stock number at the end if you track stock)',
+  '• send your whole menu or price list as a PDF or photo (or paste it) to add everything at once',
   '• restock Black AF1 5 · price Black AF1 27k',
   '• categories · add category Watches · rename category Bags to Handbags · move Bags to the top · move Black AF1 to Sneakers',
   '• products · orders · unpaid · sales today',

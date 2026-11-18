@@ -19,6 +19,7 @@ export interface ProductFlowState {
   productDraft?: ProductDraft | null;      // waiting for the owner to pick its category
   awaiting?: 'newCategory' | null;         // the next text is a new category's name
   editingProductId?: string | null;        // the next product line corrects this product
+  importDraft?: import('./catalog-import').ImportDraft | null; // a menu read in bulk, waiting for Add all
 }
 
 export interface FlowCtx { db: Firestore; cfg: Config; deps: BotDeps; business: Business; convRef: DocRef; state: ProductFlowState }

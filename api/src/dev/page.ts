@@ -80,7 +80,11 @@ header button { background: none; border: 0; color: inherit; padding: 8px; borde
 footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
 .field { flex: 1; display: flex; align-items: center; gap: 2px; background: var(--field); border-radius: 24px; padding: 4px 6px; box-shadow: var(--shadow); min-height: 48px; }
 .field svg { color: var(--meta); flex: none; }
-.field .ic { background: none; border: 0; padding: 6px; display: grid; place-items: center; cursor: default; }
+.field .ic { background: none; border: 0; padding: 6px; display: grid; place-items: center; cursor: default; color: var(--meta); }
+.field button.ic { cursor: pointer; }
+.doc { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,.06); border-radius: 6px; padding: 10px; margin: -2px -4px 4px; min-width: 220px; }
+.doc .badge { width: 34px; height: 40px; border-radius: 4px; background: #e5534b; color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.doc a { color: var(--ink); text-decoration: none; word-break: break-all; }
 #text { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 16.5px; padding: 8px 4px; min-width: 0; }
 #text::placeholder { color: var(--meta); }
 #fab { width: 48px; height: 48px; border-radius: 50%; border: 0; background: var(--green); color: var(--green-ink); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; flex: none; }
@@ -126,8 +130,10 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     <div class="field">
       <span class="ic">${ICON.emoji}</span>
       <input id="text" placeholder="Message" autocomplete="off" enterkeyhint="send">
-      <span class="ic">${ICON.clip}</span>
-      <span class="ic" id="cam">${ICON.camera}</span>
+      <button class="ic" id="clip" type="button" aria-label="Attach a file">${ICON.clip}</button>
+      <button class="ic" id="cam" type="button" aria-label="Send a photo">${ICON.camera}</button>
+      <input type="file" id="fileIn" accept="application/pdf,image/*,text/plain,text/csv,.csv,.txt" hidden>
+      <input type="file" id="photoIn" accept="image/*" hidden>
     </div>
     <button id="fab" aria-label="Send">${ICON.mic}</button>
   </footer>
@@ -199,6 +205,12 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     var opts = c.type === 'interactive' ? options(c) : null;
     if (c.type === 'text') richText(b, c.text);
     else if (c.type === 'image') { var img = el('img'); img.src = c.link; img.alt = ''; b.appendChild(img); if (c.caption) richText(b, c.caption); }
+    else if (c.type === 'document') {
+      var d = el('div', 'doc'), ext = String(c.filename || '').split('.').pop().toUpperCase().slice(0, 4) || 'FILE';
+      d.appendChild(el('span', 'badge', ext));
+      var a = el('a', null, c.filename || 'File'); a.href = c.link; a.target = '_blank'; a.rel = 'noopener'; d.appendChild(a);
+      b.appendChild(d); if (c.caption) richText(b, c.caption);
+    }
     else if (c.type === 'template') richText(b, 'Template: ' + c.name);
     else if (c.type === 'interactive') {
       var i = c.interactive || {};
@@ -316,6 +328,25 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   function post(path, body) { return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); }); }
   function switchTo(p) { phone = p; store(p); showMe(); state.count = -1; typing(false); render([]); if (CFG.role === 'customer') findShop(); poll(); }
 
+  // 📎 / 📷: the file goes up like a WhatsApp attachment; whatever is typed becomes its caption.
+  function upload(file) {
+    if (!file || !bot) return;
+    if (file.size > 15000000) { alertNote('That file is over 15 MB.'); return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data = String(reader.result).split(',')[1] || '';
+      var caption = $('text').value.trim();
+      $('text').value = ''; fab(); typing(true);
+      post('/dev/upload', { botNumber: bot, phone: phone, filename: file.name, mimeType: file.type || 'application/octet-stream', data: data, caption: caption })
+        .then(function (res) { if (!res.success) alertNote('Upload failed: ' + ((res.error && res.error.message) || res.status)); poll(); })
+        .catch(function () { alertNote('Could not reach the local server.'); });
+    };
+    reader.readAsDataURL(file);
+  }
+  $('clip').onclick = function () { $('fileIn').value = ''; $('fileIn').click(); };
+  $('cam').onclick = function () { $('photoIn').value = ''; $('photoIn').click(); };
+  $('fileIn').onchange = function () { upload($('fileIn').files[0]); };
+  $('photoIn').onchange = function () { upload($('photoIn').files[0]); };
   $('text').oninput = fab;
   $('text').onkeydown = function (e) { if (e.key === 'Enter') send($('text').value.trim()); };
   $('fab').onclick = function () { var t = $('text').value.trim(); if (t) send(t); else $('text').focus(); };

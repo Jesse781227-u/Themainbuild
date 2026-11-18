@@ -12,7 +12,8 @@ import type { OutboundContent } from '../services/channel';
 import { createCategories, listCategories, listProducts, parseCategoryList } from '../services/catalog';
 import { createSignupSession } from '../services/signup';
 import type { AdminContext } from '../services/router';
-import { buttons, list, type BotDeps } from './common';
+import { buttons, list, type BotDeps, type Input } from './common';
+import { handleImport } from './catalog-import';
 import { parseAdminCommand, parseProductLine } from './intent';
 import { addProduct, customerPreview, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
 
@@ -44,7 +45,7 @@ export function normalise(raw: unknown): Onboarding | null {
 
 interface Ctx { ctx: AdminContext; deps: BotDeps; business: Business | null; ob: Onboarding; state: ProductFlowState; reply: (c: Out) => Promise<unknown> }
 
-export async function handleOnboarding(c: Ctx, text: string, choiceId: string | null, imageUrl: () => Promise<string | null>) {
+export async function handleOnboarding(c: Ctx, text: string, choiceId: string | null, imageUrl: () => Promise<string | null>, input?: Input) {
   const { ctx } = c;
   const now = new Date();
   const back = c.ob.lastSeenAt && now.getTime() - new Date(c.ob.lastSeenAt).getTime() > RESUME_AFTER_MS;
@@ -59,6 +60,21 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     return c.reply(buttons(`Welcome back${name ? `, ${name.split(' ')[0]}` : ''}. You were on *${STAGE_LABEL[c.ob.stage]}*. Continue?`, [['ob:continue', 'Yes, continue'], ['ob:restart', 'Start over']]));
   }
   if (c.ob.resumeAsked) await setOb(c, { resumeAsked: false });
+
+  // A whole menu or price list at the categories or products step sets up both in one go.
+  if (input && c.business && ['categories', 'categories_type', 'products'].includes(c.ob.step)) {
+    const f: FlowCtx = { db: ctx.db, cfg: ctx.cfg, deps: c.deps, business: c.business, convRef: ctx.db.doc(C.conversations, ctx.conversationId), state: c.state };
+    const imported = await handleImport(f, input, text, ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, c.reply);
+    if (imported) {
+      await sendAll(c, imported.out);
+      if (imported.created > 0) {
+        if (c.ob.stage !== 'products') await setStage(c, 'products', 'products');
+        await setOb(c, { productsAdded: (c.ob.productsAdded ?? 0) + imported.created });
+        return c.reply(buttons('Your menu is in 🎉 Add photos by sending a photo with the product name and price as the caption, or tap *I\'m done*.', [['prod:more', 'Add more'], ['prod:done', "I'm done"]]));
+      }
+      return;
+    }
+  }
 
   switch (c.ob.step) {
     case 'owner_name': {
@@ -171,9 +187,9 @@ async function prompt(c: Ctx): Promise<unknown> {
       const cats = c.business ? await listCategories(c.ctx.db, c.business.id) : [];
       if (cats.length) return c.reply(buttons(`Your categories: ${cats.map(x => x.name).join(' · ')}`, [['cat:ok', 'Looks good'], ['cat:edit', 'Edit']]));
       const t = typeOf(c.business?.category);
-      return c.reply(buttons(`What do you sell? Group your products into categories, the way customers will browse them.\n\nMany ${t?.label ?? ''} shops start with:\n*${(t?.starters ?? ['Products']).join(' · ')}*\n\nUse these, or type your own (e.g. *Sneakers, Bags, Watches*).`, [['cat:use', 'Use these'], ['cat:own', 'Type my own']]));
+      return c.reply(buttons(`What do you sell? Group your products into categories, the way customers will browse them.\n\nMany ${t?.label ?? ''} shops start with:\n*${(t?.starters ?? ['Products']).join(' · ')}*\n\nUse these, or type your own (e.g. *Sneakers, Bags, Watches*).\n\n📄 Have a menu or price list? Send it now as a PDF or photo (or paste it) and I'll set up your categories and products from it.`, [['cat:use', 'Use these'], ['cat:own', 'Type my own']]));
     }
-    case 'products': return c.reply("Now let's add products. Send a *photo* with the name and price as the caption, e.g. *Black AF1 25k*.\n\nNo photo yet? Just type it. If you track stock, add the number at the end (e.g. *Black AF1 25k 10*).");
+    case 'products': return c.reply("Now let's add products. Send a *photo* with the name and price as the caption, e.g. *Black AF1 25k*.\n\nNo photo yet? Just type it. If you track stock, add the number at the end (e.g. *Black AF1 25k 10*).\n\n📄 Got a full menu or price list? Send it as a PDF or photo, or paste the whole list, and I'll add everything at once.");
     case 'connect': {
       const link = await createSignupSession(c.ctx.db, c.ctx.cfg, c.business!.id);
       // From here the owner uses the everyday Admin Bot; ownerPhones.onboardingStage stays "connect"
