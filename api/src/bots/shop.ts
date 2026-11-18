@@ -11,7 +11,8 @@ import type { Business } from '../domain/business';
 import type { Cart, Category, Conversation, Customer, Order, OrderDelivery, Product } from '../domain/commerce';
 import { hasStock, tracksStock } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
-import { listProducts } from '../services/catalog';
+import { listCategories, listProducts } from '../services/catalog';
+import { productCarousel, productDetails } from './product-cards';
 import { listZones, quoteDelivery } from '../services/delivery';
 import { checkout, policyFor, recentOrders } from '../services/orders';
 import { paymentInstructions } from '../services/bachs';
@@ -102,8 +103,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (choice) {
     const [kind, id] = choice.split(':');
     if (kind === 'menu') return greet(ctx, business, customer, reply);
-    if (kind === 'cat') return showCategory(db, business, id, reply);
-    if (kind === 'prod') return showProduct(db, business, id, reply);
+    if (kind === 'cat') return showCategory(ctx, business, id, reply);
+    if (kind === 'more') return showCategory(ctx, business, id, reply, Number(choice.split(':')[2]) || 0);
+    if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
+    if (kind === 'buy') return buy(ctx, business, id, reply);
     if (kind === 'add') return addToCart(ctx, business, id, 1, reply);
     if (kind === 'cart') return showCart(ctx, business, reply);
     if (kind === 'clear') { await db.delete(db.doc(C.carts, conversationId)); return reply(buttons('Cart cleared.', [['menu', 'See the menu']]), { step: 'browse' }); }
@@ -131,11 +134,13 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     case 'talkToHuman': return handOver(ctx, deps, business, customer, reply);
     case 'offTopic': return reply(buttons(`I'm ${business.name}'s shop assistant, so I can only help with our products and your orders.`, [['menu', 'See the menu'], ['cart', 'View cart']]));
     case 'addToCart': {
-      const found = await findProducts(db, businessId, String(intent.args.product ?? ''));
+      const asked = String(intent.args.product ?? '');
+      const found = await findProducts(db, businessId, asked);
       const available = found.filter(p => p.available);
       if (available.length === 1) return addToCart(ctx, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
-      if (available.length > 1) return reply(list('Which one?', 'Choose', available.map(p => ({ id: `prod:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) }))));
-      return reply(buttons(`Sorry, we don't have "${String(intent.args.product ?? '').slice(0, 40)}".`, [['menu', 'See the menu']]));
+      const matches = available.length > 1 ? available : await search(db, businessId, asked);
+      if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
+      return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
     }
     default: return greet(ctx, business, customer, reply);
   }
@@ -152,6 +157,7 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   const m = /^(\d{1,2})\s*x?\s+(.+)$/.exec(lower) ?? /^(.+?)\s*x\s*(\d{1,2})$/.exec(lower);
   const [q, n] = m ? (/^\d/.test(m[1]) ? [m[2], Number(m[1])] : [m[1], Number(m[2])]) : [lower, 1];
   if ((await findProducts(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } };
+  if ((await search(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } }; // shows the matches
   if (!llm) return null;
   try {
     const choice = await llm.chooseTool({ system: 'You route a customer message for a small shop in Nigeria to the shop assistant. Choose exactly one tool. Use offTopic for anything not about shopping at this business.', message: text.slice(0, 500), tools: SHOP_TOOLS });
@@ -159,29 +165,60 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   } catch (e) { log('warn', 'llm_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; }
 }
 
+// Products customers can see: everything not hidden or deleted, including sold-out items (shown marked).
+const visible = async (db: Firestore, businessId: string) => (await listProducts(db, businessId)).filter(p => p.available);
+
 async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply) {
   const name = customer?.name?.split(' ')[0];
-  const hello = (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : `Welcome to ${business.name}${name ? `, ${name}` : ''}! 👋`;
-  const products = await listProducts(ctx.db, business.id, { availableOnly: true });
+  const hello = (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : `Hi${name ? ` ${name}` : ''}, welcome to ${business.name} 👋`;
+  const products = await visible(ctx.db, business.id);
   if (!products.length) return reply(`${hello} We're updating our menu right now. Please check back soon.`, { step: 'browse' });
-  const cats = ((await ctx.db.query(C.categories, [['businessId', '==', business.id]])) as unknown as Category[]).filter(c => products.some(p => p.categoryId === c.id)).sort((a, b) => a.sortOrder - b.sortOrder);
-  if (cats.length) return reply(list(`${hello} What would you like today?`, 'Categories', cats.map(c => ({ id: `cat:${c.id}`, title: c.name, description: `${products.filter(p => p.categoryId === c.id).length} items` })), 'Categories'), { step: 'browse' });
-  return reply(list(`${hello} Here's what we have:`, 'See products', products.map(p => ({ id: `prod:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })), 'Products'), { step: 'browse' });
+  const cats = (await listCategories(ctx.db, business.id)).filter(c => products.some(p => p.categoryId === c.id));
+  // One category (or none yet): go straight to the products.
+  if (cats.length <= 1) return sendAll(reply, productCarousel(ctx.cfg, business, cats.length ? products.filter(p => p.categoryId === cats[0].id) : products, { title: cats[0]?.name ?? 'Our products', key: cats[0]?.id ?? 'all', intro: hello }));
+  return reply(list(`${hello} What are you looking for?`, 'Categories', cats.slice(0, 10).map(c => ({ id: `cat:${c.id}`, title: c.name, description: `${products.filter(p => p.categoryId === c.id).length} items` })), 'Categories'), { step: 'browse' });
 }
 
-async function showCategory(db: Firestore, business: Business, categoryId: string, reply: Reply) {
-  const products = (await listProducts(db, business.id, { availableOnly: true })).filter(p => p.categoryId === categoryId);
-  if (!products.length) return reply(buttons('Nothing available here right now.', [['menu', 'Back to menu']]));
-  return reply(list('Choose a product:', 'Products', products.map(p => ({ id: `prod:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })), 'Products'));
+async function showCategory(ctx: ShopContext, business: Business, key: string, reply: Reply, page = 0) {
+  const products = await visible(ctx.db, business.id);
+  const cat = key === 'all' ? null : (await listCategories(ctx.db, business.id)).find(c => c.id === key);
+  if (key !== 'all' && !cat) return reply(buttons('That section is no longer available.', [['menu', 'Back to menu']]));
+  const items = cat ? products.filter(p => p.categoryId === cat.id) : products;
+  if (!items.length) return reply(buttons('Nothing here right now.', [['menu', 'Back to menu']]));
+  return sendAll(reply, productCarousel(ctx.cfg, business, items, { title: cat?.name ?? 'Our products', key, page }));
 }
 
-async function showProduct(db: Firestore, business: Business, productId: string, reply: Reply) {
-  const p = (await db.get(db.doc(C.products, productId))) as Product | null;
+async function showProduct(ctx: ShopContext, business: Business, productId: string, reply: Reply) {
+  const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
-  if (p.images[0]) await reply({ type: 'image', link: p.images[0], caption: p.name });
-  const soldOut = !hasStock(p);
-  const body = `${p.name}: ${formatKobo(p.priceKobo)}${p.description ? `\n${p.description}` : ''}${soldOut ? '\nSold out right now.' : ''}`;
-  return reply(buttons(body, soldOut ? [['menu', 'Menu']] : [[`add:${p.id}`, 'Add to cart'], ['menu', 'Menu'], ['cart', 'View cart']]));
+  return sendAll(reply, productDetails(ctx.cfg, p));
+}
+
+// Tapping Buy on a card: sold out says so; otherwise one goes into the cart.
+async function buy(ctx: ShopContext, business: Business, productId: string, reply: Reply) {
+  const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
+  if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
+  if (!hasStock(p)) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'View cart']]));
+  return addToCart(ctx, business, p.id, 1, reply);
+}
+
+// Free-text search across product names and their categories: "black sneakers", "zobo".
+async function search(db: Firestore, businessId: string, query: string) {
+  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w)).map(w => w.replace(/(es|s)$/, ''));
+  if (!words.length) return [];
+  const [products, cats] = await Promise.all([visible(db, businessId), listCategories(db, businessId)]);
+  const catName = new Map(cats.map(c => [c.id, c.name.toLowerCase()]));
+  return products
+    .map(p => ({ p, score: words.filter(w => p.name.toLowerCase().includes(w) || (catName.get(p.categoryId ?? '') ?? '').includes(w)).length }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.p);
+}
+
+// Sends several messages; an optional intro goes first.
+async function sendAll(reply: Reply, out: OutboundContent[], intro?: string) {
+  if (intro) await reply(intro);
+  for (const o of out) await reply(o, { step: 'browse' });
 }
 
 async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {

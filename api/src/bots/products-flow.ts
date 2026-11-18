@@ -13,6 +13,7 @@ import { createCategories, createProduct, findCategory, listCategories, listProd
 import { guessCategory } from './category-guess';
 import { buttons, findProducts, list, type BotDeps } from './common';
 import { parseProductLine } from './intent';
+import { productCarousel } from './product-cards';
 
 export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null }
 export interface ProductFlowState {
@@ -138,8 +139,11 @@ export async function handleProductInput(f: FlowCtx, choiceId: string | null, te
 // What customers will see for the first category with products (a carousel in phase C).
 export async function customerPreview(f: FlowCtx): Promise<OutboundContent | null> {
   const [cats, products] = await Promise.all([listCategories(f.db, f.business.id), listProducts(f.db, f.business.id, { availableOnly: true })]);
-  const cat = cats.find(c => products.some(p => p.categoryId === c.id));
-  if (!cat) return null;
-  const items = products.filter(p => p.categoryId === cat.id);
-  return list(`${cat.name} at ${f.business.name}:`, 'See products', items.slice(0, 10).map(p => ({ id: `preview:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })), cat.name);
+  // The fullest category, so the preview is a real swipeable carousel when there's more than one product.
+  const cat = [...cats].sort((a, b) => products.filter(p => p.categoryId === b.id).length - products.filter(p => p.categoryId === a.id).length)[0];
+  const items = cat ? products.filter(p => p.categoryId === cat.id) : [];
+  if (!cat || !items.length) return null;
+  // Every category has one product so far: show them all together, so it's still a carousel.
+  if (items.length === 1 && products.length > 1) return productCarousel(f.cfg, f.business, products, { title: 'Your products', key: 'all' })[0];
+  return productCarousel(f.cfg, f.business, items, { title: cat.name, key: cat.id })[0];
 }

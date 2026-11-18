@@ -35,7 +35,8 @@ export function readInput(event: InboundEvent): Input {
   const caption = typeof m.image?.caption === 'string' ? m.image.caption : typeof m.document?.caption === 'string' ? m.document.caption : '';
   return {
     text: String(event.text ?? reply?.title ?? m.button?.text ?? caption ?? '').trim(),
-    choiceId: reply?.id ? String(reply.id) : null,
+    // A tapped button: interactive replies, or a quick reply that arrives as type "button".
+    choiceId: reply?.id ? String(reply.id) : typeof m.button?.payload === 'string' ? m.button.payload : null,
     imageId: m.image?.id ? String(m.image.id) : null,
     audioId: m.audio?.id ? String(m.audio.id) : null,
     document: m.document?.id ? { id: String(m.document.id), mimeType: String(m.document.mime_type ?? 'application/octet-stream'), filename: String(m.document.filename ?? 'file').slice(0, 120) } : null,

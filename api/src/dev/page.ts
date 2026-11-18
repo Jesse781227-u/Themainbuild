@@ -76,6 +76,16 @@ header button { background: none; border: 0; color: inherit; padding: 8px; borde
 .meta svg { color: var(--tick); }
 .quick { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
 .quick button, .listbtn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; border: 0; background: var(--in); color: var(--btn); font: inherit; font-size: 15px; font-weight: 500; padding: 10px; border-radius: 8px; box-shadow: var(--shadow); cursor: pointer; }
+.group.wide { max-width: 100%; }
+.group.wide .bubble { max-width: 82%; align-self: flex-start; }
+.carousel { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 6px 2px 8px; margin-top: 2px; scrollbar-width: none; }
+.carousel::-webkit-scrollbar { display: none; }
+.card { flex: 0 0 68%; max-width: 250px; scroll-snap-align: start; background: var(--in); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+.card img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--chip); }
+.card .t { padding: 8px 10px 6px; white-space: pre-wrap; overflow-wrap: anywhere; flex: 1; font-size: 14.5px; }
+.cbtns { display: flex; flex-direction: column; border-top: 1px solid var(--sep); }
+.cbtns button { display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: var(--btn); font: inherit; font-size: 14.5px; font-weight: 500; padding: 9px; cursor: pointer; }
+.cbtns button + button { border-top: 1px solid var(--sep); }
 .listbtn { border-top: 1px solid var(--sep); border-radius: 0 0 8px 8px; box-shadow: none; margin: 7px -8px -7px -9px; width: calc(100% + 17px); background: transparent; }
 footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
 .field { flex: 1; display: flex; align-items: center; gap: 2px; background: var(--field); border-radius: 24px; padding: 4px 6px; box-shadow: var(--shadow); min-height: 48px; }
@@ -227,6 +237,29 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       b.appendChild(lb);
     }
     g.appendChild(b);
+    // Carousel: the cards sit under the message and swipe sideways, like WhatsApp.
+    var ci = c.type === 'interactive' && c.interactive && c.interactive.type === 'carousel' ? c.interactive : null;
+    if (ci) {
+      g.classList.add('wide');
+      var row = el('div', 'carousel');
+      ((ci.action && ci.action.cards) || []).forEach(function (card) {
+        var cd = el('div', 'card');
+        var im = el('img'); im.src = (card.header && card.header.image && card.header.image.link) || ''; im.alt = ''; im.loading = 'lazy'; cd.appendChild(im);
+        var t = el('div', 't'); richText(t, (card.body && card.body.text) || ''); cd.appendChild(t);
+        var bs = el('div', 'cbtns');
+        ((card.action && card.action.buttons) || []).forEach(function (bt) {
+          var r = bt.quick_reply || {};
+          var cb = html('button', null, ICON.reply); cb.appendChild(document.createTextNode(r.title || ''));
+          cb.onclick = function () { send(null, { id: r.id, title: r.title, kind: 'button' }); };
+          bs.appendChild(cb);
+        });
+        cd.appendChild(bs);
+        row.appendChild(cd);
+      });
+      // A mouse wheel scrolls the cards sideways (touch and trackpads already swipe).
+      row.addEventListener('wheel', function (e) { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { row.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+      g.appendChild(row);
+    }
     if (opts && opts.kind === 'button') {
       var q = el('div', 'quick');
       opts.items.forEach(function (o) {

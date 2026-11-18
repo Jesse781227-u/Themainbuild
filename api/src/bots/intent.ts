@@ -57,6 +57,9 @@ export function parseAdminCommand(input: string): ToolChoice | null {
   if ((m = /^(?:sold|remove stock)\s+(\d+)\s+(.+)$/i.exec(text))) return { tool: 'adjustStock', args: { product: m[2], change: -Number(m[1]) } };
   if ((m = /^(?:set |change )?price(?: of)?\s+(.+?)\s+(?:to\s+)?((?:₦|n)?\s*[\d,]+(?:\.\d{1,2})?k?)$/i.exec(text))) return { tool: 'setPrice', args: { product: m[1], price: toNaira(m[2]) } };
   if ((m = /^(?:hide)\s+(.+)$/i.exec(text))) return { tool: 'setAvailability', args: { product: m[1], available: false } };
+  // "show me my Sneakers" / "preview Sneakers" = what customers see; "show Black AF1" = unhide it.
+  if ((m = /^(?:show me(?: my)?|preview(?: my)?|what do customers see (?:in|for))\s+(.+)$/i.exec(text))) return { tool: 'previewCategory', args: { category: m[1] } };
+  if (/^(preview|show me my shop|what do customers see\??)$/i.test(text)) return { tool: 'previewCategory', args: {} };
   if ((m = /^(?:show|unhide)\s+(.+)$/i.exec(text))) return { tool: 'setAvailability', args: { product: m[1], available: true } };
   if ((m = /^(?:delete|remove)\s+(?:product\s+)?(.+)$/i.exec(text)) && !/^delete my/i.test(text)) return { tool: 'deleteProduct', args: { product: m[1] } };
   if ((m = /^(?:mark\s+)?(rly-[a-z0-9]{5})\s+(?:as\s+)?paid$/i.exec(text))) return { tool: 'markPaid', args: { order: m[1] } };

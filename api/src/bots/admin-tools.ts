@@ -23,6 +23,7 @@ import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../service
 import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
+import { productCarousel } from './product-cards';
 
 export interface ToolCtx {
   db: Firestore; cfg: Config; deps: BotDeps;
@@ -207,6 +208,20 @@ export const adminTools = {
       const pos = /^(top|first)$/.test(a.position) ? 0 : /^(bottom|last|end)$/.test(a.position) ? cats.length : Number(a.position) - 1;
       if (!Number.isInteger(pos) || pos < 0) return 'Say where: "move Bags to the top", "to the bottom", or "to position 2".';
       return `New order: ${(await reorderCategory(ctx.db, ctx.business.id, c.id, pos)).join(' · ')}`;
+    },
+  }),
+  previewCategory: def({
+    spec: { name: 'previewCategory', description: 'Show the owner the carousel customers see for a category (or the whole shop).', params: { category: { type: 'string', description: 'Category name (optional)' } } },
+    schema: z.object({ category: z.string().trim().optional() }),
+    async run(a, ctx) {
+      const [products, cats] = await Promise.all([listProducts(ctx.db, ctx.business.id), listCategories(ctx.db, ctx.business.id)]);
+      const visible = products.filter(p => p.available);
+      const cat = a.category ? findCategory(cats, a.category) : cats.find(c => visible.some(p => p.categoryId === c.id)) ?? null;
+      if (a.category && !cat) throw new ToolError(`I couldn't find a category called "${a.category}". Send CATEGORIES to see them.`);
+      const items = cat ? visible.filter(p => p.categoryId === cat.id) : visible;
+      if (!items.length) return cat ? `${cat.name} has no visible products yet.` : 'No products yet.';
+      // The same cards customers get; tapping them here does nothing for the owner.
+      return productCarousel(ctx.cfg, ctx.business, items, { title: cat?.name ?? 'Your products', key: cat?.id ?? 'all' })[0];
     },
   }),
   moveProduct: def({

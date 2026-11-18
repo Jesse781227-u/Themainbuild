@@ -63,14 +63,19 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
   r.get('/version', c => c.json({ boot: BOOT }));
 
   // The shop owned by a phone number, if it has a (test) WhatsApp number yet.
+  // Falls back to the most recently connected shop when the owner tab's current number has none
+  // (e.g. the owner tab was switched to a new number after signing up).
   r.get('/shop', async c => {
     const db = getDb(c.env);
     const owner = await db.get(db.doc(C.ownerPhones, `+${digits(c.req.query('owner'))}`));
     const business = owner ? await db.get(db.doc(C.businesses, String(owner.businessId))) : null;
+    const conn = business ? await db.get(db.doc(C.whatsappConnections, String(business.id))) : null;
+    if (business && conn?.status === 'connected') return c.json({ shop: { botNumber: String(conn.phoneNumberId), name: String(business.name) } });
+    const latest = (await db.query(C.whatsappConnections, [['status', '==', 'connected']])).sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];
+    const latestBiz = latest ? await db.get(db.doc(C.businesses, String(latest.businessId))) : null;
+    if (latest && latestBiz && latestBiz.status !== 'deleted') return c.json({ shop: { botNumber: String(latest.phoneNumberId), name: String(latestBiz.name) } });
     if (!business) return c.json({ shop: null, reason: 'no_business' });
-    const conn = await db.get(db.doc(C.whatsappConnections, String(business.id)));
-    if (!conn || conn.status !== 'connected') return c.json({ shop: null, reason: 'not_connected', name: business.name });
-    return c.json({ shop: { botNumber: String(conn.phoneNumberId), name: String(business.name) } });
+    return c.json({ shop: null, reason: 'not_connected', name: business.name });
   });
 
   // Test-mode "Connect WhatsApp": a pretend number, stored exactly like a real connection.

@@ -81,7 +81,7 @@ test('onboarding: basics → categories → products → connect, by chat', asyn
   const third = await bot.send('admin', { from: OWNER, text: 'watches' });
   assert.match(third[0].text, /\*Silver watch\*\n₦40,000 · Watches/);
   assert.match(third[1].text, /what your customers will see/);
-  assert.match(third[2].text, /Sneakers at Ada Kicks[\s\S]*Black AF1/);
+  assert.match(third[2].text, /Your products at Ada Kicks[\s\S]*Black AF1[\s\S]*Leather bag[\s\S]*Silver watch/);
   assert.deepEqual(opts([third[3]]), ['prod:more', 'prod:done']);
 
   // Edit: a corrected price replaces the old one.

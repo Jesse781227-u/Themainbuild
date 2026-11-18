@@ -7,6 +7,7 @@ import type { Firestore } from '../lib/firestore';
 import { decrypt } from '../lib/crypto';
 import { log } from '../lib/logger';
 import { maskPhone, toWaId } from '../lib/phone';
+import type { CarouselShape } from './carousel';
 
 export const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -40,6 +41,8 @@ export function optionIds(content: OutboundContent): string[] {
   const i = content.interactive as { type?: string; action?: { buttons?: { reply: { id: string } }[]; sections?: { rows: { id: string }[] }[] } };
   if (i.type === 'button') return (i.action?.buttons ?? []).map(b => b.reply.id);
   if (i.type === 'list') return (i.action?.sections ?? []).flatMap(sec => sec.rows.map(r => r.id));
+  // Carousels: a typed number picks that card's first button (Buy), e.g. on Instagram.
+  if (i.type === 'carousel') return ((content.interactive as CarouselShape).action?.cards ?? []).map(c => c.action?.buttons?.[0]?.quick_reply?.id ?? '').filter(Boolean);
   return [];
 }
 
@@ -47,6 +50,11 @@ export function toText(content: OutboundContent): string {
   if (content.type === 'text') return content.text;
   if (content.type === 'image') return [content.caption, content.link].filter(Boolean).join(NEWLINE);
   if (content.type === 'template') return `[template ${content.name}]`;
+  if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'carousel') {
+    const c = content.interactive as CarouselShape;
+    const cards = (c.action?.cards ?? []).map((card, n) => `${n + 1}. ${String(card.body?.text ?? '').replace(/\*/g, '').split(NEWLINE).filter(Boolean).join(' · ')}`);
+    return [c.body?.text ?? '', ...cards, cards.length ? 'Reply with a number to buy.' : ''].filter(Boolean).join(NEWLINE);
+  }
   const i = content.interactive as { body?: { text?: string }; action?: { buttons?: { reply: { title: string } }[]; sections?: { title?: string; rows: { title: string; description?: string }[] }[] } };
   const titles = i.action?.buttons ? i.action.buttons.map(b => b.reply.title) : (i.action?.sections ?? []).flatMap(sec => sec.rows.map(r => (r.description ? `${r.title} (${r.description})` : r.title)));
   return [i.body?.text ?? '', ...titles.map((t, n) => `${n + 1}. ${t}`), titles.length ? 'Reply with a number.' : ''].filter(Boolean).join(NEWLINE);
