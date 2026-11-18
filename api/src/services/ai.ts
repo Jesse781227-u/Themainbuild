@@ -24,6 +24,7 @@ export interface LLMProvider {
 
 export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)|text\/(plain|csv))$/;
 export const MAX_CATALOG_BYTES = 15_000_000;
+const GEMINI_TIMEOUT_MS = 45_000;
 
 const MAX_IMAGE_BYTES = 4_000_000;
 
@@ -46,8 +47,28 @@ export interface Transcriber {
 
 const geminiType = { string: 'STRING', number: 'NUMBER', integer: 'INTEGER', boolean: 'BOOLEAN' } as const;
 
-export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODEL'>, doFetch: typeof fetch = (...a) => fetch(...a)): LLMProvider | null {
+export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODEL' | 'GEMINI_FALLBACK_MODEL'>, doFetch: typeof fetch = (...a) => fetch(...a)): LLMProvider | null {
   if (!cfg.GEMINI_API_KEY) return null;
+  // Gemini sometimes answers 429/500/503 ("high demand") or hangs. Each call gets a time limit; a busy
+  // or slow main model gets one quick retry, then the fallback model.
+  const gemini = async (init: RequestInit) => {
+    const models = [...new Set([cfg.GEMINI_MODEL, cfg.GEMINI_FALLBACK_MODEL].filter(Boolean))];
+    let last: Response | null = null;
+    for (const [i, model] of models.entries()) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      for (let attempt = 0; attempt < (i === 0 ? 2 : 1); attempt++) {
+        if (attempt) await new Promise(r => setTimeout(r, 800));
+        try {
+          last = await doFetch(url, { ...init, signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) });
+          if (![429, 500, 503].includes(last.status)) return last;
+        } catch (e) {
+          if (!(e instanceof Error && /abort|timeout/i.test(`${e.name} ${e.message}`))) throw e; // timed out: try again / next model
+        }
+      }
+    }
+    if (last) return last;
+    throw new Error('GEMINI_FAILED: timeout');
+  };
   return {
     async chooseTool({ system, message, tools, imageUrl }) {
       const image = imageUrl ? await inlineImage(imageUrl, doFetch) : null;
@@ -55,7 +76,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         name: t.name, description: t.description,
         ...(Object.keys(t.params).length ? { parameters: { type: 'OBJECT', properties: Object.fromEntries(Object.entries(t.params).map(([k, p]) => [k, { type: geminiType[p.type], description: p.description, ...(p.enum ? { enum: p.enum } : {}) }])), required: t.required ?? [] } } : {}),
       }));
-      const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${cfg.GEMINI_MODEL}:generateContent`, {
+      const res = await gemini({
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
         body: JSON.stringify({
@@ -84,7 +105,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       ].filter(Boolean).join(' ') }];
       if (file) parts.push({ inlineData: { mimeType: file.mimeType, data: Buffer.from(file.bytes).toString('base64') } });
       if (text) parts.push({ text: text.slice(0, 30_000) });
-      const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${cfg.GEMINI_MODEL}:generateContent`, {
+      const res = await gemini({
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
         body: JSON.stringify({

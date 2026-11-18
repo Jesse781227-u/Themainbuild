@@ -6,6 +6,7 @@
 import { C } from '../db';
 import type { Business } from '../domain/business';
 import { log } from '../lib/logger';
+import { nairaToKobo } from '../lib/money';
 import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, moveCategoryProducts } from '../services/catalog';
@@ -100,7 +101,11 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
 
   // New products go through the shared flow (category guess, confirmation card).
   if (choice.tool === 'addProduct') {
-    const parsed = parseProduct(`${choice.args.name ?? ''} ${choice.args.price ?? ''} ${choice.args.stock ?? ''}`) ?? parseProduct(text);
+    // The AI's arguments first ("puff puff", "200 naira", 50), then the owner's own words.
+    const name = String(choice.args.name ?? '').trim().slice(0, 120);
+    const priceKobo = choice.args.price == null ? null : nairaToKobo(String(choice.args.price));
+    const stock = Number.isInteger(Number(choice.args.stock)) && choice.args.stock !== undefined && choice.args.stock !== null && Number(choice.args.stock) >= 0 ? Number(choice.args.stock) : null;
+    const parsed = (name && priceKobo && priceKobo > 0 ? { name, priceKobo, stock } : null) ?? parseProduct(text);
     if (!parsed) return reply('To add a product send its name and price, e.g. "add Black AF1 25k" (add a stock number at the end if you track it).');
     for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o);
     return;

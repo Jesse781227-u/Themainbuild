@@ -6,7 +6,10 @@ export const KOBO_PER_NAIRA = 100;
 // strings). Returns null for anything that isn't a non-negative amount with at most 2 decimals.
 export function nairaToKobo(input: string | number): number | null {
   const text = typeof input === 'number' ? (Number.isFinite(input) ? input.toFixed(2) : '') : String(input);
-  const cleaned = text.trim().replace(/^(₦|ngn|n)\s*/i, '').replace(/,/g, '');
+  // "₦2,500", "NGN 2500", "2500 naira", "2.5k" (the AI sometimes writes prices like that).
+  let cleaned = text.trim().replace(/^(₦|ngn|n)\s*/i, '').replace(/\s*(naira|ngn)$/i, '').replace(/,/g, '');
+  const k = /^(\d+(?:\.\d+)?)k$/i.exec(cleaned);
+  if (k) cleaned = String(Math.round(Number(k[1]) * 1000));
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(cleaned);
   if (!m) return null;
   const kobo = Number(m[1]) * KOBO_PER_NAIRA + Number((m[2] ?? '').padEnd(2, '0'));

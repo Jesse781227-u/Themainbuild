@@ -20,7 +20,9 @@ import { DEV_MEDIA_PREFIX, devMediaKey } from '../bots/common';
 
 const MAX_UPLOAD_BYTES = 15_000_000;
 // Changes every time wrangler dev reloads this module (i.e. on every code change).
-const BOOT = String(Date.now());
+// Set on the first request after each reload (Workers report time 0 at startup), so it changes
+// every time wrangler dev reloads this module, i.e. on every code change.
+let BOOT = '';
 
 type Choice = { id: string; title: string; kind: 'button' | 'list' };
 const CUSTOMER_PHONE = '2348090000001';
@@ -50,6 +52,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
 
   r.use('*', async (c, next) => {
     if (!isDevChat(getConfig(c.env))) return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }, 404);
+    if (!BOOT) BOOT = String(Date.now());
     await next();
   });
 

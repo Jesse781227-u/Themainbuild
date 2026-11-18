@@ -28,7 +28,8 @@ const schema = z.object({
   INSTAGRAM_GRAPH_HOST: z.string().default('graph.instagram.com'),
   GEMINI_API_KEY: optionalString,
   // TODO(jesse): confirm the Gemini model to use in production.
-  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
+  GEMINI_FALLBACK_MODEL: z.string().default('gemini-flash-latest'), // tried when the main model is busy or too slow
   OPENAI_API_KEY: optionalString,
   OPENAI_TRANSCRIBE_MODEL: z.string().default('gpt-4o-transcribe'),
   // Message templates (created and approved in Meta, Y11). Used outside the 24-hour window.
