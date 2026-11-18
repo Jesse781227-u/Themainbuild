@@ -32,6 +32,13 @@ test('import: a pasted menu is read by rules, headings become categories', () =>
   assert.equal(parsePastedMenu('Sneakers\nBags'), null, 'a list without prices is not a menu');
 });
 
+test('import: CSV files keep quoted prices together and drop the header row', () => {
+  const items = parsePastedMenu('name,price,stock\nGRILLS\nSuya,3000\nAsun,"4,500",10\nDRINKS\nZobo;500;30', { csv: true })!;
+  assert.deepEqual(items.map(i => [i.category, i.name, i.priceKobo, i.stock]), [
+    ['Grills', 'Suya', 300_000, null], ['Grills', 'Asun', 450_000, 10], ['Drinks', 'Zobo', 50_000, 30],
+  ]);
+});
+
 test('import: AI output is validated (prices, duplicates, missing prices)', () => {
   const raw: CatalogItem[] = [
     { name: 'Suya', price: 3000, category: 'grills' }, { name: 'suya', price: 3000, category: 'Grills' },

@@ -1,7 +1,7 @@
 // The /dev/owner and /dev/customer chat screens (development only), styled after the WhatsApp
 // mobile app. Plain HTML + JS, no build step. The client script avoids template literals and
 // backslashes so it can live inside this template string.
-export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string }
+export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string; boot?: string }
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 4l1.4 1.4L7.8 11H20v2H7.8l5.6 5.6L12 20l-8-8z"/></svg>',
@@ -362,6 +362,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   if (CFG.role === 'customer') { findShop(); setInterval(findShop, 3000); }
   poll();
   setInterval(poll, 1000);
+  // New code on the local server: reload so the screen always matches it (the chat itself is kept).
+  setInterval(function () { fetch('/dev/version').then(function (r) { return r.json(); }).then(function (v) { if (CFG.boot && v.boot && v.boot !== CFG.boot) location.reload(); }).catch(function () {}); }, 3000);
 })();
 </script>
 </body>

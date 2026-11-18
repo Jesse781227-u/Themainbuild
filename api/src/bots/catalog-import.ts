@@ -19,6 +19,20 @@ export interface ImportDraft { items: ImportItem[]; skippedNoPrice: string[]; so
 const MAX_ITEMS = 200;
 const looksLikeMenuWord = (t: string) => /^(menu|price ?list|prices|catalogue|catalog|inventory|stock list|my products)\b/i.test(t.trim());
 
+// One CSV row → fields, honouring quotes ("2,500" stays one field). Also accepts ; and tab.
+function csvFields(row: string): string[] {
+  const out: string[] = [];
+  let cur = '', quoted = false;
+  for (let i = 0; i < row.length; i++) {
+    const ch = row[i];
+    if (ch === '"') { if (quoted && row[i + 1] === '"') { cur += '"'; i++; } else quoted = !quoted; }
+    else if (!quoted && (ch === ',' || ch === ';' || ch === '\t')) { out.push(cur.trim()); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
 // "RICE DISHES:" → "Rice Dishes".
 const headingName = (line: string) => {
   const t = line.replace(/[:\-–—]+$/, '').trim();
@@ -26,8 +40,14 @@ const headingName = (line: string) => {
 };
 
 // A pasted list: product lines ("Jollof rice 2500") under optional headings ("DRINKS", "Rice:").
-export function parsePastedMenu(text: string): ImportItem[] | null {
-  const lines = text.split(/\r?\n/).map(l => l.replace(/^[-•*\d.)\s]+(?=\D)/, '').trim()).filter(Boolean);
+export function parsePastedMenu(text: string, opts: { csv?: boolean } = {}): ImportItem[] | null {
+  let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (opts.csv) {
+    // "Zobo,500,30" → "Zobo 500 30"; a header row ("name,price,stock") is dropped.
+    lines = lines.map(l => csvFields(l).map(f => (/^[₦N]?\s*[\d,]+(\.\d+)?k?$/i.test(f) ? f.replace(/,/g, '') : f)).filter(Boolean).join(' '));
+    if (lines.length && /\b(name|item|product|price|amount|cost)\b/i.test(lines[0]) && !/\d/.test(lines[0])) lines = lines.slice(1);
+  }
+  lines = lines.map(l => l.replace(/^[-•*\d.)\s]+(?=\D)/, '').trim()).filter(Boolean);
   if (lines.length < 2) return null;
   const items: ImportItem[] = [];
   let heading: string | null = null;
@@ -105,7 +125,7 @@ async function apply(f: FlowCtx): Promise<{ out: Out[]; created: number }> {
     } catch (e) { log('warn', 'import_item_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) }); }
   }
   const usedCats = new Set(draft.items.map(i => i.category.toLowerCase())).size;
-  return { out: [`Done ✅ Added ${created} product${created === 1 ? '' : 's'} in ${usedCats} categor${usedCats === 1 ? 'y' : 'ies'}${updated ? ` and updated ${updated}` : ''}. Send PRODUCTS to see them, or add photos one by one by sending a photo with the product name as the caption.`], created };
+  return { out: [`Done ✅ Added ${created} product${created === 1 ? '' : 's'} in ${usedCats} categor${usedCats === 1 ? 'y' : 'ies'}${updated ? ` and updated ${updated}` : ''}. Send PRODUCTS to see them.`], created };
 }
 
 export interface ImportResult { out: Out[]; created: number }
@@ -131,6 +151,20 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
   const file = input.document ?? (input.imageId && (!text || looksLikeMenuWord(text) || !parseProduct(text)) ? { id: input.imageId, mimeType: 'image/jpeg', filename: 'photo' } : null);
   if (!file) return null;
   if (input.document && !CATALOG_MIME.test(input.document.mimeType)) return { out: ['I can read menus and price lists as a PDF, a photo, or a text/CSV file. Please send it in one of those, or paste the list as a message.'], created: 0 };
+  // Text and CSV files are read like a pasted list first (no AI needed).
+  if (input.document && /^text\//.test(input.document.mimeType) && accessToken) {
+    try {
+      const media = await fetchMedia(f.cfg, f.deps, accessToken, input.document.id);
+      const csv = /csv/.test(input.document.mimeType) || /\.csv$/i.test(input.document.filename);
+      const items = parsePastedMenu(new TextDecoder().decode(media.bytes).slice(0, 100_000), { csv });
+      if (items) {
+        const fallback = defaultCategory(f);
+        const draft = { items: items.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || fallback })), skippedNoPrice: [], source: 'file' };
+        await saveDraft(f, draft);
+        return { out: await preview(f, draft), created: 0 };
+      }
+    } catch (e) { log('warn', 'catalog_read_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 160) }); }
+  }
   if (!f.deps.llm?.readCatalog || !accessToken) return { out: ["I can't read files or photos of menus right now. Paste your list as a message instead, one product per line, e.g.\nJollof rice 2500\nFried chicken 1800"], created: 0 };
 
   await notify(input.document ? `📄 Reading ${input.document.filename}… this can take a few seconds.` : '📷 Reading your menu… this can take a few seconds.');
