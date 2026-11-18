@@ -53,7 +53,7 @@ test('import: an owner pastes a menu, sees the summary, taps Add all', async () 
   const bot = new Bot();
   const o = fx.a.ownerPhone.slice(1);
   const preview = await bot.send('admin', { from: o, text: MENU });
-  assert.match(preview[0].text, /I found \*4 products\* in 2 categories:\n\n\*Rice Dishes\* \(2\)\n• Jollof rice: ₦2,500[\s\S]*\*Drinks\* \(2\)[\s\S]*Chapman: ₦1,500 \(12 in stock\)/);
+  assert.match(preview[0].text, /I found \*4 products\* in 2 categories\.\n\n\*Rice Dishes\* \(2\)\n• Jollof rice: ₦2,500[\s\S]*\*Drinks\* \(2\)[\s\S]*Chapman: ₦1,500 \(12 in stock\)/);
   assert.deepEqual(opts(preview), ['imp:all', 'imp:cancel']);
   assert.equal((await listProducts(db, fx.a.id)).length, 1, 'nothing saved before Add all');
 
@@ -68,7 +68,9 @@ test('import: an owner pastes a menu, sees the summary, taps Add all', async () 
 
   // Sending the menu again with new prices updates instead of duplicating; Cancel saves nothing.
   const again = await bot.send('admin', { from: o, text: 'Jollof rice 3000\nFried rice 3000' });
-  assert.match(again[0].text, /Jollof rice: ₦3,000 \(update\)[\s\S]*2 already in your shop will get the new price/);
+  assert.match(again[0].text, /All already in your shop: they get the new price\.[\s\S]*Jollof rice: ₦3,000\n/, 'notes first; no (update) on every line when all are updates');
+  const mixed = await bot.send('admin', { from: o, text: 'Jollof rice 3000\nPuff puff 200' });
+  assert.match(mixed[0].text, /1 already in your shop: it gets the new price[\s\S]*Jollof rice: ₦3,000 \(update\)[\s\S]*Puff puff: ₦200\n/);
   assert.match((await bot.send('admin', { from: o, choice: 'imp:cancel', text: 'Cancel' }))[0].text, /Nothing was added/);
   assert.equal(products.find(p => p.name === 'Jollof rice')!.priceKobo, 250_000);
 });

@@ -121,12 +121,17 @@ async function preview(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
     for (const it of list.slice(0, 8)) lines.push(`• ${it.name}: ${formatKobo(it.priceKobo)}${it.stock !== null ? ` (${it.stock} in stock)` : ''}${existing.has(it.name.toLowerCase()) ? ' (update)' : ''}`);
     if (list.length > 8) lines.push(`…and ${list.length - 8} more`);
   }
-  let text = `I found *${draft.items.length} product${draft.items.length === 1 ? '' : 's'}* in ${groups.size} categor${groups.size === 1 ? 'y' : 'ies'}:\n${lines.join('\n')}`;
+  // The notes go first and the product list last, so cutting to WhatsApp's 1,024 characters only
+  // ever shortens the list.
   const withPhotos = draft.items.filter(i => i.imageUrl).length;
-  if (withPhotos) text += `\n\n📷 ${withPhotos === draft.items.length ? 'All' : withPhotos} come${withPhotos === 1 ? 's' : ''} with a photo from your file.`;
-  if (updates) text += `\n\n${updates} already in your shop will get the new price${withPhotos ? ' and photo' : ''}.`;
-  if (draft.skippedNoPrice.length) text += `\n\nNo price found for: ${draft.skippedNoPrice.slice(0, 10).join(', ')}${draft.skippedNoPrice.length > 10 ? '…' : ''}. Add those one by one.`;
-  if (text.length > 1000) text = `${text.slice(0, 990)}…`; // WhatsApp button messages allow 1,024 characters
+  const notes = [
+    withPhotos ? `📷 ${withPhotos === draft.items.length ? 'All' : withPhotos} come${withPhotos === 1 ? 's' : ''} with a photo from your file.` : '',
+    updates ? `${updates === draft.items.length ? 'All' : updates} already in your shop: ${updates === 1 ? 'it gets' : 'they get'} the new price${withPhotos ? ' and photo' : ''}.` : '',
+    draft.skippedNoPrice.length ? `No price found for: ${draft.skippedNoPrice.slice(0, 10).join(', ')}${draft.skippedNoPrice.length > 10 ? '…' : ''}. Add those one by one.` : '',
+  ].filter(Boolean);
+  const list = updates === draft.items.length ? lines.map(l => l.replace(/ \(update\)$/, '')) : lines;
+  let text = `I found *${draft.items.length} product${draft.items.length === 1 ? '' : 's'}* in ${groups.size} categor${groups.size === 1 ? 'y' : 'ies'}.${notes.length ? `\n\n${notes.join('\n')}` : ''}\n${list.join('\n')}`;
+  if (text.length > 1000) text = `${text.slice(0, 990).replace(/\n[^\n]*$/, '')}\n…`; // WhatsApp button messages allow 1,024 characters
   return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', 'Cancel']])];
 }
 
@@ -153,7 +158,9 @@ async function apply(f: FlowCtx): Promise<{ out: Out[]; created: number }> {
     } catch (e) { log('warn', 'import_item_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) }); }
   }
   const usedCats = new Set(draft.items.map(i => i.category.toLowerCase())).size;
-  return { out: [`Done ✅ Added ${created} product${created === 1 ? '' : 's'} in ${usedCats} categor${usedCats === 1 ? 'y' : 'ies'}${updated ? ` and updated ${updated}` : ''}. Send PRODUCTS to see them.`], created };
+  const plural = (n: number) => `${n} product${n === 1 ? '' : 's'}`;
+  const what = created && updated ? `Added ${plural(created)} and updated ${updated}` : created ? `Added ${plural(created)} in ${usedCats} categor${usedCats === 1 ? 'y' : 'ies'}` : `Updated ${plural(updated)}`;
+  return { out: [`Done ✅ ${what}. Send PRODUCTS to see them.`], created };
 }
 
 export interface ImportResult { out: Out[]; created: number }
@@ -215,7 +222,10 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     await saveDraft(f, draft);
     return { out: await preview(f, draft), created: 0 };
   } catch (e) {
-    log('warn', 'catalog_read_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 160) });
+    const error = String(e instanceof Error ? e.message : e);
+    log('warn', 'catalog_read_failed', { businessId: f.business.id, error: error.slice(0, 160) });
+    // Busy or slow AI service: not the owner's file, so say so.
+    if (/GEMINI_FAILED: (429|500|503|timeout)/.test(error)) return { out: ['The reader is busy right now. Please send the same file again in a minute.'], created: 0 };
     return { out: ["Sorry, I couldn't read that. Try again, send a clearer PDF or photo, or paste the list as a message."], created: 0 };
   }
 }

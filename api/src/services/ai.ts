@@ -54,7 +54,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
   // Gemini sometimes answers 429/500/503 ("high demand") or hangs. Each call gets a time limit; a busy
   // or slow main model gets one quick retry, then the fallback model.
   const gemini = async (init: RequestInit, timeoutMs = CHAT_TIMEOUT_MS) => {
-    const models = [...new Set([cfg.GEMINI_MODEL, cfg.GEMINI_FALLBACK_MODEL].filter(Boolean))];
+    const models = [...new Set([cfg.GEMINI_MODEL, ...String(cfg.GEMINI_FALLBACK_MODEL ?? '').split(',')].map(m => m.trim()).filter(Boolean))];
     let last: Response | null = null;
     for (const [i, model] of models.entries()) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
