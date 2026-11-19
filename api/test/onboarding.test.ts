@@ -196,7 +196,7 @@ test('onboarding v2: unclear products ask the business type; typed products work
   const type = await say('Looks right', 'ok:yes');
   assert.match(type[0].text, /What kind of business is Bisi Gifts/);
   assert.ok(type[0].options.includes('btype:general_services'));
-  assert.match((await say('Other', 'btype:other'))[0].text, /2 products have no photo yet/);
+  assert.match((await say('Other', 'btype:other'))[0].text, /^📷 \*Gift hamper\* and \*Mystery box\* have no photo yet/);
 });
 
 test('onboarding v2: coming back after a break offers Continue or Start over; start over clears drafts', async () => {
@@ -331,4 +331,60 @@ test('catalog: category integrity and products without a stock count', async () 
   await assert.rejects(adjustInventory(db, p.id, fx.b.id, -1, 'adjustment', 'owner'), /STOCK_NOT_TRACKED/);
   assert.equal(await adjustInventory(db, p.id, fx.b.id, 5, 'restock', 'owner'), 5, 'restocking starts counting');
   assert.equal((await doc('products', p.id)).stock, 5);
+});
+
+const THRIFT = `CLOTHING
+Pink Tie-Front Crop Top 4500
+Plaid Flannel Shirt 6500
+Denim Jacket 12000
+SHOES
+Black Ankle Boots 15000
+White Sneakers 18000
+BAGS
+Leather Tote Bag 9000`;
+
+test('file check: a kitchen that sends a clothing list is asked once; the examples follow the shop', async () => {
+  const bot = new Bot();
+  const from = '2348035558888';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Teniola' });
+  await say('hi');
+  const step2 = await say("Mama Tee's Kitchen");
+  assert.match(step2[0].text, /Send your menu[\s\S]*e\.g\. \*Jollof rice & chicken 3500\*/, 'a kitchen gets a food example');
+  const check = await say(THRIFT);
+  assert.equal(check.length, 1);
+  assert.match(check[0].text, /^Quick check 👀 Your shop is called \*Mama Tee's Kitchen\*, but this file looks like \*clothing, shoes and bags\*\. Did you send the right file\?/);
+  assert.deepEqual(check[0].options, ['imp:mine', 'imp:other', 'imp:rename']);
+  // Change the name: the products are kept and the summary follows.
+  assert.match((await say('Change shop name', 'imp:rename'))[0].text, /What's your shop called\? I'll keep the products/);
+  const renamed = await say("Tee's Thrift");
+  assert.match(renamed[0].text, /Done ✅ Your shop is now \*Tee's Thrift\*/);
+  assert.match(renamed[1].text, /I found \*6 products\*/);
+  const bizId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
+  assert.equal((await doc('businesses', bizId)).name, "Tee's Thrift");
+  await say('Add all 6', 'imp:all');
+  assert.equal((await doc('businesses', bizId)).category, 'fashion_retail');
+  const fix = await say('Change something', 'ok:fix');
+  assert.doesNotMatch(fix[0].text, /Jollof/);
+  assert.match(fix[0].text, /e\.g\. \*[A-Z][^*]+ \d+\*/, 'an example from their own list');
+});
+
+test('file check: "Yes, it\'s my stock" sets the type; "Send another file" drops the list; vague names never warn', async () => {
+  const bot = new Bot();
+  const from = '2348035559999';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tee' });
+  await say('hi');
+  await say("Mama Tee's Kitchen");
+  await say(THRIFT);
+  assert.match((await say('Send another file', 'imp:other'))[0].text, /Send the right file/);
+  assert.equal((await conv(from)).importDraft, null);
+  await say(THRIFT);
+  const mine = await say("Yes, it's my stock", 'imp:mine');
+  assert.match(mine[0].text, /I found \*6 products\*/);
+  assert.equal((await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId)).category, 'fashion_retail');
+
+  const other = new Bot();
+  const vague = '2348035550001';
+  await other.send('admin', { from: vague, text: 'hi', name: 'Tee' });
+  await other.send('admin', { from: vague, text: "Tee's Place", name: 'Tee' });
+  assert.match((await other.send('admin', { from: vague, text: THRIFT, name: 'Tee' }))[0].text, /^I found \*6 products\*/);
 });

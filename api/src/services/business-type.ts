@@ -28,3 +28,8 @@ export function inferBusinessType(items: { name: string; category?: string | nul
   const confident = share >= 0.5 && top >= 1 && (!second || top >= 2 * second[1]);
   return { type, confident };
 }
+
+// Every type a product's name (and category) points to.
+export function typesOf(text: string): BusinessCategory[] {
+  return WORDS.filter(([, re]) => re.test(text)).map(([type]) => type);
+}

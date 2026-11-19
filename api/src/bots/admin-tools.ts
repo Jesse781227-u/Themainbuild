@@ -25,6 +25,7 @@ import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
 import { matchProduct, nameScore } from '../services/match';
+import { example } from '../services/shop-type';
 import { messagesMenu } from './messages-flow';
 import { customerList, findCustomer } from './customers';
 import { receiptFilename, receiptPath } from '../services/receipt';
@@ -98,6 +99,20 @@ export const HELP = [
   'You can also send a voice note.',
 ].join('\n');
 
+// HELP with examples from this shop ("add Plaid Flannel Shirt 6500", not sneakers for a kitchen).
+export function helpFor(business: Pick<Business, 'category' | 'name'>, products: { name: string; priceKobo: number }[] = []) {
+  const line = example(business, products);
+  const name = example(business, products, { nameOnly: true });
+  const naira = Math.round((products.find(p => p.name === name)?.priceKobo ?? 0) / 100);
+  const others = products.filter(p => p.name !== name).slice(0, 2).map(p => p.name);
+  return HELP
+    .replace('add Black AF1 25k', `add ${line}`)
+    .replace('restock Black AF1 5 · price Black AF1 27k', `restock ${name} 5 · price ${name} ${naira ? naira + 500 : 'and the new price'}`)
+    .replace('move Black AF1 to Sneakers', `move ${name} to another category`)
+    .replace('pair Jollof rice with Zobo, Plantain', `pair ${name} with ${others.length ? others.join(', ') : 'another product'}`)
+    .replace('unpair Jollof rice', `unpair ${name}`);
+}
+
 export const OFF_TOPIC = "I can only help you run your shop on Relay: products, stock, orders, payments and customers. Send HELP to see what I can do.";
 
 export const adminTools = {
@@ -161,7 +176,7 @@ export const adminTools = {
     schema: z.object({}),
     async run(_a, ctx) {
       const [ps, cats] = await Promise.all([listProducts(ctx.db, ctx.business.id), listCategories(ctx.db, ctx.business.id)]);
-      if (!ps.length) return 'No products yet. Send e.g. "add Black AF1 25k", with a photo if you have one.';
+      if (!ps.length) return `No products yet. Send e.g. "add ${example(ctx.business)}", with a photo if you have one.`;
       const groups = [...cats.map(c => ({ name: c.name, items: ps.filter(p => p.categoryId === c.id) })), { name: 'No category', items: ps.filter(p => !p.categoryId || !cats.some(c => c.id === p.categoryId)) }].filter(g => g.items.length);
       return `Your products (${ps.length}):\n${groups.map(g => `\n*${g.name}*\n${g.items.slice(0, 25).map(line).join('\n')}`).join('\n')}`.slice(0, 4000);
     },
@@ -455,7 +470,7 @@ export const adminTools = {
       return link ? `Share this link in your Status, groups or Instagram bio. Customers who tap it start a chat with your shop:\n${link}` : 'Connect your WhatsApp Business number first (send CONNECT).';
     },
   }),
-  help: def({ spec: { name: 'help', description: 'Explain what the Admin Bot can do.', params: {} }, schema: z.object({}), async run() { return HELP; } }),
+  help: def({ spec: { name: 'help', description: 'Explain what the Admin Bot can do.', params: {} }, schema: z.object({}), async run(_a, ctx) { return helpFor(ctx.business, await listProducts(ctx.db, ctx.business.id)); } }),
   greet: def({
     spec: { name: 'greet', description: 'The owner says hello.', params: {} },
     schema: z.object({}),

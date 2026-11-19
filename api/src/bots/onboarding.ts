@@ -23,6 +23,7 @@ import type { AdminContext } from '../services/router';
 import { addShop, removeShop } from '../services/owners';
 import { trackStep } from '../services/onboarding-events';
 import { inferBusinessType } from '../services/business-type';
+import { example, exampleType } from '../services/shop-type';
 import { closeDays, describeHours, parseHours, parseWeek, sameEveryDay, validHours, type Hours } from '../services/hours';
 import { defaultPolicies, policyText } from '../services/policies';
 import { listZones, saveZone } from '../services/delivery';
@@ -116,7 +117,8 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
 
   // A whole menu or price list, during the first two steps (also as the very first message).
   const menuish = !!input && !choiceId && (!!input.document || (!!input.imageId && !parseProduct(text)) || !!parsePastedMenu(text));
-  if ((c.ob.stage === 'basics' || c.ob.stage === 'products') && (menuish || choiceId?.startsWith('imp:'))) {
+  const renaming = c.state.awaiting === 'shopName' && !choiceId; // "Change shop name" after the file check
+  if ((c.ob.stage === 'basics' || c.ob.stage === 'products') && (menuish || renaming || choiceId?.startsWith('imp:'))) {
     if (!c.business && menuish) await createShop(c, null);
     if (c.business) {
       const photosId = c.state.importDraft?.photosId ?? null;
@@ -175,7 +177,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     case 'products': {
       const f = flowFor(c);
       if (choiceId === 'prod:done' || (!choiceId && DONE.test(text.trim()))) {
-        if (!(await listProducts(c.ctx.db, c.business!.id)).length) return c.reply('Add at least one product first. Send its name and price, e.g. *Jollof rice & chicken 3500*.');
+        if (!(await listProducts(c.ctx.db, c.business!.id)).length) return c.reply(`Add at least one product first. Send its name and price, e.g. *${example(c.business!)}*.`);
         return showPreview(c);
       }
       if (choiceId === 'prod:more') return c.reply('Send the next product: its name and price, with a photo if you have one.');
@@ -184,13 +186,18 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (handled) return afterTyped(c, handled);
       if (passToAdmin(text)) return 'pass';
       const parsed = parseProduct(text);
-      if (!parsed) return c.reply(`Send a product as its name and price, e.g. *Jollof rice & chicken 3500*, or send your menu as a PDF or photo.${(c.ob.productsAdded ?? 0) > 0 ? ' Tap *That\'s all* when you\'re done.' : ''}`);
+      if (!parsed) return c.reply(`Send a product as its name and price, e.g. *${example(c.business!, await listProducts(c.ctx.db, c.business!.id))}*, or send your ${listWord(c.business!)} as a PDF or photo.${(c.ob.productsAdded ?? 0) > 0 ? ' Tap *That\'s all* when you\'re done.' : ''}`);
       await starterCategories(c, parsed.name);
       return afterTyped(c, await addProduct(f, { ...parsed, imageUrl: await imageUrl() }));
     }
     case 'preview': {
       if (choiceId === 'ok:yes' || /^(yes|looks (right|good)|ok(ay)?|correct|perfect|great)\b/i.test(text.trim())) return afterPreview(c);
-      if (choiceId === 'ok:fix') return c.reply(buttons('No problem. To change a price, send the product again with the new price (e.g. *Jollof rice 3000*). To remove one, send *delete* and its name. *PRODUCTS* shows everything.\n\nTap *Looks right* when you\'re done.', [['ok:yes', 'Looks right']]));
+      if (choiceId === 'ok:fix') {
+        const ps = await listProducts(c.ctx.db, c.business!.id);
+        const name = example(c.business!, ps, { nameOnly: true });
+        const p = ps.find(x => x.name === name);
+        return c.reply(buttons(`No problem. To change a price, send the product again with the new price (e.g. *${example(c.business!, ps, { price: p ? Math.round(p.priceKobo / 100) + 500 : undefined })}*). To remove one, send *delete* and its name, e.g. *delete ${name}*. *PRODUCTS* shows everything.\n\nTap *Looks right* when you're done.`, [['ok:yes', 'Looks right']]));
+      }
       if (choiceId === 'prod:more') { await setOb(c, { step: 'products' }); return c.reply('Send the next product: its name and price, with a photo if you have one. Tap *That\'s all* when you\'re done.'); }
       if (choiceId === 'ok:see') return showPreview(c, { again: true });
       const handled = await handleProductInput(flowFor(c), choiceId, text);
@@ -217,7 +224,10 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     case 'photos': {
       if (choiceId === 'ph:skip' || choiceId === 'ph:done' || (!choiceId && !input?.imageId && (SKIP.test(text.trim()) || DONE.test(text.trim())))) return toLocation(c);
       if (input?.imageId) {
-        if (!text.trim()) return c.reply('Which product is this? Send the photo again with the product\'s name as the caption, e.g. *Jollof rice*.');
+        if (!text.trim()) {
+          const missing = (await listProducts(c.ctx.db, c.business!.id)).filter(p => !p.images.length);
+          return c.reply(`Which product is this? Send the photo again with the product's name as the caption, e.g. *${example(c.business!, missing, { nameOnly: true })}*.`);
+        }
         const matches = await findProducts(c.ctx.db, c.business!.id, text.replace(/\s+(?:₦|n)?\d[\d,]*(\.\d+)?k?$/i, '').trim());
         if (matches.length !== 1) {
           const parsed = parseProduct(text);
@@ -381,6 +391,9 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return live(c, text, choiceId, input);
   }
 }
+
+// "menu" for food shops, "catalogue" for everyone else.
+const listWord = (b: Pick<Business, 'category' | 'name'> | null) => (b && exampleType(b) === 'food_beverage' ? 'menu' : b && exampleType(b) !== 'other' ? 'catalogue' : 'menu or catalogue');
 
 // ── Steps ──
 
@@ -642,12 +655,14 @@ async function prompt(c: Ctx): Promise<unknown> {
   switch (c.ob.step) {
     case 'shop_name': return c.reply(c.ob.adding ? `${L}What's the new shop or branch called?` : welcomeText(c, 'What\'s your shop called?'));
     case 'owner_name': return c.reply("What's your name?");
-    case 'products': return c.reply(`${L}Send your menu, price list or product photos (PDF, photo, or paste the list) and I'll set up your shop.\n\nNo list? Just type a product, e.g. *Jollof rice & chicken 3500*.`);
+    case 'products': return c.reply(`${L}Send your ${listWord(biz)}, price list or product photos (PDF, photo, or paste the list) and I'll set up your shop.\n\nNo list? Just type a product, e.g. *${example(biz ?? {})}*.`);
     case 'preview': return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
     case 'type': return c.reply(list(`What kind of business is ${biz?.name ?? 'it'}? This helps me set up the right defaults.`, 'Pick business type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
     case 'photos': {
-      const missing = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length).length : 0;
-      return c.reply(buttons(`📷 ${missing} product${missing === 1 ? ' has' : 's have'} no photo yet, so customers see a coloured card with the first letter.\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *Jollof rice*.`, [['ph:skip', 'Add photos later']]));
+      const without = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length) : [];
+      const missing = without.length;
+      const named = missing <= 3 ? without.map(p => `*${p.name}*`).join(', ').replace(/, ([^,]*)$/, ' and $1') : `${missing} products`;
+      return c.reply(buttons(`📷 ${named} ${missing === 1 ? 'has' : 'have'} no photo yet, so customers see a coloured card with the first letter.${missing > 3 ? `\nFor example: ${without.slice(0, 3).map(p => p.name).join(', ')}.` : ''}\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *${example(biz ?? {}, without, { nameOnly: true })}*.`, [['ph:skip', 'Add photos later']]));
     }
     case 'city': {
       const area = c.ob.draft?.loc?.area;

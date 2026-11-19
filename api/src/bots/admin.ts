@@ -9,8 +9,9 @@ import { log } from '../lib/logger';
 import { nairaToKobo } from '../lib/money';
 import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
-import { deleteCategory, listCategories, moveCategoryProducts } from '../services/catalog';
-import { HELP, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
+import { deleteCategory, listCategories, listProducts, moveCategoryProducts } from '../services/catalog';
+import { helpFor, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
+import { example } from '../services/shop-type';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
 import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
@@ -171,9 +172,9 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     // Anything else: drop the pending action and treat this as a new message.
   }
 
-  if (!text && !input.imageId) return reply(HELP);
+  if (!text && !input.imageId) return reply(helpFor(business, await listProducts(db, business.id)));
   const choice = await chooseAdminTool(text, deps.llm).catch(e => { log('warn', 'llm_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
-  if (!choice) return reply(`Sorry, I didn't understand that.\n\n${HELP}`);
+  if (!choice) return reply(`Sorry, I didn't understand that.\n\n${helpFor(business, await listProducts(db, business.id))}`);
 
   // New products go through the shared flow (category guess, confirmation card).
   if (choice.tool === 'addProduct') {
@@ -182,7 +183,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     const priceKobo = choice.args.price == null ? null : nairaToKobo(String(choice.args.price));
     const stock = Number.isInteger(Number(choice.args.stock)) && choice.args.stock !== undefined && choice.args.stock !== null && Number(choice.args.stock) >= 0 ? Number(choice.args.stock) : null;
     const parsed = (name && priceKobo && priceKobo > 0 ? { name, priceKobo, stock } : null) ?? parseProduct(text);
-    if (!parsed) return reply('To add a product send its name and price, e.g. "add Black AF1 25k" (add a stock number at the end if you track it).');
+    if (!parsed) return reply(`To add a product send its name and price, e.g. "add ${example(business)}" (add a stock number at the end if you track it).`);
     for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o);
     return;
   }

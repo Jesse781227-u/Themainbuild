@@ -4,7 +4,8 @@
 // is saved until the owner taps Add all. Existing products (same name) get the new price instead of
 // a duplicate. Choice ids: imp:all, imp:cancel.
 import { C } from '../db';
-import { BUSINESS_TYPES } from '../domain/business';
+import { BUSINESS_TYPES, type BusinessCategory } from '../domain/business';
+import { example, mismatch, TYPE_WORDS } from '../services/shop-type';
 import type { Product } from '../domain/commerce';
 import { log } from '../lib/logger';
 import { randomId } from '../lib/crypto';
@@ -19,7 +20,11 @@ import { attachMatched, type ImportPhotos } from '../services/import-photos';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
-export interface ImportDraft { items: ImportItem[]; skippedNoPrice: string[]; source: string; photosId?: string | null /* photos being matched in the background */ }
+export interface ImportDraft {
+  items: ImportItem[]; skippedNoPrice: string[]; source: string;
+  photosId?: string | null; photoCount?: number;  // photos being matched in the background
+  checked?: boolean; found?: BusinessCategory;    // the "is this the right file?" question was asked
+}
 
 const MAX_ITEMS = 200;
 const MAX_PHOTOS = 40;
@@ -193,11 +198,63 @@ async function applyDraft(f: FlowCtx, draft: ImportDraft): Promise<{ out: Out[];
 
 export interface ImportResult { out: Out[]; created: number }
 
+// Right after a list is read: "Your shop is called Mama Tee's Kitchen, but this file looks like
+// clothing" when the name and the products clearly disagree (once per upload, never blocking);
+// otherwise the summary to confirm.
+async function offer(f: FlowCtx, draft: ImportDraft): Promise<ImportResult> {
+  const named = f.business.name && f.business.name !== 'My shop' ? f.business.name : null;
+  const m = !draft.checked && named ? mismatch(named, draft.items) : null;
+  if (m) {
+    await saveDraft(f, { ...draft, checked: true, found: m.found });
+    return { out: [buttons(`Quick check 👀 Your shop is called *${named}*, but this file looks like *${TYPE_WORDS[m.found]}*. Did you send the right file?`, [['imp:mine', "Yes, it's my stock"], ['imp:other', 'Send another file'], ['imp:rename', 'Change shop name']])], created: 0 };
+  }
+  await saveDraft(f, { ...draft, checked: true });
+  const out = await preview(f, draft);
+  const n = draft.photoCount ?? 0;
+  return { out: draft.photosId && n ? [...out, `📷 Your file has ${n} product photo${n === 1 ? '' : 's'}. I'm matching them to your products now and will add them in about a minute. You don't need to wait: tap *Add all* whenever you're ready.`] : out, created: 0 };
+}
+
+async function answerCheck(f: FlowCtx, input: Input, text: string): Promise<ImportResult | null> {
+  const draft = f.state.importDraft;
+  if (input.choiceId === 'imp:mine') {
+    if (!draft) return { out: ['That list was already added or cancelled. Send it again if you need to.'], created: 0 };
+    if (draft.found) {
+      await f.db.update(f.db.doc(C.businesses, f.business.id), { category: draft.found, businessTypeInferred: true, updatedAt: new Date().toISOString() });
+      f.business.category = draft.found;
+    }
+    return offer(f, draft);
+  }
+  if (input.choiceId === 'imp:other') {
+    await saveDraft(f, null);
+    return { out: ['OK 👍 Send the right file: a PDF, a photo of your list, or paste the list as a message.'], created: 0 };
+  }
+  if (input.choiceId === 'imp:rename') {
+    if (!draft) return { out: ['That list was already added or cancelled. Send it again if you need to.'], created: 0 };
+    f.state.awaiting = 'shopName';
+    await f.db.set(f.convRef, { awaiting: 'shopName' }, { merge: true });
+    return { out: ["What's your shop called? I'll keep the products from your file."], created: 0 };
+  }
+  if (f.state.awaiting === 'shopName' && !input.choiceId && text.trim()) {
+    const name = text.trim().replace(/^(it'?s|it is|my shop is|call it|change it to)\s+/i, '').replace(/[.!]+$/, '').slice(0, 80);
+    if (name.length < 2) return { out: ["What's your shop called?"], created: 0 };
+    f.state.awaiting = null;
+    await f.db.set(f.convRef, { awaiting: null }, { merge: true });
+    await f.db.update(f.db.doc(C.businesses, f.business.id), { name, updatedAt: new Date().toISOString() });
+    f.business.name = name;
+    if (!draft) return { out: [`Done ✅ Your shop is now *${name}*.`], created: 0 };
+    const next = await offer(f, { ...draft, checked: true });
+    return { out: [`Done ✅ Your shop is now *${name}*.`, ...next.out], created: 0 };
+  }
+  return null;
+}
+
 // Handles anything that looks like a whole menu, plus the Add all / Cancel taps. Returns null when the
 // message isn't a bulk upload, so the caller carries on as usual.
 export async function handleImport(f: FlowCtx, input: Input, text: string, accessToken: string | undefined, notify: (o: Out) => Promise<unknown>, react?: (emoji: string) => Promise<unknown>): Promise<ImportResult | null> {
   if (input.choiceId === 'imp:all') return apply(f, notify);
   if (input.choiceId === 'imp:cancel') { await saveDraft(f, null); return { out: ['Cancelled. Nothing was added.'], created: 0 }; }
+  const checked = await answerCheck(f, input, text);
+  if (checked) return checked;
   if (input.choiceId) return null;
 
   // A pasted list: rules, no AI.
@@ -205,9 +262,7 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     const items = parsePastedMenu(text);
     if (!items) return null;
     const fallback = defaultCategory(f);
-    const draft = { items: items.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || fallback })), skippedNoPrice: [], source: 'text' };
-    await saveDraft(f, draft);
-    return { out: await preview(f, draft), created: 0 };
+    return offer(f, { items: items.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || fallback })), skippedNoPrice: [], source: 'text' });
   }
 
   // A file, or a photo that isn't a single product ("Black AF1 25k" as the caption is one product).
@@ -222,13 +277,11 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
       const items = parsePastedMenu(new TextDecoder().decode(media.bytes).slice(0, 100_000), { csv });
       if (items) {
         const fallback = defaultCategory(f);
-        const draft = { items: items.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || fallback })), skippedNoPrice: [], source: 'file' };
-        await saveDraft(f, draft);
-        return { out: await preview(f, draft), created: 0 };
+        return offer(f, { items: items.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || fallback })), skippedNoPrice: [], source: 'file' });
       }
     } catch (e) { log('warn', 'catalog_read_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 160) }); }
   }
-  if (!f.deps.llm?.readCatalog || !accessToken) return { out: ["I can't read files or photos of menus right now. Paste your list as a message instead, one product per line, e.g.\nJollof rice 2500\nFried chicken 1800"], created: 0 };
+  if (!f.deps.llm?.readCatalog || !accessToken) return { out: [`I can't read files or photos of lists right now. Paste your list as a message instead, one product per line, e.g.\n${example(f.business)}`], created: 0 };
 
   await notify(input.document ? `📄 Reading ${input.document.filename}… this can take a few seconds.` : '📷 Reading your menu… this can take a few seconds.');
   try {
@@ -249,18 +302,16 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f));
     if (!items.length) {
       return { out: [input.imageId && !input.document
-        ? "I couldn't find products with prices in that photo. To add one product, send its photo with the name and price as the caption, e.g. *Black AF1 25k*."
+        ? `I couldn't find products with prices in that photo. To add one product, send its photo with the name and price as the caption, e.g. *${example(f.business)}*.`
         : "I couldn't find products with prices in that file. Try a clearer PDF or photo, or paste the list as a message."], created: 0 };
     }
     const photosId = photoUrls.length && f.deps.llm.matchPhotos ? randomId(12).replace(/[^A-Za-z0-9]/g, 'x') : null;
-    const draft: ImportDraft = { items, skippedNoPrice, source: input.document ? 'file' : 'photo', photosId };
-    await saveDraft(f, draft);
+    const draft: ImportDraft = { items, skippedNoPrice, source: input.document ? 'file' : 'photo', photosId, photoCount: photoUrls.length };
     if (photosId) {
       await f.db.create(f.db.doc(C.importPhotos, photosId), { id: photosId, businessId: f.business.id, conversationId: f.convRef.id, ownerPhone: f.business.ownerPhone, names: items.map(i => i.name), photoUrls, status: 'pending', createdAt: new Date().toISOString() });
       await f.deps.enqueue([{ kind: 'matchPhotos', id: photosId }]);
     }
-    const out = await preview(f, draft);
-    return { out: photosId ? [...out, `📷 Your file has ${photoUrls.length} product photo${photoUrls.length === 1 ? '' : 's'}. I'm matching them to your products now and will add them in about a minute. You don't need to wait: tap *Add all* whenever you're ready.`] : out, created: 0 };
+    return await offer(f, draft);
   } catch (e) {
     const error = String(e instanceof Error ? e.message : e);
     log('warn', 'catalog_read_failed', { businessId: f.business.id, error: error.slice(0, 160) });
