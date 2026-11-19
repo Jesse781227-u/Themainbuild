@@ -427,6 +427,8 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
 async function startCheckout(ctx: ShopContext, business: Business, reply: Reply) {
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]));
+  const break_ = pausedNote(business);
+  if (break_) return reply(buttons(`${break_} Your cart is saved, so you can check out then.`, [['menu', 'See the menu']]));
   const open = openNow(business.hours);
   if (!open.open && business.afterHours === 'menu') return reply(buttons(`Sorry, we're closed right now${open.next ? ` and open again at ${open.next}` : ''}. Your cart is saved, so you can check out then.`, [['menu', 'See the menu']]));
   if (business.fulfilment === 'pickup') return confirmOrder(ctx, business, pickup(business), reply);
@@ -502,7 +504,17 @@ const quoteLater = (d: OrderDelivery) => d.method !== 'pickup' && !d.feeKobo && 
 
 // When the shop is closed: the shop's own "we're closed" message, and what the customer can still
 // do (null when open or no hours are set).
+// The owner paused the shop (PAUSE): customers can look, not order. Null when not paused.
+function pausedNote(business: Business, now = new Date()) {
+  const until = business.pausedUntil;
+  if (!until || (until !== 'open' && new Date(until) <= now)) return null;
+  const when = until === 'open' ? '' : ` We're back ${new Date(until).toLocaleString('en-GB', { weekday: 'long', hour: 'numeric', timeZone: 'Africa/Lagos' })}.`;
+  return `⏸️ We're taking a short break and not taking orders right now.${when}`;
+}
+
 function closedNote(business: Business, customer?: Customer | null, now = new Date()) {
+  const paused = pausedNote(business, now);
+  if (paused) return `${paused} Have a look at what we have meanwhile.`;
   const open = openNow(business.hours, now);
   if (open.open) return null;
   // No opening time coming up (closed all week): the 'we open again …' sentence is left out.

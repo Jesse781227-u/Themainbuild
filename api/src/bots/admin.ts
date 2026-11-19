@@ -10,7 +10,9 @@ import { nairaToKobo } from '../lib/money';
 import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, listProducts, moveCategoryProducts } from '../services/catalog';
-import { helpFor, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
+import { prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
+import { actionById, actionForTool, followUps, handleActionTap, matchAction, runAction, withFollowUps } from './actions';
+import type { Product } from '../domain/commerce';
 import { example } from '../services/shop-type';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
@@ -24,8 +26,12 @@ import { react, showTyping, slowJob } from '../services/presence';
 import { getOwner, switchShop } from '../services/owners';
 import { exitTest, runTest, startTest, TEST_EXIT, TEST_START } from './test-mode';
 import { handleSettings } from './settings';
+import { handleShops } from './shops';
 
 const CONFIRM_MINUTES = 10;
+
+// The "See how Relay works" ice breaker, before signup.
+const HOW_IT_WORKS = "Relay runs your shop on your own WhatsApp number 👋\n\n1. Send me your menu or price list (a PDF, a photo, or just type it). I turn it into a shop customers can browse.\n2. Customers order by chat, any time. They pay by card or transfer and get a receipt.\n3. You get every order and payment here, and run everything by chat: prices, stock, delivery, reports.\n\nNo app to download, no monthly fee: 1% per paid order. Setup takes about 5 minutes.";
 
 // The two buttons under each "are you sure?" question.
 const CONFIRM_LABELS: Record<string, [string, string][]> = {
@@ -85,6 +91,11 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     return startTest(ctx, deps, shop, reply);
   }
 
+  // ── Ice breaker "See how Relay works" on a brand-new chat: explain first, signup when they tap ──
+  if (!business && (!ob || (ob.step === 'shop_name' && !ob.welcomed)) && !choiceId && /^see how relay works[.!?]*$/i.test(text.trim())) {
+    return reply(buttons(HOW_IT_WORKS, [['ob:begin', 'Set up my shop'], ['ob:call', 'Talk to a person']]));
+  }
+
   // ── Onboarding ──
   // YES/NO to "Delete …?" asked during signup goes to that question, not to the signup step.
   const confirming = !!conv.pendingAction && (choiceId === 'yes' || choiceId === 'no' || (!choiceId && (YES.test(text) || NO.test(text))));
@@ -112,13 +123,41 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
 
   async function everyday(business: Business): Promise<unknown> {
   const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
+  const toolBase = await makeToolCtx(ctx, deps, business, null);
+  const setAwaiting = async (v: string | null) => { state.awaiting = v; await db.set(convRef, { awaiting: v }, { merge: true }); };
+  const actionCtx = { ...toolBase, admin: ctx, reply, setAwaiting };
+
+  // ── Menu rows and follow-up buttons (act:…, menu:…), and the old greeting buttons ──
+  const tap = choiceId ? ({ 'g:products': 'act:products', 'g:orders': 'act:orders', 'g:help': 'act:menu' } as Record<string, string>)[choiceId] ?? choiceId : null;
+  if (tap && (await handleActionTap(tap, actionCtx))) return;
+
+  // ── Waiting for the next message after Add product / Send a campaign / Add photo ──
+  if (state.awaiting === 'add' && !choiceId) {
+    const parsed = parseProduct(text);
+    if (parsed) { await setAwaiting(null); for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o); return; }
+    if (!matchAction(text)) return reply(withFollowUps(`Send the name and price together, e.g. *${example(business, await listProducts(db, business.id))}*.`, undefined));
+    await setAwaiting(null);
+  }
+  if (state.awaiting === 'campaign' && !choiceId && text.trim() && !matchAction(text)) {
+    await setAwaiting(null);
+    return askOrRun('broadcast', { message: text.trim() });
+  }
+  if (state.awaiting?.startsWith('photo:') && input.imageId) {
+    const id = state.awaiting.slice(6);
+    await setAwaiting(null);
+    const p = (await db.get(db.doc(C.products, id))) as Product | null;
+    const url = await photo();
+    if (!p || p.businessId !== business.id || p.deletedAt || !url) return reply("Sorry, I couldn't add that photo. Please try again.");
+    await db.update(db.doc(C.products, p.id), { images: [url, ...p.images.filter(u => u !== url)].slice(0, 10), updatedAt: new Date().toISOString() });
+    return reply(buttons(`📷 Added to *${p.name}*.`, followUps([['add', 'Add another'], ['products', 'My products']])));
+  }
 
   // ── A whole menu / price list (PDF, photo or pasted list), and its Add all / Cancel ──
   const imported = await handleImport(flow, input, text, cfg.ADMIN_BOT_ACCESS_TOKEN, reply, reactTo);
   if (imported) { for (const o of imported.out) await reply(o); return; }
 
   // ── Product follow-ups (category picker, Correct/Edit, new category name) ──
-  if (choiceId?.startsWith('pok:')) return reply('👍 Saved.');
+  if (choiceId?.startsWith('pok:')) return reply(buttons('👍 Saved.', followUps([['add', 'Add another'], [`photo:${choiceId.slice(4)}`, 'Add photo']])));
   const handled = await handleProductInput(flow, choiceId, text);
   if (handled) { for (const o of handled) await reply(o); return; }
   if (state.editingProductId && !choiceId) {
@@ -130,13 +169,17 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const msg = await handleMessageInput(flow, choiceId, text);
   if (msg) {
     for (const o of msg.out) await reply(o);
-    if (msg.done) return reply(buttons('Want to change another message?', [['msgmenu', 'Change another'], ['g:help', 'What can you do?']]));
+    if (msg.done) return reply(buttons('Want to change another message?', [['msgmenu', 'Change another'], ['act:menu', 'Menu']]));
     return;
   }
 
+  // ── Owner actions by name: "/sales", "sales", "how much did I make today", "hi" (the MENU) ──
+  const named = !choiceId && !input.imageId ? matchAction(text) : null;
+  if (named) return runAction(named.action, { ...actionCtx, arg: named.arg });
+
   // ── Settings: HOURS, AFTER HOURS, POLICIES, FEE ──
   const setting = await handleSettings(db, cfg, business, text, choiceId);
-  if (setting) return reply(setting);
+  if (setting) return reply(withFollowUps(setting, undefined));
 
   // ── Several shops on one number: SWITCH, NEW SHOP ──
   const shops = await handleShops(ctx, business, choiceId, text, reply);
@@ -163,7 +206,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     await db.set(convRef, { pendingAction: null }, { merge: true });
     const live = pending.expiresAt > new Date().toISOString();
     if (live && YES.test(text) && isAdminTool(pending.tool)) {
-      await reply(await runTool(pending.tool, pending.args, await makeToolCtx(ctx, deps, business, null)));
+      await reply(withFollowUps(await runTool(pending.tool, pending.args, toolBase), undefined));
       if (pending.tool === 'deleteMyData') await db.delete(convRef); // after the confirmation, which needs the window
       return;
     }
@@ -172,9 +215,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     // Anything else: drop the pending action and treat this as a new message.
   }
 
-  if (!text && !input.imageId) return reply(helpFor(business, await listProducts(db, business.id)));
+  if (!text && !input.imageId) return runAction(actionById('menu')!, { ...actionCtx, arg: null });
   const choice = await chooseAdminTool(text, deps.llm).catch(e => { log('warn', 'llm_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
-  if (!choice) return reply(`Sorry, I didn't understand that.\n\n${helpFor(business, await listProducts(db, business.id))}`);
+  if (!choice) return reply(buttons("Sorry, I didn't get that. Tap *Menu* to see what I can do, or type it another way.", [['act:menu', 'Menu'], ['act:help', 'All commands']]));
+  // The AI understood an action from the menu ("how much have I sold?"): the same reply and buttons.
+  const same = actionForTool(choice.tool, choice.args);
+  if (same) return runAction(same, { ...actionCtx, arg: null });
 
   // New products go through the shared flow (category guess, confirmation card).
   if (choice.tool === 'addProduct') {
@@ -188,16 +234,20 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     return;
   }
 
-  const toolCtx = await makeToolCtx(ctx, deps, business, null);
-  const prepared = await prepare(choice.tool, choice.args, toolCtx);
-  if (prepared.kind === 'reply') return reply(prepared.text);
-  if (prepared.kind === 'confirm') {
-    await db.set(convRef, { pendingAction: { tool: prepared.tool, args: prepared.args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
-    held = true;
-    return reply(buttons(prepared.prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
+  return askOrRun(choice.tool, choice.args);
+
+  // A tool: asked first when it's destructive (YES/NO), else run, ending with a Menu button.
+  async function askOrRun(name: string, args: Record<string, unknown>) {
+    const prepared = await prepare(name, args, toolBase);
+    if (prepared.kind === 'reply') return reply(withFollowUps(prepared.text, undefined));
+    if (prepared.kind === 'confirm') {
+      await db.set(convRef, { pendingAction: { tool: prepared.tool, args: prepared.args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
+      held = true;
+      return reply(buttons(prepared.prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
+    }
+    log('info', 'admin_tool', { businessId: business.id, tool: prepared.tool });
+    return reply(withFollowUps(await runTool(prepared.tool, prepared.args, toolBase), undefined));
   }
-  log('info', 'admin_tool', { businessId: business.id, tool: prepared.tool });
-  return reply(await runTool(prepared.tool, prepared.args, toolCtx));
   }
 }
 
@@ -208,41 +258,4 @@ async function storeImage(ctx: AdminContext, deps: BotDeps, business: Business, 
 
 async function makeToolCtx(ctx: AdminContext, deps: BotDeps, business: Business, imageUrl: string | null): Promise<ToolCtx> {
   return { db: ctx.db, cfg: ctx.cfg, deps, business, ownerPhone: ctx.ownerPhone, imageUrl };
-}
-
-// SWITCH lists the owner's shops; NEW SHOP starts signup for another shop or branch (its own number,
-// products and wallet). Returns true when it handled the message.
-async function handleShops(ctx: AdminContext, business: Business, choiceId: string | null, text: string, reply: (c: OutboundContent | string) => Promise<unknown>) {
-  const { db } = ctx;
-  const t = text.trim().toLowerCase();
-  if (choiceId?.startsWith('shop:')) {
-    const id = choiceId.slice(5);
-    if (!(await switchShop(db, ctx.ownerPhone, id))) { await reply("That shop isn't on this number."); return true; }
-    const next = (await db.get(db.doc(C.businesses, id))) as Business | null;
-    await db.set(db.doc(C.conversations, ctx.conversationId), { businessId: id, productDraft: null, awaiting: null, editingProductId: null, importDraft: null, pendingAction: null }, { merge: true });
-    await reply(`Now managing *${next?.name ?? 'that shop'}* ✅ Everything you send now is for this shop. Send SWITCH to change again.`);
-    return true;
-  }
-  if (/^(switch|switch shops?|my shops|shops|branches|my branches)$/.test(t)) {
-    const owner = await getOwner(db, ctx.ownerPhone);
-    const all = ((await db.getAll((owner?.businessIds ?? [business.id]).map(id => db.doc(C.businesses, id)))) as (Business | null)[]).filter((b): b is Business => !!b && b.status !== 'deleted');
-    if (all.length < 2) {
-      await reply(buttons(`You have one shop on this number: *${business.name}*. Want to add another shop or branch?`, [['newshop:yes', 'Add a shop'], ['newshop:no', 'Not now']]));
-      return true;
-    }
-    await reply(list(`You're managing *${business.name}*. Which shop do you want to manage?`, 'Switch shop', all.slice(0, 10).map(b => ({ id: `shop:${b.id}`, title: b.name, description: [b.area, b.status === 'active' ? 'live' : 'setting up'].filter(Boolean).join(' · ') })), 'Your shops'));
-    return true;
-  }
-  if (/^(new shop|add (a |another )?shop|new branch|add (a |another )?branch|another shop|open (a |another )?(shop|branch))$/.test(t)) {
-    await reply(buttons('Add another shop or branch? It gets its own WhatsApp number, products and wallet, and you manage it from this chat (send SWITCH to move between shops).', [['newshop:yes', 'Yes, add a shop'], ['newshop:no', 'Not now']]));
-    return true;
-  }
-  if (choiceId === 'newshop:no') { await reply('OK.'); return true; }
-  if (choiceId === 'newshop:yes') {
-    const ob = firstOnboarding({ adding: true });
-    await db.set(db.doc(C.conversations, ctx.conversationId), { onboarding: { ...ob, lastSeenAt: new Date().toISOString() }, productDraft: null, awaiting: null, editingProductId: null, importDraft: null }, { merge: true });
-    await reply("*Step 1 of 6* · What's the new shop or branch called?");
-    return true;
-  }
-  return false;
 }

@@ -80,5 +80,5 @@ test('intent: off-topic requests are redirected', async () => {
   const rogue = new Bot(fakeLLM(() => ({ tool: 'sendEmail', args: { to: 'x' } })));
   assert.match((await rogue.send('admin', { from: owner(), text: 'email my accountant' }))[0].text, /I can only help you run your shop/);
   // Without an LLM, unknown text gets help, not a guess.
-  assert.match((await new Bot().send('admin', { from: owner(), text: 'what is the capital of France' }))[0].text, /didn't understand/);
+  assert.match((await new Bot().send('admin', { from: owner(), text: 'what is the capital of France' }))[0].text, /didn't get that/);
 });

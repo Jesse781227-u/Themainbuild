@@ -126,7 +126,14 @@ export const buttons = (body: string, items: [id: string, title: string][]) => (
   interactive: { type: 'button', body: { text: body }, action: { buttons: items.slice(0, 3).map(([id, title]) => ({ type: 'reply', reply: { id, title: fitTitle(title, 20) } })) } },
 });
 
+// A list with several titled sections (WhatsApp: 10 rows in total, titles 24, descriptions 72).
+export function sectionList(body: string, button: string, sections: { title: string; rows: { id: string; title: string; description?: string }[] }[]) {
+  let left = 10;
+  const cut = sections.map(sec => { const rows = sec.rows.slice(0, Math.max(0, left)); left -= rows.length; return { title: fitTitle(sec.title, 24), rows: rows.map(r => ({ id: r.id, title: fitTitle(r.title, 24), ...(r.description ? { description: fitTitle(r.description, 72) } : {}) })) }; }).filter(sec => sec.rows.length);
+  return { type: 'interactive' as const, interactive: { type: 'list', body: { text: body }, action: { button: fitTitle(button, 20), sections: cut } } };
+}
+
 export const list = (body: string, button: string, rows: { id: string; title: string; description?: string }[], sectionTitle = 'Options') => ({
   type: 'interactive' as const,
-  interactive: { type: 'list', body: { text: body }, action: { button: fitTitle(button, 20), sections: [{ title: sectionTitle.slice(0, 24), rows: rows.slice(0, 10).map(r => ({ id: r.id, title: fitTitle(r.title, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } },
+  interactive: { type: 'list', body: { text: body }, action: { button: fitTitle(button, 20), sections: [{ title: sectionTitle.slice(0, 24), rows: rows.slice(0, 10).map(r => ({ id: r.id, title: fitTitle(r.title, 24), ...(r.description ? { description: fitTitle(r.description, 72) } : {}) })) }] } },
 });
