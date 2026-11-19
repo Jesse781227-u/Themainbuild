@@ -40,6 +40,9 @@ test('suggestions: owner pairings come first, then the upgrade; sold out and in-
   assert.match(r[1].text, /^Goes well with your Jollof rice 👇\n1\. Zobo · ₦500\n2\. ⬆️ Upgrade/, 'Chapman is sold out, Plantain is already in the cart');
   assert.deepEqual(r[1].options, [`buy:${ids['Zobo']}`, `buy:${ids['Jollof special']}`]);
   assert.equal((await shop(bot, me, `add:${ids['Jollof rice']}`)).length, 1, 'adding it again: no repeat suggestions');
+  const fromSuggestion = await shop(bot, me, `buy:${ids['Zobo']}`);
+  assert.equal(fromSuggestion.length, 1, 'adding the suggested Zobo: just the cart, no second suggestion');
+  assert.match(fromSuggestion[0].text, /Added 1 × Zobo/);
   await bot.send('admin', { from: owner, text: 'unpair Jollof rice' });
   assert.deepEqual((await doc('products', ids['Jollof rice'])).pairsWith, []);
 });

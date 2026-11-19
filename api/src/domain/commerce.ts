@@ -40,7 +40,8 @@ export interface Conversation {
 }
 
 export interface CartLine { productId: string; qty: number }
-export interface Cart { id: string; businessId: string; customerId: string; channel: Channel; items: CartLine[]; expiresAt: string; updatedAt: string }
+// suggestedAt: a "Goes well with" message was sent for this cart; there's only ever one per cart.
+export interface Cart { id: string; businessId: string; customerId: string; channel: Channel; items: CartLine[]; expiresAt: string; updatedAt: string; suggestedAt?: string | null }
 
 export interface OrderLine { productId: string; name: string; priceKobo: number; qty: number }
 export interface OrderDelivery { method: 'self_arranged' | 'pickup'; feeKobo: number; zoneId?: string | null; batchId?: string | null; timeframe?: string | null; address?: string | null }

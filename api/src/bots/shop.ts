@@ -266,15 +266,18 @@ async function addToCart(ctx: ShopContext, run: Run, business: Business, product
   const want = already + qty;
   if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
   const now = new Date();
-  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString() });
-  // Then, once per item per chat: what goes with it (remembered with the cart reply).
-  const suggest = business.suggestions !== false && !run.state.suggested?.includes(p.id);
+  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: cart?.suggestedAt ?? null });
+  // Then what goes with it: one suggestion per cart (adding from a suggestion doesn't bring another),
+  // and never twice for the same item in a chat.
+  const suggest = business.suggestions !== false && !cart?.suggestedAt && !run.state.suggested?.includes(p.id);
   if (suggest) run.state.suggested = [...(run.state.suggested ?? []), p.id].slice(-30);
   await showCart(ctx, business, reply, `Added ${qty} × ${p.name}.`);
   if (!suggest) return;
   const picks = await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
   const out = picks ? suggestionMessage(ctx.cfg, p, picks) : null;
-  if (out) await reply(out, { step: 'browse' });
+  if (!out) return;
+  await db.update(db.doc(C.carts, ctx.conversationId), { suggestedAt: new Date().toISOString() });
+  await reply(out, { step: 'browse' });
 }
 
 async function cartLines(db: Firestore, cart: Cart) {
