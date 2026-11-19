@@ -53,12 +53,12 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const bot = new Bot();
   const say = (text: string, choice?: string) => bot.send('admin', { from: OWNER, text, choice, name: 'Ada Obi 🌸' });
   const hi = await say('Hi');
-  assert.match(hi[0].text, /^Welcome to Relay, Ada 👋[\s\S]*about 5 minutes[\s\S]*agree to Relay's Terms: https?:\/\/\S+\/terms\nStuck\? Reply \*CALL\* anytime[\s\S]*\*Step 1 of 6\* · What's your shop called\?$/);
+  assert.match(hi[0].text, /^Welcome to Relay, Ada 👋[\s\S]*about 5 minutes[\s\S]*agree to our Terms: https?:\/\/\S+\/terms\nStuck\? Reply \*CALL\*\.[\s\S]*\*Step 1 of 6\* · What's your shop called\?$/);
   assert.match((await say('add Jollof rice, 2500, 10'))[0].text, /looks like a product/);
   assert.equal((await say('?'))[0].text, "*Step 1 of 6* · Sorry, what's your shop called?", 'junk gets a short re-ask, not the whole welcome');
 
   const products = await say("Mama Ada's Kitchen");
-  assert.match(products[0].text, /^\*Step 2 of 6\* · Send your menu, price list or product photos/);
+  assert.match(products[0].text, /^\*Step 2 of 6\* · Send your menu or price list \(PDF, photo or pasted list\)\./);
   const owner = await doc('ownerPhones', `+${OWNER}`);
   const bizId = owner.activeBusinessId;
   let biz = await doc('businesses', bizId);
@@ -81,7 +81,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   biz = await doc('businesses', bizId);
   assert.deepEqual([biz.category, biz.businessTypeInferred], ['food_beverage', true], 'the menu tells us it is food: no type question');
 
-  assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product again with the new price/);
+  assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product with the new price/);
   assert.match((await say('Zobo 800'))[0].text, /^Updated \*Zobo\*: ₦700 → ₦800$/);
   // Part of the name is enough when it's clearly one product: updated, not added again.
   const fixed = await say('jollof rice 4000');
@@ -120,7 +120,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.deepEqual(same[0].options, ['hrs:same', 'hrs:perday', 'hrs:closed']);
   assert.match((await say('Closed some days', 'hrs:closed'))[0].text, /Which days are you closed/);
   const prep = await say('Sunday');
-  assert.match(prep[0].text, /✅ Mon–Sat 8am–9pm · Sun closed\.\nWhen you're closed, customers can still order/);
+  assert.match(prep[0].text, /✅ Mon–Sat 8am–9pm · Sun closed\. When you're closed, customers can still order for later/);
   assert.match(prep[1].text, /How long does an order usually take to prepare/, 'food shops get the prep-time question');
   const delivery = await say('30–60 min', 'prep:1');
   assert.match(delivery[0].text, /^\*Step 5 of 6\* · How do customers get their orders\?/);
@@ -130,7 +130,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.deepEqual((await say('Yes', 'is:yes'))[0].options, ['is:flat', 'is:quote']);
   const policies = await say('I quote per order', 'is:quote');
   assert.equal(policies[0].text, '✅ Delivery: ₦1,500 within Yaba · ₦3,000 elsewhere in Lagos · other states: you quote per order. Pickup is free.');
-  assert.match(policies[1].text, /what most food shops use:\n\n• No returns on food\./);
+  assert.match(policies[1].text, /what most food shops use\):\n\n• No returns on food\./);
   // Optional: how the shop talks to customers. Three samples each for the three that matter most.
   const offer = await say('Use these', 'pol:use');
   assert.deepEqual(offer[0].options, ['msgs:choose', 'msgs:default']);
@@ -149,7 +149,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const third = await say('Save', 'msgsave:paymentThanks');
   assert.match(third[1].text, /^\*Step 5 of 6\* · Message 3 of 3 · \*Showing what you sell\*/);
   const fee = await say('Keep the current one', 'msgkeep:menuIntro');
-  assert.match(fee.map(m => m.text).join('\n'), /That's your messages done 👍/);
+  assert.match(fee.map(m => m.text).join('\n'), /Messages done 👍/);
   biz = await doc('businesses', bizId);
   assert.equal(biz.messages.welcome, "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
   assert.equal(biz.messages.paymentThanks, 'Thanks {customer_name}! We got your {total} for {order_id} 🙏');
@@ -160,7 +160,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
   const ready = await say("I'll pay it", 'fee:owner');
   assert.equal(ready[0].text, "👍 You'll pay the fee — customers see your prices only.");
-  assert.match(ready[1].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉[\s\S]*TEST/);
+  assert.match(ready[1].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉 Try it as a customer first/);
   assert.deepEqual(ready[1].options, ['test:start', 'ob:connect']);
   assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
   // TEST: the welcome they picked (option 2) is the first thing a customer gets for "hi".
@@ -184,8 +184,8 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.match(switching[0].text, /Switching is free and keeps your chats[\s\S]*Tap \*I've switched\*/);
   assert.deepEqual(switching[0].options, ['wa:done', 'ob:call']);
   const fb = await say("I've switched", 'wa:done');
-  assert.match(fb[0].text, /^\*Step 6 of 6\* · And can you log into Facebook\? Meta \(who runs WhatsApp\) uses a Facebook login to set up your business account\. Your number itself is confirmed with a code/);
-  assert.match((await say('No', 'fb:no'))[0].text, /create a free one/);
+  assert.match(fb[0].text, /^\*Step 6 of 6\* · Can you log into Facebook\? Meta uses it to set up your business account\./);
+  assert.match((await say('No', 'fb:no'))[0].text, /Create a free one at facebook.com/);
   const link = await say('I have one now', 'fb:now');
   assert.match(link[0].text, /open this link[\s\S]*\/connect\/[A-Za-z0-9]+/);
   assert.equal((await conv(OWNER)).onboarding, null, 'the everyday Admin Bot from here');

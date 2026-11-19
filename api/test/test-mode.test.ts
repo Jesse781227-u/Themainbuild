@@ -43,7 +43,7 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   assert.match(back[0].text, /You're back with Relay 👋[\s\S]*Ready to connect/);
   assert.deepEqual(back[0].options, ['ob:connect', 'test:start']);
   assert.equal((await doc('conversations', `admin_${from}`)).testMode, null);
-  assert.match((await say('Connect now', 'ob:connect'))[0].text, /Quick check: is your shop's number on the \*WhatsApp Business\* app/, 'signup carries on where it was');
+  assert.match((await say('Connect now', 'ob:connect'))[0].text, /Is your shop's number on the \*WhatsApp Business\* app/, 'signup carries on where it was');
 });
 
 test('TEST: when the owner pays the fee, customers see the shop\'s prices only', async () => {
