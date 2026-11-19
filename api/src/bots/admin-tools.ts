@@ -11,7 +11,7 @@ import { lagosDate, lagosDayBounds } from '../lib/time';
 import { normalisePhone } from '../lib/phone';
 import { randomId } from '../lib/crypto';
 import type { Business } from '../domain/business';
-import { stockLabel, tracksStock, type Conversation, type Order, type Product } from '../domain/commerce';
+import { lineName, stockLabel, tracksStock, type Conversation, type Order, type Product, type Variant } from '../domain/commerce';
 import type { OutboundContent } from '../services/channel';
 import type { ToolSpec } from '../services/ai';
 import { adjustInventory, createCategories, deleteCategory, deleteProduct, findCategory, listCategories, listProducts, moveProduct, parseCategoryList, renameCategory, reorderCategory } from '../services/catalog';
@@ -23,7 +23,7 @@ import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../service
 import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
-import { productCarousel } from './product-cards';
+import { optionsLine, productCarousel } from './product-cards';
 import { matchProduct, nameScore } from '../services/match';
 import { example } from '../services/shop-type';
 import { suggestStatus } from '../services/status-tips';
@@ -77,13 +77,40 @@ async function oneProduct(ctx: ToolCtx, query: string, opts: { loose?: boolean }
   throw new ToolError(`I couldn't find "${query}" in your products. Send PRODUCTS to see them.`);
 }
 
+// "Black boots 42" → the product and its size 42. A product with options needs one named.
+async function productAndOption(ctx: ToolCtx, query: string): Promise<{ p: Product; v: Variant | null }> {
+  const pick = (p: Product, opt: string) => {
+    const o = opt.trim().toLowerCase().replace(/\s*\/\s*/g, ' ');
+    return p.variants!.find(v => v.label.toLowerCase().replace(/\s*\/\s*/g, ' ') === o || (p.optionNames?.length === 1 && Object.values(v.options)[0]?.toLowerCase() === o)) ?? null;
+  };
+  const words = query.trim().split(/\s+/);
+  let needsOption: Product | null = null;
+  let firstError: unknown = null;
+  // The whole phrase, then with the last one or two words as the size/colour ("… 42", "… 42 black").
+  for (const k of [0, 1, 2]) {
+    if (k >= words.length) break;
+    const name = words.slice(0, words.length - k).join(' ');
+    const opt = words.slice(words.length - k).join(' ');
+    let p: Product;
+    try { p = await oneProduct(ctx, name); } catch (e) { firstError ??= e; continue; }
+    if (!p.variants?.length) { if (k === 0) return { p, v: null }; continue; }
+    if (k === 0) { needsOption = p; continue; }
+    const v = pick(p, opt);
+    if (v) return { p, v };
+    needsOption ??= p;
+  }
+  if (needsOption) throw new ToolError(`Which one? *${needsOption.name}* comes in ${needsOption.variants!.slice(0, 12).map(v => v.label).join(', ')}. Send it again with the size or colour, e.g. "${needsOption.name} ${needsOption.variants![0].label}".`);
+  if (firstError) throw firstError;
+  throw new ToolError(`I couldn't find "${query}" in your products. Send PRODUCTS to see them.`);
+}
+
 async function oneOrder(ctx: ToolCtx, orderRef: string): Promise<Order> {
   const o = await findOrderByRef(ctx.db, ctx.business.id, orderRef);
   if (!o) throw new ToolError(`I couldn't find order ${orderRef}.`);
   return o;
 }
 
-const line = (p: Product) => `• ${p.name} — ${formatKobo(p.priceKobo)}${tracksStock(p) ? ` · ${stockLabel(p)}` : ''}${tracksStock(p) && p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
+const line = (p: Product) => `• ${p.name} — ${formatKobo(p.priceKobo)}${p.variants?.length ? ` · ${optionsLine(p)}${p.variants.some(v => v.stock !== null) ? ` (${stockLabel(p)})` : ''}` : tracksStock(p) ? ` · ${stockLabel(p)}` : ''}${tracksStock(p) && p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
 const orderLine = (o: Order) => `• ${o.ref}: ${formatKobo(o.payAmountKobo)}, ${o.status.replace('_', ' ')}${o.status === 'paid' ? `, ${o.fulfilment.replace(/_/g, ' ')}` : ''}`;
 
 export const HELP = [
@@ -145,21 +172,26 @@ export const adminTools = {
     spec: { name: 'restock', description: 'Add units to a product\'s stock.', params: { product: { type: 'string', description: 'Product name' }, quantity: { type: 'integer', description: 'Units to add' } }, required: ['product', 'quantity'] },
     schema: z.object({ product: z.string().min(1), quantity: qty.min(1).max(1_000_000) }),
     async run(a, ctx) {
-      const p = await oneProduct(ctx, a.product);
-      const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.quantity, 'restock', 'owner');
-      if (p.stock === 0 && n > 0) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'restock', name: p.name }, { productId: p.id }).catch(() => false);
-      return `${p.name}: +${a.quantity}, now ${n} in stock.`;
+      const { p, v } = await productAndOption(ctx, a.product);
+      const before = v ? v.stock : p.stock;
+      const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.quantity, 'restock', 'owner', v?.id);
+      if (before === 0 && n > 0) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'restock', name: lineName(p, v?.id) }, { productId: p.id }).catch(() => false);
+      return `${lineName(p, v?.id)}: +${a.quantity}, now ${n} in stock.`;
     },
   }),
   adjustStock: def({
     spec: { name: 'adjustStock', description: 'Correct stock, e.g. after selling offline (negative) or a count.', params: { product: { type: 'string', description: 'Product name' }, change: { type: 'integer', description: 'Units to add (positive) or remove (negative)' } }, required: ['product', 'change'] },
     schema: z.object({ product: z.string().min(1), change: qty.refine(n => n !== 0) }),
     async run(a, ctx) {
-      const p = await oneProduct(ctx, a.product);
+      const { p, v } = await productAndOption(ctx, a.product);
       try {
-        const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.change, 'adjustment', 'owner');
-        return `${p.name}: ${a.change > 0 ? '+' : ''}${a.change}, now ${n} in stock.`;
-      } catch (e) { if (String(e).includes('INSUFFICIENT_STOCK')) return `${p.name} only has ${p.stock} in stock.`; throw e; }
+        const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.change, 'adjustment', 'owner', v?.id);
+        return `${lineName(p, v?.id)}: ${a.change > 0 ? '+' : ''}${a.change}, now ${n} in stock.`;
+      } catch (e) {
+        if (String(e).includes('INSUFFICIENT_STOCK')) return `${lineName(p, v?.id)} only has ${v ? v.stock : p.stock} in stock.`;
+        if (String(e).includes('STOCK_NOT_TRACKED')) return `${lineName(p, v?.id)} has no stock count yet. Send *restock ${lineName(p, v?.id).replace(/[()]/g, '')} 10* to start counting.`;
+        throw e;
+      }
     },
   }),
   setAvailability: def({

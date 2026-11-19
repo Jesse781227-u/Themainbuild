@@ -2,7 +2,7 @@ import { Bot, clearFirestore, db, doc, seed, signUp } from './helpers';
 import { normalise, profileName } from '../src/bots/onboarding';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProduct, stripVariantWords } from '../src/bots/products-flow';
+import { parseProduct } from '../src/bots/products-flow';
 import { ruleGuess } from '../src/bots/category-guess';
 import { adjustInventory, createCategories, createProduct, deleteCategory, listCategories, moveProduct, parseCategoryList } from '../src/services/catalog';
 import { hasStock } from '../src/domain/commerce';
@@ -16,13 +16,17 @@ const opts = (m: { options: string[] }[]) => m.flatMap(x => x.options);
 const conv = (phone: string) => doc('conversations', `admin_${phone}`);
 
 test('parsing: prices, stock and size words in product lines', () => {
-  assert.deepEqual(parseProduct('Black AF1 25k'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null });
-  assert.deepEqual(parseProduct('Black AF1 ₦25,000'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null });
-  assert.deepEqual(parseProduct('Black AF1 25000 4'), { name: 'Black AF1', priceKobo: 2_500_000, stock: 4 });
-  assert.deepEqual(parseProduct('Jollof rice, 2500, 10'), { name: 'Jollof rice', priceKobo: 250_000, stock: 10 });
-  assert.deepEqual(parseProduct('add Small chops 1,500'), { name: 'Small chops', priceKobo: 150_000, stock: null });
-  assert.equal(stripVariantWords('Black AF1 25k sizes 40-44'), 'Black AF1 25k');
-  assert.equal(stripVariantWords('Black AF1 sizes 40-44 25k'), 'Black AF1 25k');
+  assert.deepEqual(parseProduct('Black AF1 25k'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null, options: null });
+  assert.deepEqual(parseProduct('Black AF1 ₦25,000'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null, options: null });
+  assert.deepEqual(parseProduct('Black AF1 25000 4'), { name: 'Black AF1', priceKobo: 2_500_000, stock: 4, options: null });
+  assert.deepEqual(parseProduct('Jollof rice, 2500, 10'), { name: 'Jollof rice', priceKobo: 250_000, stock: 10, options: null });
+  assert.deepEqual(parseProduct('add Small chops 1,500'), { name: 'Small chops', priceKobo: 150_000, stock: null, options: null });
+  // Sizes and colours become the product's options, wherever they are in the line.
+  const sizes = [{ name: 'Size', values: ['40', '41', '42', '43', '44'] }];
+  assert.deepEqual(parseProduct('Black AF1 25k sizes 40-44'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null, options: sizes });
+  assert.deepEqual(parseProduct('Black AF1 sizes 40-44 25k'), { name: 'Black AF1', priceKobo: 2_500_000, stock: null, options: sizes });
+  assert.deepEqual(parseProduct('Hoodie 7500 sizes S M L colors red and light blue')!.options, [{ name: 'Size', values: ['S', 'M', 'L'] }, { name: 'Colour', values: ['Red', 'Light Blue'] }]);
+  assert.deepEqual(parseProduct('Ankara gown 25000 colour: green/gold 10'), { name: 'Ankara gown', priceKobo: 2_500_000, stock: 10, options: [{ name: 'Colour', values: ['Green', 'Gold'] }] });
   assert.equal(parseProduct('hello there'), null);
   assert.deepEqual(parseCategoryList('sneakers, slides and bags\nSneakers'), ['Sneakers', 'Slides', 'Bags']);
   assert.deepEqual(parseCategoryList('1. Men\'s wear\n2. iPhone cases'), ["Men's wear", 'iPhone cases']);

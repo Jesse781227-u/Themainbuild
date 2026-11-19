@@ -7,7 +7,7 @@ import { addMinutes } from '../lib/time';
 import { orderRef, randomId } from '../lib/crypto';
 import type { Business } from '../domain/business';
 import type { Cart, CartLine, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
-import { hasStock, tracksStock } from '../domain/commerce';
+import { hasStock, lineName, priceOf, stockPatch, variantOf } from '../domain/commerce';
 
 // feePayer: who pays Relay's fee. 'owner' means customers pay the shop's prices and the fee comes out
 // of what the shop receives.
@@ -26,10 +26,39 @@ export const LATE_PAYMENT_GRACE_MINUTES = 24 * 60;
 const MAX_UNIQUE_OFFSET_KOBO = 999; // the offset is at most ₦9.99 on top
 const CANDIDATES = 25;
 
+// The same product and option on two cart lines counts as one line.
 export const mergeCartLines = (items: CartLine[]) => {
-  const qty = new Map<string, number>();
-  for (const item of items) qty.set(item.productId, (qty.get(item.productId) ?? 0) + item.qty);
-  return qty;
+  const lines = new Map<string, { productId: string; variantId: string | null; qty: number }>();
+  for (const item of items) {
+    const key = `${item.productId}#${item.variantId ?? ''}`;
+    const prev = lines.get(key);
+    lines.set(key, { productId: item.productId, variantId: item.variantId ?? null, qty: (prev?.qty ?? 0) + item.qty });
+  }
+  return [...lines.values()];
+};
+
+// Holds, releases or sells the stock for an order's lines, one update per product (several sizes
+// of one product are one write). Each line gets its stock movement.
+export function moveStock(tx: Transaction, db: Firestore, products: Map<string, Product | null>, lines: { productId: string; variantId?: string | null; qty: number }[], sign: 1 | -1, m: { businessId: string; orderId: string; reason: 'hold' | 'release' | 'sale'; suffix: string; actor: string; at: string }) {
+  const byProduct = new Map<string, { variantId?: string | null; delta: number }[]>();
+  for (const l of lines) byProduct.set(l.productId, [...(byProduct.get(l.productId) ?? []), { variantId: l.variantId ?? null, delta: sign * l.qty }]);
+  for (const [productId, changes] of byProduct) {
+    const p = products.get(productId);
+    if (!p) continue; // removed: nothing to move
+    const patch = stockPatch(p, changes);
+    if (!patch) continue; // no stock count: nothing to move
+    tx.update(db.doc(C.products, productId), { ...patch, updatedAt: m.at });
+    for (const c of changes) {
+      const mid = `${m.orderId}_${productId}${c.variantId ? `_${c.variantId}` : ''}_${m.suffix}`;
+      tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: m.businessId, productId, ...(c.variantId ? { variantId: c.variantId } : {}), delta: c.delta, reason: m.reason, orderId: m.orderId, actor: m.actor, at: m.at });
+    }
+  }
+}
+
+const productMap = async (tx: Transaction, db: Firestore, ids: string[]) => {
+  const unique = [...new Set(ids)];
+  const docs = (await tx.getAll(unique.map(id => db.doc(C.products, id)))) as (Product | null)[];
+  return new Map(unique.map((id, i) => [id, docs[i]]));
 };
 
 export const claimId = (businessId: string, amountKobo: number) => `${businessId}_${amountKobo}`;
@@ -58,21 +87,23 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
     const cart = (await tx.get(db.doc(C.carts, args.cartId))) as Cart | null;
     if (!cart || cart.businessId !== args.businessId) throw new Error('CART_NOT_FOUND');
     if (!(cart.expiresAt > now.toISOString())) throw new Error('CART_EXPIRED');
-    const qty = mergeCartLines(cart.items);
-    const ids = [...qty.keys()];
-    if (!ids.length) throw new Error('CART_EMPTY');
-    const products = (await tx.getAll(ids.map(id => db.doc(C.products, id)))) as (Product | null)[];
+    const lines = mergeCartLines(cart.items);
+    if (!lines.length) throw new Error('CART_EMPTY');
+    const products = await productMap(tx, db, lines.map(l => l.productId));
 
     const items: OrderLine[] = [];
     let subtotalKobo = 0;
-    products.forEach((p, i) => {
-      const wanted = qty.get(ids[i])!;
+    for (const l of lines) {
+      const p = products.get(l.productId);
       if (!p || p.businessId !== cart.businessId || p.deletedAt || !p.available) throw new Error('PRODUCT_UNAVAILABLE');
-      if (!Number.isSafeInteger(wanted) || wanted <= 0) throw new Error('INVALID_QTY');
-      if (!hasStock(p, wanted)) throw new Error('INSUFFICIENT_STOCK');
-      items.push({ productId: p.id, name: p.name, priceKobo: p.priceKobo, qty: wanted });
-      subtotalKobo += p.priceKobo * wanted;
-    });
+      // A product with options needs one picked (and that option must still exist).
+      if (p.variants?.length ? !variantOf(p, l.variantId) : l.variantId) throw new Error('PRODUCT_UNAVAILABLE');
+      if (!Number.isSafeInteger(l.qty) || l.qty <= 0) throw new Error('INVALID_QTY');
+      if (!hasStock(p, l.qty, l.variantId)) throw new Error('INSUFFICIENT_STOCK');
+      const price = priceOf(p, l.variantId);
+      items.push({ productId: p.id, name: lineName(p, l.variantId), priceKobo: price, qty: l.qty, ...(l.variantId ? { variantId: l.variantId } : {}) });
+      subtotalKobo += price * l.qty;
+    }
 
     const delivery = args.delivery ?? null;
     const deliveryFeeKobo = delivery?.feeKobo ?? 0;
@@ -90,13 +121,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
       paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
     };
 
-    products.forEach((p, i) => {
-      const wanted = qty.get(ids[i])!;
-      if (!tracksStock(p!)) return; // no stock count: nothing to reserve
-      tx.update(db.doc(C.products, p!.id), { stock: p!.stock - wanted, updatedAt: at });
-      const mid = `${order.id}_${p!.id}_hold`;
-      tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: p!.id, delta: -wanted, reason: 'hold', orderId: order.id, actor: 'system', at });
-    });
+    moveStock(tx, db, products, items, -1, { businessId: order.businessId, orderId: order.id, reason: 'hold', suffix: 'hold', actor: 'system', at });
     tx.create(db.doc(C.orders, order.id), { ...order });
     tx.set(db.doc(C.amountClaims, claimId(order.businessId, payAmountKobo)), {
       businessId: order.businessId, amountKobo: payAmountKobo, orderId: order.id, holdExpiresAt,
@@ -113,14 +138,9 @@ export async function releaseHold(db: Firestore, orderId: string, now = new Date
   return db.runTransaction(async tx => {
     const order = (await tx.get(db.doc(C.orders, orderId))) as Order | null;
     if (!order || order.status !== 'awaiting_payment' || order.holdExpiresAt > now.toISOString()) return false;
-    const products = await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)));
+    const products = await productMap(tx, db, order.items.map(l => l.productId));
     const at = now.toISOString();
-    order.items.forEach((line, i) => {
-      if (!products[i] || !tracksStock(products[i] as unknown as Product)) return; // removed, or no stock count: nothing to restock
-      tx.update(db.doc(C.products, line.productId), { stock: increment(line.qty), updatedAt: at });
-      const mid = `${order.id}_${line.productId}_release`;
-      tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: line.productId, delta: line.qty, reason: 'release', orderId: order.id, actor: 'system', at });
-    });
+    moveStock(tx, db, products, order.items, 1, { businessId: order.businessId, orderId: order.id, reason: 'release', suffix: 'release', actor: 'system', at });
     tx.update(db.doc(C.orders, order.id), { status: 'expired', updatedAt: at });
     return true;
   });
@@ -143,13 +163,8 @@ export async function cancelOrder(db: Firestore, orderId: string, businessId: st
     if (order.status === 'cancelled') return 'already_cancelled' as const;
     const at = now.toISOString();
     if (order.status === 'awaiting_payment') {
-      const products = await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)));
-      order.items.forEach((line, i) => {
-        if (!products[i] || !tracksStock(products[i] as unknown as Product)) return;
-        tx.update(db.doc(C.products, line.productId), { stock: increment(line.qty), updatedAt: at });
-        const mid = `${order.id}_${line.productId}_release`;
-        tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId, productId: line.productId, delta: line.qty, reason: 'release', orderId: order.id, actor: 'owner', at });
-      });
+      const products = await productMap(tx, db, order.items.map(l => l.productId));
+      moveStock(tx, db, products, order.items, 1, { businessId, orderId: order.id, reason: 'release', suffix: 'release', actor: 'owner', at });
     }
     tx.update(db.doc(C.orders, order.id), { status: 'cancelled', updatedAt: at });
     return 'cancelled' as const;

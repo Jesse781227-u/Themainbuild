@@ -9,7 +9,7 @@ import { log } from '../lib/logger';
 import { maskPhone } from '../lib/phone';
 import type { Business } from '../domain/business';
 import type { Cart, Category, Conversation, Customer, Order, OrderDelivery, Product } from '../domain/commerce';
-import { hasStock, tracksStock } from '../domain/commerce';
+import { hasStock, lineName, priceOf, tracksStock, variantOf, type CartLine } from '../domain/commerce';
 import { send, optionIds, resolveSender, type OutboundContent } from '../services/channel';
 import { listCategories, listProducts } from '../services/catalog';
 import { categoryCarousel, productCarousel, productDetails, suggestionMessage } from './product-cards';
@@ -148,6 +148,9 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
     if (kind === 'buy') return buy(ctx, run, business, id, reply);
     if (kind === 'add') return addToCart(ctx, run, business, id, 1, reply);
+    // A size/colour picked from the list ("addv:<product>:<option>"), or the first of two options.
+    if (kind === 'addv') return addToCart(ctx, run, business, id, 1, reply, choice.split(':')[2] ?? null);
+    if (kind === 'opt1') return pickVariant(ctx, business, id, reply, choice.split(':').slice(2).join(':'));
     if (kind === 'cart') return showCart(ctx, business, reply);
     if (kind === 'clear') { await db.delete(db.doc(C.carts, conversationId)); return reply(buttons('Cart cleared.', [['menu', 'See the menu']]), { step: 'browse' }); }
     if (kind === 'checkout') return startCheckout(ctx, business, reply);
@@ -286,10 +289,10 @@ async function orderAgain(ctx: ShopContext, run: Run, business: Business, reply:
   const last = (await recentOrders(ctx.db, [['customerId', '==', ctx.conversationId]], 10)).find(o => o.businessId === business.id && o.status === 'paid');
   if (!last) return greet(ctx, business, null, reply, { again: true });
   const products = (await ctx.db.getAll(last.items.map(i => ctx.db.doc(C.products, i.productId)))) as (Product | null)[];
-  const ok = last.items.filter((_, n) => { const p = products[n]; return p && !p.deletedAt && p.available && hasStock(p); });
+  const ok = last.items.filter((l, n) => { const p = products[n]; return p && !p.deletedAt && p.available && (p.variants?.length ? !!l.variantId && hasStock(p, 1, l.variantId) : !l.variantId && hasStock(p)); });
   if (!ok.length) return reply(buttons(`Sorry, the items from your last order (${last.ref}) aren't available right now.`, [['menu', 'See what we have']]));
   const now = new Date();
-  await ctx.db.set(ctx.db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: ok.map(i => ({ productId: i.productId, qty: i.qty })), expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: now.toISOString() });
+  await ctx.db.set(ctx.db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: ok.map(i => ({ productId: i.productId, qty: i.qty, ...(i.variantId ? { variantId: i.variantId } : {}) })), expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: now.toISOString() });
   return showCart(ctx, business, reply, ok.length < last.items.length ? `Here's your last order again (some items aren't available right now).` : `Here's your last order again 👍`);
 }
 
@@ -358,7 +361,32 @@ async function buy(ctx: ShopContext, run: Run, business: Business, productId: st
   const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
   if (!hasStock(p)) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'My cart']]));
+  if (p.variants?.length) return pickVariant(ctx, business, p.id, reply);
   return addToCart(ctx, run, business, p.id, 1, reply);
+}
+
+// "Which size?": the options still in stock as a list. More than fit in one list with two kinds of
+// option (size and colour): the first kind, then the second. first: the value already picked.
+async function pickVariant(ctx: ShopContext, business: Business, productId: string, reply: Reply, first?: string) {
+  const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
+  if (!p || p.businessId !== business.id || p.deletedAt || !p.available || !p.variants?.length) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
+  const names = p.optionNames ?? [];
+  const inStock = p.variants.filter(v => hasStock(p, 1, v.id));
+  if (!inStock.length) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'My cart']]));
+  const soldOut = p.variants.filter(v => !hasStock(p, 1, v.id)).map(v => v.label);
+  const note = soldOut.length ? `\nSold out: ${soldOut.slice(0, 8).join(', ')}${soldOut.length > 8 ? '…' : ''}` : '';
+  const what = (n: string | undefined) => (n ?? 'option').toLowerCase();
+  const row = (v: typeof inStock[number]) => ({ id: `addv:${p.id}:${v.id}`, title: v.label, description: `${formatKobo(priceOf(p, v.id))}${v.stock !== null && v.stock <= 3 ? ` · only ${v.stock} left` : ''}` });
+  if (first !== undefined) {
+    const matching = inStock.filter(v => v.options[names[0]] === first);
+    if (!matching.length) return pickVariant(ctx, business, productId, reply);
+    return reply(list(`*${p.name}*, ${what(names[0])} ${first}. Which ${what(names[1])}?`, `Pick ${what(names[1])}`, matching.slice(0, 10).map(row), names[1] ?? 'Options'), { step: 'browse' });
+  }
+  if (inStock.length <= 10 || names.length < 2) {
+    return reply(list(`*${p.name}* · ${formatKobo(p.priceKobo)}\nWhich ${names.length === 2 ? `${what(names[0])} and ${what(names[1])}` : what(names[0])}?${note}`, `Pick ${what(names[0])}`, inStock.slice(0, 10).map(row), names[0] ?? 'Options'), { step: 'browse' });
+  }
+  const firsts = [...new Set(inStock.map(v => v.options[names[0]]))].slice(0, 10);
+  return reply(list(`*${p.name}* · ${formatKobo(p.priceKobo)}\nWhich ${what(names[0])}?${note}`, `Pick ${what(names[0])}`, firsts.map(x => ({ id: `opt1:${p.id}:${x}`, title: x })), names[0]), { step: 'browse' });
 }
 
 // Free-text search across product names and their categories: "black sneakers", "zobo".
@@ -391,23 +419,30 @@ async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {
 // What this customer looked at or asked about, for Status mentions (ids only; never in TEST mode).
 const interest = (ctx: ShopContext, keys: string[]) => (ctx.test ? Promise.resolve() : noteInterest(ctx.db, ctx.conversationId, ctx.businessId, keys).catch(e => log('warn', 'interest_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 80) })));
 
-async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply) {
+async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply, variantId: string | null = null) {
   await interest(ctx, [`p_${productId}`]);
   const { db } = ctx;
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
+  // A product with sizes/colours needs one picked first.
+  const v = variantOf(p, variantId);
+  if (p.variants?.length && !v) return pickVariant(ctx, business, p.id, reply);
+  if (!p.variants?.length) variantId = null;
+  const name = lineName(p, variantId);
   const cart = await loadCart(db, ctx);
-  const items = cart?.items.filter(i => i.productId !== p.id) ?? [];
-  const already = cart?.items.find(i => i.productId === p.id)?.qty ?? 0;
+  const same = (i: CartLine) => i.productId === p.id && (i.variantId ?? null) === variantId;
+  const items = cart?.items.filter(i => !same(i)) ?? [];
+  const already = cart?.items.find(same)?.qty ?? 0;
   const want = already + qty;
-  if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
+  const left = v ? v.stock : p.stock;
+  if (left !== null && want > left) return reply(buttons(left ? `Sorry, only ${left} ${name} left.` : `Sorry, ${name} is sold out right now.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
   const now = new Date();
-  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: cart?.suggestedAt ?? null });
+  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want, ...(variantId ? { variantId } : {}) }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: cart?.suggestedAt ?? null });
   // Then what goes with it: one suggestion per cart (adding from a suggestion doesn't bring another),
   // and never twice for the same item in a chat.
   const suggest = business.suggestions !== false && !cart?.suggestedAt && !run.state.suggested?.includes(p.id);
   if (suggest) run.state.suggested = [...(run.state.suggested ?? []), p.id].slice(-30);
-  const added = renderMessage(business, 'addedToCart', { customer: (await db.get(db.doc(C.customers, ctx.conversationId)) as Customer | null)?.name, item: `${qty} × ${p.name}` });
+  const added = renderMessage(business, 'addedToCart', { customer: (await db.get(db.doc(C.customers, ctx.conversationId)) as Customer | null)?.name, item: `${qty} × ${name}` });
   // The suggestion goes first and the cart last, so the cart's Checkout button is at the bottom and
   // nothing arrives under it a moment later.
   const picks = suggest ? await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; }) : null;
@@ -422,8 +457,8 @@ async function addToCart(ctx: ShopContext, run: Run, business: Business, product
 async function cartLines(db: Firestore, cart: Cart) {
   const products = (await db.getAll(cart.items.map(i => db.doc(C.products, i.productId)))) as (Product | null)[];
   const lines = cart.items.map((i, n) => ({ ...i, product: products[n] })).filter(l => l.product && !l.product.deletedAt);
-  const subtotal = lines.reduce((s, l) => s + l.product!.priceKobo * l.qty, 0);
-  return { lines, subtotal, text: lines.map(l => `• ${l.qty} × ${l.product!.name}: ${formatKobo(l.product!.priceKobo * l.qty)}`).join('\n') };
+  const subtotal = lines.reduce((s, l) => s + priceOf(l.product!, l.variantId) * l.qty, 0);
+  return { lines, subtotal, text: lines.map(l => `• ${l.qty} × ${lineName(l.product!, l.variantId)}: ${formatKobo(priceOf(l.product!, l.variantId) * l.qty)}`).join('\n') };
 }
 
 async function showCart(ctx: ShopContext, business: Business, reply: Reply, prefix = '') {

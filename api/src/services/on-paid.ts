@@ -1,4 +1,5 @@
 import { C } from '../db';
+import { moveStock } from './orders';
 import type { Firestore, Transaction } from '../lib/firestore';
 import { increment } from '../lib/firestore';
 import { formatKobo } from '../lib/money';
@@ -51,16 +52,15 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   let needsAttention: string | null = null;
   const at = payment.paidAt;
   if (late) {
-    const products = (await tx.getAll(order.items.map(l => db.doc(C.products, l.productId)))) as (Product | null)[];
-    const allThere = order.items.every((l, i) => products[i] && hasStock(products[i]!, l.qty));
-    if (allThere) {
-      order.items.forEach((l, i) => {
-        if (!tracksStock(products[i]!)) return; // no stock count: nothing to take
-        tx.update(db.doc(C.products, l.productId), { stock: increment(-l.qty), updatedAt: at });
-        const mid = `${order.id}_${l.productId}_late`;
-        tx.create(db.doc(C.stockMovements, mid), { id: mid, businessId: order.businessId, productId: l.productId, delta: -l.qty, reason: 'sale', orderId: order.id, actor: 'system', at });
-      });
-    } else needsAttention = 'paid_after_expiry_out_of_stock';
+    const ids = [...new Set(order.items.map(l => l.productId))];
+    const docs = (await tx.getAll(ids.map(id => db.doc(C.products, id)))) as (Product | null)[];
+    const products = new Map(ids.map((id, i) => [id, docs[i]]));
+    // Enough of each line (sizes of one product added up).
+    const want = new Map<string, number>();
+    for (const l of order.items) want.set(`${l.productId}#${l.variantId ?? ''}`, (want.get(`${l.productId}#${l.variantId ?? ''}`) ?? 0) + l.qty);
+    const allThere = [...want].every(([k, q]) => { const [pid, vid] = k.split('#'); const p = products.get(pid); return !!p && hasStock(p, q, vid || null); });
+    if (allThere) moveStock(tx, db, products, order.items, -1, { businessId: order.businessId, orderId: order.id, reason: 'sale', suffix: 'late', actor: 'system', at });
+    else needsAttention = 'paid_after_expiry_out_of_stock';
   }
 
   // The receipt PDF's private link (/receipts/<token>), made on request from the order.

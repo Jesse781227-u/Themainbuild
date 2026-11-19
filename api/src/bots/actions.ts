@@ -8,7 +8,7 @@
 import { C } from '../db';
 import type { Business } from '../domain/business';
 import type { Order, Product } from '../domain/commerce';
-import { hasStock } from '../domain/commerce';
+import { hasStock, totalStock } from '../domain/commerce';
 import { formatKobo } from '../lib/money';
 import { lagosDate } from '../lib/time';
 import type { OutboundContent } from '../services/channel';
@@ -107,6 +107,16 @@ async function pendingOrders(c: ActionCtx): Promise<Out> {
 async function soldOut(c: ActionCtx): Promise<Out> {
   const products = (await listProducts(c.db, c.business.id)).filter(p => p.available);
   let p: Product | null = null;
+  // One size/colour: "act:soldout:<product>:<option>".
+  const [argId, variantId] = (c.arg ?? '').split(':');
+  if (variantId) {
+    const prod = products.find(x => x.id === argId);
+    const v = prod?.variants?.find(x => x.id === variantId);
+    if (!prod || !v) return 'That option is gone. Send *products* to see them.';
+    const variants = prod.variants!.map(x => (x.id === v.id ? { ...x, stock: 0 } : x));
+    await c.db.update(c.db.doc(C.products, prod.id), { variants, stock: totalStock(variants), updatedAt: new Date().toISOString() });
+    return `✅ *${prod.name} (${v.label})* is marked sold out. When it's back, send *restock ${prod.name} ${v.label.replace(/ \/ /g, ' ')} 10*.`;
+  }
   if (c.arg) {
     p = products.find(x => x.id === c.arg) ?? null;
     if (!p) {
@@ -118,12 +128,17 @@ async function soldOut(c: ActionCtx): Promise<Out> {
     }
   }
   if (!p) {
-    const inStock = products.filter(hasStock);
+    const inStock = products.filter(p => hasStock(p));
     if (!inStock.length) return 'Everything is already sold out or hidden.';
     const rows = inStock.slice(0, 10).map(x => ({ id: `act:soldout:${x.id}`, title: x.name, description: formatKobo(x.priceKobo) }));
     return list(`Which product is sold out?${inStock.length > 10 ? `\n\nNot in the list? Send *soldout* and its name, e.g. *soldout ${example(c.business, inStock, { nameOnly: true })}*.` : ''}`, 'Pick product', rows, 'In stock');
   }
-  await c.db.update(c.db.doc(C.products, p.id), { stock: 0, updatedAt: new Date().toISOString() });
+  // With sizes/colours: which one (or all of them).
+  if (p.variants?.length) {
+    const rows = p.variants.filter(v => v.stock !== 0).slice(0, 9).map(v => ({ id: `act:soldout:${p!.id}:${v.id}`, title: v.label }));
+    if (rows.length) return list(`Which *${p.name}* is sold out?`, 'Pick option', [...rows, { id: `act:soldoutall:${p.id}`, title: 'All of them' }], p.optionNames?.join(' / ') || 'Options');
+  }
+  await c.db.update(c.db.doc(C.products, p.id), { stock: 0, ...(p.variants?.length ? { variants: p.variants.map(v => ({ ...v, stock: 0 })) } : {}), updatedAt: new Date().toISOString() });
   return `✅ *${p.name}* is marked sold out. Customers still see it, marked *Sold out*. When it's back, send *restock ${p.name} 10*.`;
 }
 
@@ -293,6 +308,12 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'tipsoff', hint: 'Stop Status tips', aliases: ['status tips off', 'status suggestions off', 'stop status tips'], next: [['status', 'Make a Status'], ['menu', 'Menu']], run: c => tips(c, false) },
   { id: 'tipson', hint: 'Status tips again', aliases: ['status tips on', 'status suggestions on'], next: [['status', 'Make a Status'], ['menu', 'Menu']], run: c => tips(c, true) },
   { id: 'order', hint: 'One order in full', run: viewOrder },
+  { id: 'soldoutall', hint: 'Every option of a product sold out', next: [['soldout', 'Mark another'], ['products', 'My products'], ['menu', 'Menu']], async run(c) {
+    const p = (await c.db.get(c.db.doc(C.products, c.arg ?? '-'))) as Product | null;
+    if (!p || p.businessId !== c.business.id || p.deletedAt) return 'That product is gone.';
+    await c.db.update(c.db.doc(C.products, p.id), { stock: 0, ...(p.variants?.length ? { variants: p.variants.map(v => ({ ...v, stock: 0 })) } : {}), updatedAt: new Date().toISOString() });
+    return `✅ All of *${p.name}* is marked sold out.`;
+  } },
   { id: 'msgcust', hint: 'Open the chat with an order\'s customer', run: messageCustomer },
   { id: 'ready', hint: 'Mark a paid order ready', next: [['pending', 'To deliver'], ['menu', 'Menu']], async run(c) { return runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c); } },
   { id: 'photo', hint: 'Add a photo to a product', async run(c) {

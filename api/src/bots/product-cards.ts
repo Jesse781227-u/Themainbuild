@@ -21,9 +21,20 @@ export const imageFor = (cfg: Pick<Config, 'API_BASE_URL'>, p: Pick<Product, 'im
 // In-stock first, then sold out; alphabetical within each.
 export const browseOrder = (ps: Product[]) => [...ps].sort((a, b) => Number(!hasStock(a)) - Number(!hasStock(b)) || a.name.localeCompare(b.name));
 
+// "Sizes 40–44 · Black, Brown": short enough for a card.
+export function optionsLine(p: Pick<Product, 'variants' | 'optionNames'>) {
+  if (!p.variants?.length) return '';
+  return (p.optionNames ?? []).map(n => {
+    const vals = [...new Set(p.variants!.map(v => v.options[n]).filter(Boolean))];
+    const nums = vals.every(x => /^\d+$/.test(x)) && vals.length > 2 ? `${vals[0]}–${vals[vals.length - 1]}` : vals.slice(0, 4).join(', ') + (vals.length > 4 ? '…' : '');
+    return `${n === 'Size' ? 'Sizes' : n === 'Colour' ? 'Colours' : n} ${nums}`;
+  }).join(' · ');
+}
+
 export function cardFor(cfg: Pick<Config, 'API_BASE_URL'>, p: Product): CarouselCard {
   const soldOut = !hasStock(p);
-  const head = `*${p.name}*\n${formatKobo(p.priceKobo)}${soldOut ? ' · Sold out' : ''}`;
+  const opts = optionsLine(p);
+  const head = `*${p.name}*\n${formatKobo(p.priceKobo)}${soldOut ? ' · Sold out' : ''}${opts ? `\n${opts}` : ''}`;
   const room = CAROUSEL.cardBodyMax - head.length - 1;
   const desc = p.description && room > 20 ? `\n${clip(p.description.replace(/\s+/g, ' '), room)}` : '';
   return { imageUrl: imageFor(cfg, p), body: `${head}${desc}`, buttons: [[`buy:${p.id}`, soldOut ? 'Sold out' : 'Add to cart'], [`det:${p.id}`, 'See details']] };
@@ -46,7 +57,8 @@ export function productCarousel(cfg: Pick<Config, 'API_BASE_URL'>, business: Pic
 // One product on its own: big photo, description, and what the customer can do next.
 export function productDetails(cfg: Pick<Config, 'API_BASE_URL'>, p: Product, intro?: string): OutboundContent[] {
   const soldOut = !hasStock(p);
-  const body = `${intro ? `${intro}\n\n` : ''}*${p.name}*\n${formatKobo(p.priceKobo)}${p.description ? `\n\n${p.description}` : ''}${soldOut ? '\n\nSold out right now.' : ''}`;
+  const opts = optionsLine(p);
+  const body = `${intro ? `${intro}\n\n` : ''}*${p.name}*\n${formatKobo(p.priceKobo)}${opts ? `\n${opts}` : ''}${p.description ? `\n\n${p.description}` : ''}${soldOut ? '\n\nSold out right now.' : ''}`;
   const content = buttons(clip(body, 1000), soldOut ? [['menu', 'See the menu']] : [[`buy:${p.id}`, 'Add to cart'], ['menu', 'See the menu'], ['cart', 'My cart']]);
   (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: imageFor(cfg, p) } };
   return [content];
@@ -61,7 +73,7 @@ export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: 
   const slice = categories.slice(page * PER_PAGE, page * PER_PAGE + (rest > CAROUSEL.maxCards ? PER_PAGE : CAROUSEL.maxCards));
   const cards: CarouselCard[] = slice.map(c => {
     const items = browseOrder(products.filter(p => p.categoryId === c.id));
-    const inStock = items.filter(hasStock);
+    const inStock = items.filter(p => hasStock(p));
     const from = inStock.length ? Math.min(...inStock.map(p => p.priceKobo)) : null;
     const cover = c.coverImage || items.find(p => p.images[0])?.images[0] || `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`;
     const count = `${items.length} item${items.length === 1 ? '' : 's'}`;

@@ -3,6 +3,7 @@
 // Nothing real happens: no orders, no stock holds, no owner alerts, no money. The "order" is kept in
 // testReceipts so the PDF receipt can be shown. EXIT goes back to Relay. Available any time.
 import { C } from '../db';
+import { lineName, priceOf } from '../domain/commerce';
 import type { Business } from '../domain/business';
 import type { Cart, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
 import { randomId } from '../lib/crypto';
@@ -51,7 +52,7 @@ export async function exitTest(ctx: AdminContext, readyToConnect: boolean, reply
 // Checkout in test mode: the same totals a customer would see, kept only for the receipt.
 export async function testOrder(ctx: ShopContext, business: Business, cart: Cart, delivery: OrderDelivery | null, reply: Reply) {
   const products = (await ctx.db.getAll(cart.items.map(i => ctx.db.doc(C.products, i.productId)))) as (Product | null)[];
-  const items: OrderLine[] = cart.items.map((i, n) => ({ i, p: products[n] })).filter(x => x.p && !x.p.deletedAt).map(({ i, p }) => ({ productId: p!.id, name: p!.name, priceKobo: p!.priceKobo, qty: i.qty }));
+  const items: OrderLine[] = cart.items.map((i, n) => ({ i, p: products[n] })).filter(x => x.p && !x.p.deletedAt).map(({ i, p }) => ({ productId: p!.id, name: lineName(p!, i.variantId), priceKobo: priceOf(p!, i.variantId), qty: i.qty, ...(i.variantId ? { variantId: i.variantId } : {}) }));
   if (!items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
   const subtotalKobo = items.reduce((s, l) => s + l.priceKobo * l.qty, 0);
   const policy = policyFor(business, ctx.cfg);

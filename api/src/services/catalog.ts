@@ -3,7 +3,7 @@ import { C } from '../db';
 import type { Firestore } from '../lib/firestore';
 import { increment } from '../lib/firestore';
 import { randomId } from '../lib/crypto';
-import { tracksStock, type Category, type Product } from '../domain/commerce';
+import { totalStock, tracksStock, type Category, type Product } from '../domain/commerce';
 
 const iso = () => new Date().toISOString();
 
@@ -18,6 +18,8 @@ export const productInput = z.object({
   available: z.boolean().default(true),
   stock: z.number().int().min(0).nullable().default(null), // null = not tracked
   lowStockThreshold: z.number().int().min(0).default(5),
+  optionNames: z.array(z.string().trim().min(1).max(20)).max(2).nullable().default(null),
+  variants: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,20}$/), label: z.string().trim().min(1).max(60), options: z.record(z.string().max(30)), priceKobo: z.number().int().min(0).nullable(), stock: z.number().int().min(0).nullable() })).max(30).nullable().default(null),
 });
 
 // A product id that already belongs to another business can never be taken over, and the category
@@ -26,7 +28,8 @@ export async function createProduct(db: Firestore, input: z.input<typeof product
   const v = productInput.parse(input);
   const id = v.id ?? randomId(9);
   const at = iso();
-  const product: Product = { ...v, id, createdAt: at, updatedAt: at, deletedAt: null };
+  // With options, the product's stock is their total (null if any isn't counted).
+  const product: Product = { ...v, ...(v.variants?.length ? { stock: totalStock(v.variants) } : {}), id, createdAt: at, updatedAt: at, deletedAt: null };
   return db.runTransaction(async tx => {
     const [existing, category] = await tx.getAll([db.doc(C.products, id), db.doc(C.categories, v.categoryId)]);
     if (existing && existing.businessId !== v.businessId) throw new Error('PRODUCT_ID_TAKEN');
@@ -51,19 +54,33 @@ export async function listProducts(db: Firestore, businessId: string, opts: { av
 
 // Restock (+) or correct (-) stock. Scoped: another business's product is NOT_FOUND. Restocking a
 // product that has no stock count starts counting from that number.
-export async function adjustInventory(db: Firestore, productId: string, businessId: string, delta: number, reason: 'restock' | 'adjustment', actor: string) {
+// variantId: one option of a product with options (e.g. size 42). A first restock of an option (or
+// product) with no stock count starts counting it.
+export async function adjustInventory(db: Firestore, productId: string, businessId: string, delta: number, reason: 'restock' | 'adjustment', actor: string, variantId?: string | null) {
   if (!Number.isSafeInteger(delta) || delta === 0) throw new Error('INVALID_DELTA');
   return db.runTransaction(async tx => {
     const ref = db.doc(C.products, productId);
     const p = (await tx.get(ref)) as Product | null;
     if (!p || p.businessId !== businessId || p.deletedAt) throw new Error('NOT_FOUND');
-    if (!tracksStock(p) && delta < 0) throw new Error('STOCK_NOT_TRACKED');
-    const next = (tracksStock(p) ? p.stock : 0) + delta;
-    if (next < 0) throw new Error('INSUFFICIENT_STOCK');
     const at = iso();
     const movementId = `${productId}_${randomId(8)}`;
-    tx.update(ref, { stock: tracksStock(p) ? increment(delta) : next, updatedAt: at });
-    tx.create(db.doc(C.stockMovements, movementId), { id: movementId, businessId, productId, delta, reason, actor, at });
+    let next: number;
+    if (p.variants?.length) {
+      const variants = p.variants.map(v => ({ ...v }));
+      const v = variants.find(x => x.id === variantId);
+      if (!v) throw new Error('VARIANT_REQUIRED');
+      if (v.stock === null && delta < 0) throw new Error('STOCK_NOT_TRACKED');
+      next = (v.stock ?? 0) + delta;
+      if (next < 0) throw new Error('INSUFFICIENT_STOCK');
+      v.stock = next;
+      tx.update(ref, { variants, stock: totalStock(variants), updatedAt: at });
+    } else {
+      if (!tracksStock(p) && delta < 0) throw new Error('STOCK_NOT_TRACKED');
+      next = (tracksStock(p) ? p.stock : 0) + delta;
+      if (next < 0) throw new Error('INSUFFICIENT_STOCK');
+      tx.update(ref, { stock: tracksStock(p) ? increment(delta) : next, updatedAt: at });
+    }
+    tx.create(db.doc(C.stockMovements, movementId), { id: movementId, businessId, productId, ...(variantId ? { variantId } : {}), delta, reason, actor, at });
     return next;
   });
 }

@@ -4,7 +4,7 @@
 // setcat:<productId>:<categoryId>.
 import { C } from '../db';
 import type { Business } from '../domain/business';
-import { stockLabel, type Category, type Product } from '../domain/commerce';
+import { makeVariants, stockLabel, totalStock, type Category, type Product, type Variant } from '../domain/commerce';
 import type { Firestore, DocRef } from '../lib/firestore';
 import { formatKobo, nairaToKobo } from '../lib/money';
 import type { Config } from '../config';
@@ -15,9 +15,11 @@ import { buttons, list, type BotDeps } from './common';
 import { parseProductLine } from './intent';
 import { productCarousel } from './product-cards';
 import { matchProduct, titleCase } from '../services/match';
+import { extractOptions, optionSummary, type OptionList } from '../services/options';
 import { suggestStatus } from '../services/status-tips';
 
-export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null }
+// options: sizes/colours typed with it ("sizes 40-44 colours black, brown") → one product with variants.
+export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null; options?: OptionList[] | null }
 export interface ProductFlowState {
   productDraft?: ProductDraft | null;      // waiting for the owner to pick its category
   awaiting?: string | null;                // 'newCategory' (a category name) or 'msg:<key>' (a shop message)
@@ -29,19 +31,24 @@ export interface ProductFlowState {
 export interface FlowCtx { db: Firestore; cfg: Config; deps: BotDeps; business: Business; convRef: DocRef; state: ProductFlowState }
 export type Out = OutboundContent | string;
 
-// Size/colour wording is handled with variants (phase B); until then it's dropped from the line.
-export const stripVariantWords = (text: string) => text.replace(/\b(sizes?|colou?rs?)\b\s*:?\s*[A-Za-z0-9\-–/ ]*?(?=\s+(?:₦|n)?\d[\d,]*(?:\.\d+)?k?\b|$)/gi, ' ').replace(/\s+/g, ' ').trim();
-
-export function parseProduct(text: string): { name: string; priceKobo: number; stock: number | null } | null {
-  const p = parseProductLine(stripVariantWords(text.replace(/^add\s+/i, '')));
+export function parseProduct(text: string): { name: string; priceKobo: number; stock: number | null; options: OptionList[] | null } | null {
+  const { rest, options } = extractOptions(text.replace(/^add\s+/i, ''));
+  const p = parseProductLine(rest);
   if (!p || !p.name) return null;
   const priceKobo = nairaToKobo(p.price);
   if (priceKobo === null || priceKobo <= 0) return null;
-  return { name: p.name.replace(/[,\s]+$/, '').slice(0, 120), priceKobo, stock: p.stock ?? null };
+  return { name: p.name.replace(/[,\s]+$/, '').slice(0, 120), priceKobo, stock: p.stock ?? null, options: options.length ? options : null };
 }
 
+// New options for a product, keeping the stock and price already set for a size/colour it had.
+function variantsFrom(options: OptionList[], old: Variant[] | null | undefined): Variant[] {
+  return makeVariants(options).map(v => { const was = old?.find(o => o.label.toLowerCase() === v.label.toLowerCase()); return was ? { ...v, stock: was.stock, priceKobo: was.priceKobo } : v; });
+}
+const optionsOf = (p: Pick<Product, 'variants' | 'optionNames'>): OptionList[] => (p.optionNames ?? []).map(name => ({ name, values: [...new Set((p.variants ?? []).map(v => v.options[name]).filter(Boolean))] }));
+
 export function card(p: Product, categoryName: string, headline?: string): OutboundContent {
-  const stock = p.stock === null ? '' : `\nStock: ${stockLabel(p)}`;
+  const opts = p.variants?.length ? `\n${optionSummary(optionsOf(p))}${p.variants.some(v => v.stock !== null) ? `\nStock: ${stockLabel(p)}` : `\nTo count stock per option: *restock ${p.name} ${p.variants[0].label.split(' / ')[0]} 5*`}` : '';
+  const stock = p.variants?.length ? opts : p.stock === null ? '' : `\nStock: ${stockLabel(p)}`;
   const body = headline ? `✅ ${headline}${stock}` : `*${p.name}*\n${formatKobo(p.priceKobo)} · ${categoryName}${stock}`;
   const content = buttons(body, [[`pok:${p.id}`, 'Looks right'], [`pedit:${p.id}`, 'Fix it']]);
   if (p.images[0]) (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: p.images[0] } };
@@ -62,7 +69,8 @@ async function ensureCategories(f: FlowCtx) {
 }
 
 async function create(f: FlowCtx, d: ProductDraft, cat: Category, opts: { sayNew?: boolean } = {}): Promise<Out[]> {
-  const p = await createProduct(f.db, { businessId: f.business.id, name: titleCase(d.name), priceKobo: d.priceKobo, stock: d.stock, categoryId: cat.id, images: d.imageUrl ? [d.imageUrl] : [] });
+  const variants = d.options?.length ? variantsFrom(d.options, null) : null;
+  const p = await createProduct(f.db, { businessId: f.business.id, name: titleCase(d.name), priceKobo: d.priceKobo, stock: variants ? null : d.stock, categoryId: cat.id, images: d.imageUrl ? [d.imageUrl] : [], optionNames: variants ? d.options!.map(o => o.name) : null, variants });
   await save(f, { productDraft: null, awaiting: null, matchIds: null });
   await suggestStatus(f.db, f.deps, f.business, { kind: 'new', name: p.name }, { productId: p.id }).catch(() => false);
   return [card(p, cat.name, opts.sayNew ? `Added new product *${p.name}* ${formatKobo(p.priceKobo)} in ${cat.name}.` : undefined)];
@@ -100,7 +108,11 @@ async function updateExisting(f: FlowCtx, existing: Product, d: ProductDraft): P
   const at = new Date().toISOString();
   const patch: Record<string, unknown> = {};
   if (d.priceKobo !== existing.priceKobo) { patch.priceKobo = d.priceKobo; changes.push(`${formatKobo(existing.priceKobo)} → ${formatKobo(d.priceKobo)}`); }
-  if (d.stock !== null && d.stock !== existing.stock) { patch.stock = d.stock; changes.push(`stock ${existing.stock ?? 'not tracked'} → ${d.stock}`); }
+  if (d.options?.length) {
+    const variants = variantsFrom(d.options, existing.variants);
+    Object.assign(patch, { variants, optionNames: d.options.map(o => o.name), stock: totalStock(variants) });
+    changes.push(optionSummary(d.options));
+  } else if (d.stock !== null && d.stock !== existing.stock && !existing.variants?.length) { patch.stock = d.stock; changes.push(`stock ${existing.stock ?? 'not tracked'} → ${d.stock}`); }
   if (d.imageUrl) { patch.images = [d.imageUrl, ...existing.images].slice(0, 10); changes.push('new photo'); }
   await save(f, { productDraft: null, matchIds: null });
   if (!changes.length) return `You already have *${existing.name}* at ${formatKobo(existing.priceKobo)}. Nothing changed.`;
