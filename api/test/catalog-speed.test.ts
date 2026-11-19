@@ -41,7 +41,7 @@ test('photos from a PDF are matched in the background and added to the products'
   await db.set(db.doc('products', 'p-hoodie'), { id: 'p-hoodie', businessId, name: 'Hoodie', priceKobo: 100, images: ['https://x/own.jpg'], categoryId: null, available: true, stock: null, createdAt: at, updatedAt: at, deletedAt: null });
   await db.set(db.doc('importPhotos', 'job1'), { id: 'job1', businessId, conversationId: 'admin_x', ownerPhone: '+2348030000001', names: ['Hoodie', 'Boots'], photoUrls: ['https://r/media/p/1.jpg', 'https://r/media/p/2.jpg'], status: 'pending', createdAt: at });
   const done = await matchImportPhotos(db, llm, images, 'job1');
-  assert.equal(done!.text, '📷 Added the photos from your file to 1 product.');
+  assert.equal(done!.text, '📷 Added photos to 1 product.');
   assert.deepEqual((await db.get(db.doc('products', 'p-boots')))!.images, ['https://r/media/p/1.jpg'], 'photo 1 shows the boots');
   assert.deepEqual((await db.get(db.doc('products', 'p-hoodie')))!.images, ['https://x/own.jpg'], 'an existing photo is kept');
   assert.equal(await matchImportPhotos(db, llm, images, 'job1'), null, 'only once');

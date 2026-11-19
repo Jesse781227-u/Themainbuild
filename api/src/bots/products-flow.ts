@@ -11,15 +11,17 @@ import type { Config } from '../config';
 import type { OutboundContent } from '../services/channel';
 import { createCategories, createProduct, findCategory, listCategories, listProducts, moveProduct, tidyCategoryName } from '../services/catalog';
 import { guessCategory } from './category-guess';
-import { buttons, findProducts, list, type BotDeps } from './common';
+import { buttons, list, type BotDeps } from './common';
 import { parseProductLine } from './intent';
 import { productCarousel } from './product-cards';
+import { matchProduct, titleCase } from '../services/match';
 
 export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null }
 export interface ProductFlowState {
   productDraft?: ProductDraft | null;      // waiting for the owner to pick its category
   awaiting?: string | null;                // 'newCategory' (a category name) or 'msg:<key>' (a shop message)
   editingProductId?: string | null;        // the next product line corrects this product
+  matchIds?: string[] | null;              // "Did you mean …?": products the pending draft might be
   importDraft?: import('./catalog-import').ImportDraft | null; // a menu read in bulk, waiting for Add all
 }
 
@@ -37,8 +39,9 @@ export function parseProduct(text: string): { name: string; priceKobo: number; s
   return { name: p.name.replace(/[,\s]+$/, '').slice(0, 120), priceKobo, stock: p.stock ?? null };
 }
 
-export function card(p: Product, categoryName: string): OutboundContent {
-  const body = `*${p.name}*\n${formatKobo(p.priceKobo)} · ${categoryName}\nStock: ${p.stock === null ? 'not tracked (always available)' : stockLabel(p)}`;
+export function card(p: Product, categoryName: string, headline?: string): OutboundContent {
+  const stock = p.stock === null ? '' : `\nStock: ${stockLabel(p)}`;
+  const body = headline ? `✅ ${headline}${stock}` : `*${p.name}*\n${formatKobo(p.priceKobo)} · ${categoryName}${stock}`;
   const content = buttons(body, [[`pok:${p.id}`, 'Looks right'], [`pedit:${p.id}`, 'Fix it']]);
   if (p.images[0]) (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: p.images[0] } };
   return content;
@@ -57,21 +60,36 @@ async function ensureCategories(f: FlowCtx) {
   return cats.length ? cats : createCategories(f.db, f.business.id, ['General']);
 }
 
-async function create(f: FlowCtx, d: ProductDraft, cat: Category): Promise<Out[]> {
-  const p = await createProduct(f.db, { businessId: f.business.id, name: d.name, priceKobo: d.priceKobo, stock: d.stock, categoryId: cat.id, images: d.imageUrl ? [d.imageUrl] : [] });
-  await save(f, { productDraft: null, awaiting: null });
-  return [card(p, cat.name)];
+async function create(f: FlowCtx, d: ProductDraft, cat: Category, opts: { sayNew?: boolean } = {}): Promise<Out[]> {
+  const p = await createProduct(f.db, { businessId: f.business.id, name: titleCase(d.name), priceKobo: d.priceKobo, stock: d.stock, categoryId: cat.id, images: d.imageUrl ? [d.imageUrl] : [] });
+  await save(f, { productDraft: null, awaiting: null, matchIds: null });
+  return [card(p, cat.name, opts.sayNew ? `Added new product *${p.name}* ${formatKobo(p.priceKobo)} in ${cat.name}.` : undefined)];
 }
 
 // A new product line (or a correction while editing). Returns the messages to send.
-export async function addProduct(f: FlowCtx, d: ProductDraft): Promise<Out[]> {
+//   prefer 'update': the owner is fixing their list ("pink crop top 5000" updates Pink Tie-Front Crop
+//   Top when that's the one clear match); 'ask': they're adding, so a near match is only suggested.
+export async function addProduct(f: FlowCtx, d: ProductDraft, opts: { prefer?: 'update' | 'ask' } = {}): Promise<Out[]> {
   if (f.state.editingProductId) return correctProduct(f, f.state.editingProductId, d);
-  const existing = (await findProducts(f.db, f.business.id, d.name)).find(p => p.name.toLowerCase() === d.name.toLowerCase());
-  if (existing) return [await updateExisting(f, existing, d)];
+  const all = await listProducts(f.db, f.business.id);
+  const exact = all.find(p => p.name.toLowerCase() === d.name.toLowerCase());
+  if (exact) return [await updateExisting(f, exact, d)];
+  const m = matchProduct(d.name, all);
+  if (m.kind === 'strong' && opts.prefer === 'update') return [await updateExisting(f, m.product, d)];
+  if (m.kind !== 'none') {
+    const near = m.kind === 'strong' ? [m.product] : m.products;
+    await save(f, { productDraft: d, matchIds: near.map(p => p.id) });
+    if (near.length === 1) return [buttons(`Did you mean *${near[0].name}* (${formatKobo(near[0].priceKobo)})?`, [[`pmatch:${near[0].id}`, 'Yes, update it'], ['pmatch:new', 'No, add new']])];
+    return [list(`Did you mean one of these? Or is *${titleCase(d.name)}* a new product?`, 'Pick one', [...near.map(p => ({ id: `pmatch:${p.id}`, title: p.name, description: `Update to ${formatKobo(d.priceKobo)} (now ${formatKobo(p.priceKobo)})` })), { id: 'pmatch:new', title: 'No, add new' }], 'Your products')];
+  }
+  return createNew(f, d, { sayNew: opts.prefer === 'update' });
+}
+
+async function createNew(f: FlowCtx, d: ProductDraft, opts: { sayNew?: boolean } = {}): Promise<Out[]> {
   const cats = await ensureCategories(f);
   const guess = await guessCategory(d.name, cats, f.deps.llm ?? null, d.imageUrl);
-  if (guess.confident && guess.category) return create(f, d, guess.category);
-  await save(f, { productDraft: d });
+  if (guess.confident && guess.category) return create(f, d, guess.category, opts);
+  await save(f, { productDraft: d, matchIds: null });
   return [categoryPicker(`Which category is *${d.name}* in?`, cats, c => `pcat:${c.id}`, true)];
 }
 
@@ -79,12 +97,13 @@ async function updateExisting(f: FlowCtx, existing: Product, d: ProductDraft): P
   const changes: string[] = [];
   const at = new Date().toISOString();
   const patch: Record<string, unknown> = {};
-  if (d.priceKobo !== existing.priceKobo) { patch.priceKobo = d.priceKobo; changes.push(`price ${formatKobo(existing.priceKobo)} → ${formatKobo(d.priceKobo)}`); }
+  if (d.priceKobo !== existing.priceKobo) { patch.priceKobo = d.priceKobo; changes.push(`${formatKobo(existing.priceKobo)} → ${formatKobo(d.priceKobo)}`); }
   if (d.stock !== null && d.stock !== existing.stock) { patch.stock = d.stock; changes.push(`stock ${existing.stock ?? 'not tracked'} → ${d.stock}`); }
   if (d.imageUrl) { patch.images = [d.imageUrl, ...existing.images].slice(0, 10); changes.push('new photo'); }
-  if (!changes.length) return `You already have ${existing.name}: ${formatKobo(existing.priceKobo)}, ${stockLabel(existing)}. Nothing changed.`;
+  await save(f, { productDraft: null, matchIds: null });
+  if (!changes.length) return `You already have *${existing.name}* at ${formatKobo(existing.priceKobo)}. Nothing changed.`;
   await f.db.update(f.db.doc(C.products, existing.id), { ...patch, updatedAt: at });
-  return `Updated ${existing.name}: ${changes.join(', ')}.`;
+  return `Updated *${existing.name}*: ${changes.join(', ')}`;
 }
 
 async function correctProduct(f: FlowCtx, productId: string, d: ProductDraft): Promise<Out[]> {
@@ -109,13 +128,21 @@ export async function handleProductInput(f: FlowCtx, choiceId: string | null, te
   }
   if (!choiceId) return null;
   const [kind, a, b] = choiceId.split(':');
+  if (kind === 'pmatch') {
+    const d = f.state.productDraft;
+    if (!d) return ['That was already saved. Send PRODUCTS to see your list.'];
+    if (a === 'new') return createNew(f, d, { sayNew: true });
+    const p = (await f.db.get(f.db.doc(C.products, a))) as Product | null;
+    if (!p || p.businessId !== f.business.id || p.deletedAt) return createNew(f, d, { sayNew: true });
+    return [await updateExisting(f, p, d)];
+  }
   if (kind === 'pcat') {
     const d = f.state.productDraft;
     if (!d) return ['That product was already saved. Send PRODUCTS to see your list.'];
     if (a === 'new') { await save(f, { awaiting: 'newCategory' }); return ['What should the new category be called?']; }
     const cat = (await listCategories(f.db, f.business.id)).find(c => c.id === a);
     if (!cat) return ['That category no longer exists. Please pick another.'];
-    return create(f, d, cat);
+    return create(f, d, cat, { sayNew: true });
   }
   if (kind === 'pok') return null; // the caller decides what "Correct" leads to
   if (kind === 'pedit') {

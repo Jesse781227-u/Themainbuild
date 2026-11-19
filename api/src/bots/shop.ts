@@ -17,6 +17,7 @@ import { suggestFor } from '../services/suggestions';
 import { renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { byPriority, listZones, quoteDelivery } from '../services/delivery';
+import { describeLocation } from '../services/location';
 import { describeHours, openNow } from '../services/hours';
 import { policyText, POLICY_QUESTION } from '../services/policies';
 import { checkout, customerFee, policyFor, recentOrders } from '../services/orders';
@@ -315,9 +316,9 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
   const body = [
     'Please confirm your order:', text,
     `Subtotal: ${formatKobo(subtotal)}`,
-    delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}` : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
+    delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}${shopAddress(business) ? `\n📍 Pick up from: ${shopAddress(business)}` : ''}` : quoteLater(delivery) ? `Delivery (${delivery.address ?? ''}): ${delivery.timeframe}` : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
-    `Total: about ${formatKobo(subtotal + delivery.feeKobo + fee)} (the exact amount comes next)`,
+    quoteLater(delivery) ? `Total: about ${formatKobo(subtotal + fee)} plus delivery (${business.name} confirms the delivery price)` : `Total: ${formatKobo(subtotal + delivery.feeKobo + fee)}`,
   ].join('\n');
   return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), { step: 'confirm', delivery });
 }
@@ -363,8 +364,12 @@ async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, cus
   await notifyOwner(ctx.db, deps, business, 'handover', `${who} wants to talk to you. Reply to them in your WhatsApp Business app${ctx.event.source === 'instagram' ? ' or Instagram' : ''}. The bot stays quiet in that chat until you send HANDBACK here.`);
 }
 
-// Pickup, with the shop's preparation time when it has one (food).
-const pickup = (business: Business): OrderDelivery => ({ method: 'pickup', feeKobo: 0, timeframe: business.prepTime ? `Ready for pickup in about ${business.prepTime}` : 'Ready for pickup' });
+// Pickup, with the shop's preparation time when it has one (food), at the shop's address.
+const pickup = (business: Business): OrderDelivery => ({ method: 'pickup', feeKobo: 0, timeframe: business.prepTime ? `Ready for pickup in about ${business.prepTime}` : 'Ready for pickup', ...(shopAddress(business) ? { address: shopAddress(business)! } : {}) });
+// Where pickup customers go: "12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market".
+export const shopAddress = (b: Pick<Business, 'address' | 'area' | 'city' | 'landmark'>) => (b.area || b.city || b.address ? describeLocation({ street: b.address ?? null, area: b.area ?? null, city: b.city ?? null, landmark: b.landmark ?? null }) : null);
+// Other states with "I quote per order": the delivery price isn't known yet.
+const quoteLater = (d: OrderDelivery) => d.method !== 'pickup' && !d.feeKobo && /to be confirmed/.test(d.timeframe ?? '');
 
 // When the shop is closed: what the greeting says (null when open or no hours are set).
 function closedNote(business: Business, now = new Date()) {
@@ -382,7 +387,7 @@ async function shopInfo(db: Firestore, business: Business, topic: string): Promi
     const open = openNow(business.hours);
     return `Our opening hours: ${describeHours(business.hours)}.${open.open ? " We're open now." : ` We're closed right now${open.next ? ` and open again at ${open.next}` : ''}.`}`;
   }
-  if (topic === 'location') { const where = [business.area, business.city].filter(Boolean).join(', '); return where ? `${business.name} is in ${where}.` : null; }
+  if (topic === 'location') { const where = shopAddress(business); return where ? `📍 ${business.name}: ${where}.` : null; }
   if (topic === 'delivery') {
     const zones = await listZones(db, business.id);
     if (business.fulfilment === 'pickup' || (!zones.length && !business.shipsInterstate)) return `${business.name} does pickup only for now.`;

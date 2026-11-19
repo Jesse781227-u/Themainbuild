@@ -10,7 +10,8 @@ import type { Product } from '../domain/commerce';
 import type { ImportDraft } from '../bots/catalog-import';
 import { log } from '../lib/logger';
 
-export interface ImportPhotos { id: string; businessId: string; conversationId: string; ownerPhone: string; names: string[]; photoUrls: string[]; status: 'pending' | 'done' | 'failed'; createdAt: string }
+// matches: product name (lower case) → photo URL, once matched. Add all uses them for the products it creates.
+export interface ImportPhotos { id: string; businessId: string; conversationId: string; ownerPhone: string; names: string[]; photoUrls: string[]; status: 'pending' | 'done' | 'failed'; matches?: Record<string, string>; createdAt: string }
 
 const keyOf = (url: string) => url.split('/media/')[1] ?? null;
 
@@ -39,25 +40,28 @@ export async function matchImportPhotos(db: Firestore, llm: LLMProvider | null, 
   const byName = new Map<string, string>();
   matches.forEach((n, i) => { if (n && !byName.has(job.names[n - 1].toLowerCase())) byName.set(job.names[n - 1].toLowerCase(), job.photoUrls[loaded[i]]); });
 
-  // The list still waiting for Add all: the photos go with it.
-  let pending = 0;
-  const conv = await db.get(db.doc(C.conversations, job.conversationId));
-  const draft = conv?.importDraft as (ImportDraft & { photosId?: string }) | null | undefined;
-  if (draft?.photosId === id) {
-    for (const it of draft.items) { const url = byName.get(it.name.toLowerCase()); if (url && !it.imageUrl) { it.imageUrl = url; pending++; } }
-    await db.set(db.doc(C.conversations, job.conversationId), { importDraft: draft }, { merge: true });
-  }
+  // Saved first: Add all (now or later) puts them on the products it creates.
+  const found = Object.fromEntries(byName);
+  await db.update(db.doc(C.importPhotos, id), { status: 'done', matched: byName.size, matches: found });
   // Products already added (Add all was tapped): the photo goes on any that have none.
+  const added = await attachMatched(db, job.businessId, found);
+  // Still waiting for Add all: say nothing now. The "Done ✅" after Add all mentions the photos, so
+  // no message ever points at a button the owner has already used.
+  const conv = await db.get(db.doc(C.conversations, job.conversationId));
+  if (!added && (conv?.importDraft as ImportDraft | null | undefined)?.photosId === id) return null;
+  if (!added) return byName.size ? null : { ownerPhone: job.ownerPhone, businessId: job.businessId, text: "📷 I couldn't tell which photo in your file goes with which product. To add a photo, send it with the product's name as the caption." };
+  return { ownerPhone: job.ownerPhone, businessId: job.businessId, text: `📷 Added photos to ${added} product${added === 1 ? '' : 's'}.` };
+}
+
+// Puts matched photos on the shop's products that have none. Returns how many got one.
+export async function attachMatched(db: Firestore, businessId: string, matches: Record<string, string>, only?: Set<string>) {
   let added = 0;
-  const products = ((await db.query(C.products, [['businessId', '==', job.businessId]])) as unknown as Product[]).filter(p => !p.deletedAt);
+  const products = ((await db.query(C.products, [['businessId', '==', businessId]])) as unknown as Product[]).filter(p => !p.deletedAt && (!only || only.has(p.id)));
   for (const p of products) {
-    const url = byName.get(p.name.toLowerCase());
+    const url = matches[p.name.toLowerCase()];
     if (!url || p.images.length) continue;
     await db.update(db.doc(C.products, p.id), { images: [url], updatedAt: new Date().toISOString() });
     added++;
   }
-  await db.update(db.doc(C.importPhotos, id), { status: 'done', matched: byName.size });
-  const n = Math.max(added, pending);
-  if (!n) return { ownerPhone: job.ownerPhone, businessId: job.businessId, text: '📷 I couldn\'t tell which photo in your file goes with which product. To add a photo, send it with the product\'s name as the caption.' };
-  return { ownerPhone: job.ownerPhone, businessId: job.businessId, text: added ? `📷 Added the photos from your file to ${added} product${added === 1 ? '' : 's'}.` : `📷 Matched ${pending} photo${pending === 1 ? '' : 's'} from your file. They'll be added with your products when you tap *Add all*.` };
+  return added;
 }

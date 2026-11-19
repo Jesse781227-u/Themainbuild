@@ -15,6 +15,7 @@ import { CATALOG_MIME, MAX_CATALOG_BYTES, type CatalogItem } from '../services/a
 import { createCategories, createProduct, findCategory, listCategories, listProducts, tidyCategoryName } from '../services/catalog';
 import { buttons, fetchMedia, type Input } from './common';
 import { slowJob } from '../services/presence';
+import { attachMatched, type ImportPhotos } from '../services/import-photos';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
@@ -136,27 +137,53 @@ async function preview(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
   return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', "Don't add these"]])];
 }
 
+const ADDING_NOTE_MS = 3_000;
+
 // Saves the confirmed draft. Returns the messages and how many products were created.
-async function apply(f: FlowCtx): Promise<{ out: Out[]; created: number }> {
+async function apply(f: FlowCtx, notify?: (o: Out) => Promise<unknown>): Promise<{ out: Out[]; created: number }> {
   const draft = f.state.importDraft;
   if (!draft?.items.length) return { out: ['That list was already added or cancelled. Send it again if you need to.'], created: 0 };
   await saveDraft(f, null);
+  // A long list takes a while: say so instead of going quiet.
+  const timer = notify ? setTimeout(() => { notify('Adding your products…').catch(() => undefined); }, ADDING_NOTE_MS) : null;
+  try {
+    return await applyDraft(f, draft);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+async function applyDraft(f: FlowCtx, draft: ImportDraft): Promise<{ out: Out[]; created: number }> {
+  // Photos from the file that were matched in the background (before Add all).
+  const photosRef = draft.photosId ? f.db.doc(C.importPhotos, draft.photosId) : null;
+  const photoJob = photosRef ? ((await f.db.get(photosRef)) as ImportPhotos | null) : null;
+  const matched = photoJob?.matches ?? {};
   await createCategories(f.db, f.business.id, [...new Set(draft.items.map(i => i.category))]);
   const cats = await listCategories(f.db, f.business.id);
   const byName = new Map((await listProducts(f.db, f.business.id)).map(p => [p.name.toLowerCase(), p] as [string, Product]));
   let created = 0, updated = 0;
-  for (const it of draft.items) {
+  const createdIds = new Set<string>();
+  const one = async (it: ImportItem) => {
     const cat = findCategory(cats, it.category) ?? cats[0];
     const existing = byName.get(it.name.toLowerCase());
+    const imageUrl = it.imageUrl ?? matched[it.name.toLowerCase()] ?? null;
     try {
       if (existing) {
-        await f.db.update(f.db.doc(C.products, existing.id), { priceKobo: it.priceKobo, ...(it.stock !== null ? { stock: it.stock } : {}), ...(it.imageUrl ? { images: [it.imageUrl, ...existing.images.filter(u => u !== it.imageUrl)].slice(0, 10) } : {}), updatedAt: new Date().toISOString() });
+        await f.db.update(f.db.doc(C.products, existing.id), { priceKobo: it.priceKobo, ...(it.stock !== null ? { stock: it.stock } : {}), ...(imageUrl ? { images: [imageUrl, ...existing.images.filter(u => u !== imageUrl)].slice(0, 10) } : {}), updatedAt: new Date().toISOString() });
         updated++;
       } else {
-        await createProduct(f.db, { businessId: f.business.id, name: it.name, priceKobo: it.priceKobo, stock: it.stock, categoryId: cat.id, description: it.description, images: it.imageUrl ? [it.imageUrl] : [] });
+        const p = await createProduct(f.db, { businessId: f.business.id, name: it.name, priceKobo: it.priceKobo, stock: it.stock, categoryId: cat.id, description: it.description, images: imageUrl ? [imageUrl] : [] });
+        createdIds.add(p.id);
         created++;
       }
     } catch (e) { log('warn', 'import_item_failed', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) }); }
+  };
+  // Categories in parallel (each category's product count is one document, so its items go in turn).
+  const groups = new Map<string, ImportItem[]>();
+  for (const it of draft.items) { const k = (findCategory(cats, it.category) ?? cats[0]).id; groups.set(k, [...(groups.get(k) ?? []), it]); }
+  await Promise.all([...groups.values()].map(async items => { for (const it of items) await one(it); }));
+  // The photos finished matching while these were being added: put them on now.
+  if (photosRef && photoJob?.status === 'pending') {
+    const now = (await f.db.get(photosRef)) as ImportPhotos | null;
+    if (now?.matches) await attachMatched(f.db, f.business.id, now.matches, createdIds);
   }
   const usedCats = new Set(draft.items.map(i => i.category.toLowerCase())).size;
   const plural = (n: number) => `${n} product${n === 1 ? '' : 's'}`;
@@ -169,7 +196,7 @@ export interface ImportResult { out: Out[]; created: number }
 // Handles anything that looks like a whole menu, plus the Add all / Cancel taps. Returns null when the
 // message isn't a bulk upload, so the caller carries on as usual.
 export async function handleImport(f: FlowCtx, input: Input, text: string, accessToken: string | undefined, notify: (o: Out) => Promise<unknown>, react?: (emoji: string) => Promise<unknown>): Promise<ImportResult | null> {
-  if (input.choiceId === 'imp:all') return apply(f);
+  if (input.choiceId === 'imp:all') return apply(f, notify);
   if (input.choiceId === 'imp:cancel') { await saveDraft(f, null); return { out: ['Cancelled. Nothing was added.'], created: 0 }; }
   if (input.choiceId) return null;
 

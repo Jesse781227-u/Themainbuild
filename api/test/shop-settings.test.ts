@@ -40,7 +40,7 @@ test('shop: questions about policies, hours, location and delivery are answered 
   await db.set(db.doc('deliveryZones', 'z-lagos'), { id: 'z-lagos', businessId: fx.a.id, name: 'Lagos', match: 'Lagos', feeKobo: 300_000, timeframe: '', active: true });
   assert.match((await shop(bot, me, 'Can I return it if it does not fit?'))[0].text, /Our policy at Business biz-a:\n• Exchange within 3 days if unworn\.\n• Tell us within 24 hours\./);
   assert.match((await shop(bot, me, 'what time do you close?'))[0].text, /Our opening hours: Every day midnight–11:59pm\. We're open now\./);
-  assert.match((await shop(bot, me, 'where are you located'))[0].text, /Business biz-a is in Yaba, Lagos\./);
+  assert.match((await shop(bot, me, 'where are you located'))[0].text, /📍 Business biz-a: Yaba, Lagos\./);
   assert.match((await shop(bot, me, 'do you deliver'))[0].text, /• Yaba: ₦1,500\n• Lagos: ₦3,000\n• Other states: price confirmed per order\nPickup is free\./);
 
   // Delivery: the most specific zone wins; anywhere else is quoted by the shop.
@@ -51,7 +51,7 @@ test('shop: questions about policies, hours, location and delivery are answered 
   await shop(bot, me, 'Not yet', 'menu');
   await shop(bot, me, 'Checkout', 'checkout');
   await shop(bot, me, 'Delivery', 'deliver');
-  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery \(5 Ring Road, Ibadan\): ₦0, delivery price to be confirmed by Business biz-a/);
+  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery \(5 Ring Road, Ibadan\): delivery price to be confirmed by Business biz-a[\s\S]*Total: about ₦[\d,]+ plus delivery/);
 });
 
 test('shop: pickup-only shops skip the delivery question and show the prep time', async () => {

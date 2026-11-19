@@ -24,6 +24,7 @@ import { customerConversationId } from '../services/conversations';
 import { deleteOwnerData } from './deletion';
 import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
+import { matchProduct, nameScore } from '../services/match';
 import { messagesMenu } from './messages-flow';
 import { customerList, findCustomer } from './customers';
 import { receiptFilename, receiptPath } from '../services/receipt';
@@ -55,11 +56,15 @@ class ToolError extends Error {}
 // Keeps each tool's argument types inferred from its own schema.
 const def = <S extends z.ZodTypeAny>(t: AdminTool<S>) => t;
 
-async function oneProduct(ctx: ToolCtx, query: string): Promise<Product> {
+// loose: one likely match is enough (used when the owner confirms the product by name next).
+async function oneProduct(ctx: ToolCtx, query: string, opts: { loose?: boolean } = {}): Promise<Product> {
   const found = await findProducts(ctx.db, ctx.business.id, query);
-  if (!found.length) throw new ToolError(`I couldn't find "${query}" in your products. Send PRODUCTS to see them.`);
-  if (found.length > 1) throw new ToolError(`"${query}" matches ${found.map(p => p.name).slice(0, 5).join(', ')}. Which one?`);
-  return found[0];
+  if (found.length === 1) return found[0];
+  const m = matchProduct(query, found.length ? found : await listProducts(ctx.db, ctx.business.id));
+  if (m.kind === 'strong') return m.product;
+  if (m.kind === 'ambiguous' && m.products.length === 1 && opts.loose && nameScore(query, m.products[0].name) >= 0.85) return m.products[0];
+  if (m.kind === 'ambiguous') throw new ToolError(m.products.length === 1 ? `Did you mean *${m.products[0].name}*? Send it again with the full name.` : `"${query}" could be ${m.products.map(p => `*${p.name}*`).join(', ')}. Which one? Send it again with the full name.`);
+  throw new ToolError(`I couldn't find "${query}" in your products. Send PRODUCTS to see them.`);
 }
 
 async function oneOrder(ctx: ToolCtx, orderRef: string): Promise<Order> {
@@ -68,7 +73,7 @@ async function oneOrder(ctx: ToolCtx, orderRef: string): Promise<Order> {
   return o;
 }
 
-const line = (p: Product) => `• ${p.name}: ${formatKobo(p.priceKobo)}, ${stockLabel(p)}${tracksStock(p) && p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
+const line = (p: Product) => `• ${p.name} — ${formatKobo(p.priceKobo)}${tracksStock(p) ? ` · ${stockLabel(p)}` : ''}${tracksStock(p) && p.stock <= p.lowStockThreshold ? ' ⚠️ low' : ''}${p.available ? '' : ' (hidden)'}`;
 const orderLine = (o: Order) => `• ${o.ref}: ${formatKobo(o.payAmountKobo)}, ${o.status.replace('_', ' ')}${o.status === 'paid' ? `, ${o.fulfilment.replace(/_/g, ' ')}` : ''}`;
 
 export const HELP = [
@@ -143,11 +148,12 @@ export const adminTools = {
   deleteProduct: def({
     spec: { name: 'deleteProduct', description: 'Permanently remove a product from the catalogue.', params: { product: { type: 'string', description: 'Product name' } }, required: ['product'] },
     schema: z.object({ product: z.string().min(1) }),
-    async confirm(a, ctx) { const p = await oneProduct(ctx, a.product); return `Delete ${p.name} (${stockLabel(p)})? Customers won't see it any more.`; },
+    async confirm(a, ctx) { const p = await oneProduct(ctx, a.product, { loose: true }); return `Delete *${p.name}* (${formatKobo(p.priceKobo)})? Customers won't see it any more.`; },
     async run(a, ctx) {
-      const p = await oneProduct(ctx, a.product);
+      const p = await oneProduct(ctx, a.product, { loose: true });
       await deleteProduct(ctx.db, ctx.business.id, p.id);
-      return `Deleted ${p.name}.`;
+      const left = (await listProducts(ctx.db, ctx.business.id)).length;
+      return `🗑️ Deleted *${p.name}*. You now have ${left} product${left === 1 ? '' : 's'}.`;
     },
   }),
   listProducts: def({

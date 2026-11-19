@@ -2,6 +2,7 @@ import { C } from '../db';
 import type { Firestore } from '../lib/firestore';
 import { randomId } from '../lib/crypto';
 import type { Order, OrderDelivery } from '../domain/commerce';
+import { expandAliases } from './location';
 
 const iso = () => new Date().toISOString();
 
@@ -22,7 +23,8 @@ export async function saveZone(db: Firestore, zone: DeliveryZone) { await db.set
 export async function quoteDelivery(db: Firestore, businessId: string, location: string, method: DeliveryMethod): Promise<OrderDelivery | null> {
   if (method === 'pickup') return { method, feeKobo: 0, timeframe: 'Ready for pickup' };
   const zones = (await listZones(db, businessId)).sort(byPriority);
-  const zone = zones.find(z => location.toLowerCase().includes(z.match.toLowerCase()));
+  const where = expandAliases(location).toLowerCase();
+  const zone = zones.find(z => where.includes(z.match.toLowerCase()));
   return zone ? { method, feeKobo: zone.feeKobo, zoneId: zone.id, timeframe: zone.timeframe, address: location } : null;
 }
 

@@ -25,7 +25,8 @@ import { trackStep } from '../services/onboarding-events';
 import { inferBusinessType } from '../services/business-type';
 import { closeDays, describeHours, parseHours, parseWeek, sameEveryDay, validHours, type Hours } from '../services/hours';
 import { defaultPolicies, policyText } from '../services/policies';
-import { saveZone } from '../services/delivery';
+import { listZones, saveZone } from '../services/delivery';
+import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
 import { openTicket } from '../services/support';
 import { buttons, findProducts, list, storeProfilePhoto, type BotDeps, type Input } from './common';
 import { handleImport, parsePastedMenu } from './catalog-import';
@@ -33,24 +34,25 @@ import { draftAllMessages } from './messages-flow';
 import { log } from '../lib/logger';
 import { parseAdminCommand } from './intent';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
-import { categoryCarousel, productCarousel } from './product-cards';
+import { categoryCarousel, productCarousel, productDetails } from './product-cards';
 
 export type Stage = 'basics' | 'products' | 'location' | 'hours' | 'delivery' | 'connect' | 'live';
 export type Step =
   | 'shop_name' | 'owner_name'
   | 'products' | 'preview' | 'type' | 'photos'
-  | 'city' | 'area'
+  | 'city' | 'area' | 'street' | 'location_confirm'
   | 'hours' | 'hours_same' | 'hours_perday' | 'hours_closed' | 'prep' | 'prep_custom'
   | 'delivery' | 'fee_local' | 'fee_city' | 'interstate' | 'interstate_pricing' | 'interstate_fee' | 'policies' | 'policies_edit'
   | 'ready' | 'fee_payer' | 'check_wa' | 'check_fb'
-  | 'live_photo' | 'live_contacts' | 'live_source';
+  | 'live_photo' | 'live_contacts' | 'live_source'
+  | 'msg_offer' | 'msg_pick' | 'msg_custom' | 'msg_confirm';
 
 export interface Onboarding {
   stage: Stage; step: Step;
   businessId?: string | null;          // the shop being set up (an owner can add more shops later)
   adding?: boolean;                    // NEW SHOP: this owner already has a shop
   welcomed?: boolean; nameSet?: boolean; typeConfident?: boolean;
-  draft?: { city?: string; hours?: Hours };
+  draft?: { city?: string; hours?: Hours; loc?: Location; streetAsked?: boolean };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number; photosAdded?: number;
   photosId?: string | null;            // photos from the uploaded file, being matched in the background
 }
@@ -121,12 +123,13 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       const imported = await handleImport(flowFor(c), input!, text, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, c.reply, c.react);
       if (imported?.created && photosId) await setOb(c, { photosId });
       if (imported) {
-        await sendAll(c, imported.out);
         if (imported.created > 0) {
           await setOb(c, { productsAdded: (c.ob.productsAdded ?? 0) + imported.created });
-          if (!c.ob.nameSet) return c.reply(`${stepLabel('basics')}Now, what's your shop called?`);
-          return showPreview(c);
+          if (!c.ob.nameSet) { await sendAll(c, imported.out); return c.reply(`${stepLabel('basics')}Now, what's your shop called?`); }
+          // One message: "Done ✅ Added 24 products in 4 categories… here's what customers see" (not two).
+          return showPreview(c, { added: imported.created });
         }
+        await sendAll(c, imported.out);
         // The menu is being checked (Add all / Cancel); ask the name meanwhile.
         if (!c.ob.nameSet && !choiceId) {
           if (!c.ob.welcomed) { await setOb(c, { welcomed: true }); return c.reply(welcomeText(c, 'While you check that list: what\'s your shop called?')); }
@@ -135,6 +138,14 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
         return;
       }
     }
+  }
+
+  // Owner commands (PRODUCTS, HELP, FEE, delete X…) work at every step; admin.ts answers them and
+  // then repeats this step's question.
+  if (c.business && c.ob.step !== 'shop_name') {
+    if (!choiceId && isCommand(text, c.ob.step)) return 'pass';
+    if (choiceId && /^(fee|ah|movecat|shop|newshop):/.test(choiceId) && c.ob.step !== 'fee_payer') return 'pass';
+    if (choiceId && /^(pmatch|pcat|pedit|setcat):/.test(choiceId) && c.ob.step !== 'products' && c.ob.step !== 'preview') return 'pass';
   }
 
   switch (c.ob.step) {
@@ -181,11 +192,17 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (choiceId === 'ok:yes' || /^(yes|looks (right|good)|ok(ay)?|correct|perfect|great)\b/i.test(text.trim())) return afterPreview(c);
       if (choiceId === 'ok:fix') return c.reply(buttons('No problem. To change a price, send the product again with the new price (e.g. *Jollof rice 3000*). To remove one, send *delete* and its name. *PRODUCTS* shows everything.\n\nTap *Looks right* when you\'re done.', [['ok:yes', 'Looks right']]));
       if (choiceId === 'prod:more') { await setOb(c, { step: 'products' }); return c.reply('Send the next product: its name and price, with a photo if you have one. Tap *That\'s all* when you\'re done.'); }
+      if (choiceId === 'ok:see') return showPreview(c, { again: true });
       const handled = await handleProductInput(flowFor(c), choiceId, text);
-      if (handled) return sendAll(c, handled);
+      if (handled) { await sendAll(c, handled); if (choiceId?.startsWith('pmatch:') || choiceId?.startsWith('pcat:')) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks right now'], ['ok:fix', 'Change something'], ['ok:see', 'See my shop again']])); return; }
+      if (choiceId?.startsWith('cat:') || choiceId?.startsWith('more:') || choiceId?.startsWith('cats:') || choiceId?.startsWith('buy:') || choiceId?.startsWith('det:') || choiceId === 'menu') return previewTap(c, choiceId);
       if (passToAdmin(text)) return 'pass';
       const parsed = parseProduct(text);
-      if (parsed) return sendAll(c, await addProduct(flowFor(c), { ...parsed, imageUrl: await imageUrl() }));
+      if (parsed) {
+        await sendAll(c, await addProduct(flowFor(c), { ...parsed, imageUrl: await imageUrl() }, { prefer: 'update' }));
+        if (!c.state.productDraft) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks right now'], ['ok:fix', 'Change something'], ['ok:see', 'See my shop again']]));
+        return;
+      }
       return prompt(c);
     }
     case 'type': {
@@ -219,16 +236,26 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
 
-    case 'city': {
-      const parts = text.split(/,|\s+-\s+/).map(s => s.trim()).filter(Boolean);
-      if (choiceId || !parts.length || parts[0].length < 2) return prompt(c);
-      if (parts.length === 1) { await setOb(c, { step: 'area', draft: { ...c.ob.draft, city: parts[0].slice(0, 60) } }); return c.reply(`And which area in ${parts[0]}?`); }
-      return saveLocation(c, parts[0], parts.slice(1).join(', '));
+    // Location: whatever they send is split into area, city, street and landmark; anything missing is
+    // asked for, then it's read back before saving. The address is also where pickup customers go.
+    case 'city': case 'area': case 'street': {
+      if (choiceId === 'loc:nostreet') { await setOb(c, { draft: { ...c.ob.draft, streetAsked: true } }); return nextLocation(c); }
+      if (choiceId || text.trim().length < 2) return prompt(c);
+      const got = parseLocation(text);
+      const loc: Location = { city: null, area: null, street: null, landmark: null, ...c.ob.draft?.loc };
+      for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k] && (!loc[k] || c.ob.step === 'city')) loc[k] = got[k];
+      // A plain answer to "Which area?" / "Which city?" / "Which street?" is that thing.
+      const plain = tidyPlace(text.replace(/^(it'?s|it is|in|at)\s+/i, ''));
+      if (c.ob.step === 'area' && !got.area && !got.street && !got.city) loc.area = plain;
+      if (c.ob.step === 'city' && loc.area && !got.city && !got.area && !got.street && !got.landmark) loc.city = knownCity(plain) ?? plain;
+      if (c.ob.step === 'street' && !got.street) loc.street = got.landmark && !got.area ? loc.street : tidyPlace(text.replace(LANDMARK_RE, '').replace(/^(it'?s|it is|we'?re at|at|on)\s+/i, ''));
+      await setOb(c, { draft: { ...c.ob.draft, loc, ...(c.ob.step === 'street' ? { streetAsked: true } : {}) } });
+      return nextLocation(c);
     }
-    case 'area': {
-      const area = text.trim().slice(0, 60);
-      if (choiceId || area.length < 2) return prompt(c);
-      return saveLocation(c, c.ob.draft?.city ?? '', area);
+    case 'location_confirm': {
+      if (choiceId === 'loc:fix' || (!choiceId && /^(no|fix|wrong|change)/i.test(text.trim()))) { await setOb(c, { step: 'city', draft: { ...c.ob.draft, loc: undefined, streetAsked: false } }); return c.reply('No problem. Send the full address again, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.'); }
+      if (choiceId === 'loc:ok' || (!choiceId && /^(yes|correct|right|ok(ay)?|that'?s right)\b/i.test(text.trim()))) return saveLocation(c);
+      return prompt(c);
     }
 
     case 'hours': {
@@ -327,14 +354,15 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     }
 
     case 'ready': {
-      if (choiceId === 'ob:connect' || /^(connect|connect now|next|continue)$/i.test(text.trim())) { await setOb(c, { step: 'fee_payer' }); return prompt(c); }
+      if (choiceId === 'ob:connect' || /^(connect|connect now|next|continue)$/i.test(text.trim())) { await setOb(c, { step: 'check_wa' }); return prompt(c); }
       return prompt(c);
     }
     case 'fee_payer': {
       const payer = choiceId === 'fee:customer' ? 'customer' : choiceId === 'fee:owner' ? 'owner' : null;
       if (!payer) return prompt(c);
       await patchBusiness(c, { feePayer: payer });
-      await setOb(c, { step: 'check_wa' });
+      await c.reply(payer === 'owner' ? "👍 You'll pay the fee — customers see your prices only." : "👍 Your customers pay the fee — it's added to their total as a small service fee.");
+      await setOb(c, { step: 'ready' });
       return prompt(c);
     }
     case 'check_wa': {
@@ -402,10 +430,14 @@ async function afterTyped(c: Ctx, out: Out[]) {
 }
 
 // The value moment: what the shop looks like to customers, with the owner's real products.
-async function showPreview(c: Ctx) {
+async function showPreview(c: Ctx, opts: { added?: number; again?: boolean } = {}) {
   const biz = c.business!;
   if (c.ob.stage !== 'products') await setStage(c, 'products', 'preview');
   else await setOb(c, { step: 'preview' });
+  if (opts.again) {
+    await sendAll(c, await shopPreview(c, `Hi, welcome to ${biz.name} 👋`));
+    return c.reply(buttons('Does that look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
+  }
   const [cats, products] = await Promise.all([listCategories(c.ctx.db, biz.id), listProducts(c.ctx.db, biz.id)]);
   const used = cats.filter(x => products.some(p => p.categoryId === x.id));
   // The type, from the products themselves.
@@ -415,15 +447,47 @@ async function showPreview(c: Ctx) {
     if (guess.confident && guess.type) { await patchBusiness(c, { category: guess.type, businessTypeInferred: true }); }
   }
   const n = products.length;
-  await c.reply(`✅ ${n} product${n === 1 ? '' : 's'}${used.length > 1 ? ` in ${used.length} categories: ${used.map(x => x.name).join(' · ')}` : ''}. Here's what your customers will see 👇`);
-  const hello = `Hi, welcome to ${biz.name} 👋`;
-  const preview: OutboundContent[] = used.length > 1
-    ? [categoryCarousel(c.ctx.cfg, used, products, { intro: `${hello} What are you looking for?` })]
-    : productCarousel(c.ctx.cfg, biz, products, { title: used[0]?.name ?? 'Our products', key: used[0]?.id ?? 'all', intro: hello });
-  await sendAll(c, preview);
+  const catLine = used.length > 1 ? ` in ${used.length} categories: ${used.map(x => x.name).join(' · ')}` : '';
+  const photos = products.filter(p => p.images.length).length;
+  const photoNote = opts.added && photos ? `\n📷 ${photos === n ? 'All of them have' : `${photos} have`} a photo from your file.` : '';
+  await c.reply(opts.added
+    ? `Done ✅ Added ${opts.added} product${opts.added === 1 ? '' : 's'}${catLine}.${photoNote}\n\nHere's what your customers will see 👇`
+    : `✅ ${n} product${n === 1 ? '' : 's'}${catLine}. Here's what your customers will see 👇`);
+  await sendAll(c, await shopPreview(c, `Hi, welcome to ${biz.name} 👋`));
   await c.reply(buttons('Does that look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
   // All the customer messages (welcome, thank-you, order updates) are drafted now, quietly; MESSAGES changes them.
   if (biz.category !== 'other' || biz.businessTypeInferred) await draftMessagesOnce(c);
+}
+
+// What a customer sees first: the sections (or the products, with one section).
+async function shopPreview(c: Ctx, hello: string): Promise<OutboundContent[]> {
+  const biz = c.business!;
+  const [cats, products] = await Promise.all([listCategories(c.ctx.db, biz.id), listProducts(c.ctx.db, biz.id)]);
+  const used = cats.filter(x => products.some(p => p.categoryId === x.id));
+  return used.length > 1
+    ? [categoryCarousel(c.ctx.cfg, used, products, { intro: `${hello} What are you looking for?` })]
+    : productCarousel(c.ctx.cfg, biz, products, { title: used[0]?.name ?? 'Our products', key: used[0]?.id ?? 'all', intro: hello });
+}
+
+// Taps on the preview work like they will for customers, so the owner can check items and photos.
+async function previewTap(c: Ctx, choiceId: string) {
+  const biz = c.business!;
+  const [cats, products] = await Promise.all([listCategories(c.ctx.db, biz.id), listProducts(c.ctx.db, biz.id)]);
+  const [kind, a, b] = choiceId.split(':');
+  if (kind === 'cat' || kind === 'more') {
+    const cat = cats.find(x => x.id === a);
+    const items = a === 'all' ? products : products.filter(p => p.categoryId === a);
+    await sendAll(c, productCarousel(c.ctx.cfg, biz, items, { title: cat?.name ?? 'Our products', key: a, page: kind === 'more' ? Number(b) || 0 : 0 }));
+  } else if (kind === 'cats' || kind === 'menu') {
+    const used = cats.filter(x => products.some(p => p.categoryId === x.id));
+    await c.reply(categoryCarousel(c.ctx.cfg, used, products, { intro: `Hi, welcome to ${biz.name} 👋 What are you looking for?`, page: Number(a) || 0 }));
+  } else if (kind === 'det') {
+    const p = products.find(x => x.id === a);
+    if (p) await sendAll(c, productDetails(c.ctx.cfg, p));
+  } else if (kind === 'buy') {
+    await c.reply("That button adds it to the customer's cart. Tap *Test my shop* later to try a whole order.");
+  }
+  return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
 }
 
 async function draftMessagesOnce(c: Ctx) {
@@ -448,8 +512,20 @@ async function toPhotos(c: Ctx) {
 
 async function toLocation(c: Ctx) { await setStage(c, 'location', 'city'); return prompt(c); }
 
-async function saveLocation(c: Ctx, city: string, area: string) {
-  await patchBusiness(c, { city: city.slice(0, 60), area: area.slice(0, 60) });
+const LANDMARK_RE = /[\s,]+(near|opposite|beside|close to|behind|next to)\s+.+$/i;
+
+// Asks for whatever's still missing (area, then city, then street), then reads it all back.
+async function nextLocation(c: Ctx) {
+  const loc = c.ob.draft?.loc;
+  const next: Step = !loc?.area ? 'area' : !loc.city ? 'city' : !loc.street && !c.ob.draft?.streetAsked ? 'street' : 'location_confirm';
+  await setOb(c, { step: next });
+  return prompt(c);
+}
+
+async function saveLocation(c: Ctx) {
+  const loc = c.ob.draft?.loc;
+  if (!loc?.area || !loc.city) { await setOb(c, { step: 'city' }); return prompt(c); }
+  await patchBusiness(c, { city: loc.city.slice(0, 60), area: loc.area.slice(0, 60), address: loc.street?.slice(0, 120) ?? null, landmark: loc.landmark?.slice(0, 80) ?? null });
   await setStage(c, 'hours', 'hours');
   return prompt(c);
 }
@@ -479,8 +555,24 @@ async function addZone(c: Ctx, name: string, match: string, feeKobo: number, pri
   await saveZone(c.ctx.db, { id: `${c.business!.id}_${randomId(6).replace(/[^A-Za-z0-9]/g, 'x')}`, businessId: c.business!.id, name: name.slice(0, 60), match: match.slice(0, 60), feeKobo, timeframe: '', active: true, priority });
 }
 
-async function toPolicies(c: Ctx) { await setOb(c, { step: 'policies' }); return prompt(c); }
-async function toReady(c: Ctx) { await setStage(c, 'connect', 'ready'); return prompt(c); }
+async function toPolicies(c: Ctx) {
+  // The delivery prices, read back once they're all set.
+  if (c.business!.fulfilment !== 'pickup') {
+    const zones = await listZones(c.ctx.db, c.business!.id);
+    const fee = (k: number) => (k ? formatKobo(k) : 'free');
+    const local = zones.find(z => z.priority === 2), city = zones.find(z => z.priority === 1), other = zones.find(z => z.priority === 0 && !z.match);
+    const parts = [
+      local ? `${fee(local.feeKobo)} within ${local.name}` : null,
+      city ? `${fee(city.feeKobo)} elsewhere in ${city.name}` : null,
+      c.business!.shipsInterstate ? `other states: ${other ? fee(other.feeKobo) : 'you quote per order'}` : null,
+    ].filter(Boolean);
+    if (parts.length) await c.reply(`✅ Delivery: ${parts.join(' · ')}.${c.business!.fulfilment === 'both' ? ' Pickup is free.' : ''}`);
+  }
+  await setOb(c, { step: 'policies' });
+  return prompt(c);
+}
+// Who pays Relay's fee comes before TEST, so the pretend order already shows the right total.
+async function toReady(c: Ctx) { await setStage(c, 'connect', 'fee_payer'); return prompt(c); }
 
 async function sendConnectLink(c: Ctx) {
   const link = await createSignupSession(c.ctx.db, c.ctx.cfg, c.business!.id);
@@ -557,8 +649,17 @@ async function prompt(c: Ctx): Promise<unknown> {
       const missing = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length).length : 0;
       return c.reply(buttons(`📷 ${missing} product${missing === 1 ? ' has' : 's have'} no photo yet, so customers see a coloured card with the first letter.\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *Jollof rice*.`, [['ph:skip', 'Add photos later']]));
     }
-    case 'city': return c.reply(`${L}Where is ${biz?.name ?? 'your shop'}? Send the city and area, e.g. *Lagos, Yaba*.`);
-    case 'area': return c.reply(`Which area in ${c.ob.draft?.city ?? 'your city'}?`);
+    case 'city': {
+      const area = c.ob.draft?.loc?.area;
+      if (area) return c.reply(`Which city or state is *${area}* in?`);
+      return c.reply(`${L}Where is ${biz?.name ?? 'your shop'}? Send the address, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.\n\nCustomers who pick up their orders will be sent this address.`);
+    }
+    case 'area': return c.reply(`Which area${c.ob.draft?.loc?.city ? ` in ${c.ob.draft.loc.city}` : ''} is ${biz?.name ?? 'your shop'} in? e.g. *Yaba*`);
+    case 'street': {
+      const loc = c.ob.draft?.loc;
+      return c.reply(buttons(`What's the street or building in ${loc?.area ?? 'your area'}? e.g. *12 Herbert Macaulay Way*. Customers who pick up will be sent it.`, [['loc:nostreet', 'No pickup address']]));
+    }
+    case 'location_confirm': return c.reply(buttons(`📍 ${describeLocation(c.ob.draft?.loc ?? {})}. Is that right?`, [['loc:ok', 'Yes, that\'s right'], ['loc:fix', 'Fix it']]));
     case 'hours': return c.reply(`${L}What time do you open and close? e.g. *8am – 9pm*\n\nDifferent on some days? Send it like *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.`);
     case 'hours_same': {
       const h = validHours(c.ob.draft?.hours);
@@ -581,7 +682,7 @@ async function prompt(c: Ctx): Promise<unknown> {
     }
     case 'policies_edit': return c.reply('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.');
     case 'ready': return c.reply(buttons(`${L}${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
-    case 'fee_payer': return c.reply(buttons(`Before you connect: Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
+    case 'fee_payer': return c.reply(buttons(`${L}Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
     case 'check_wa': return c.reply(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
     case 'check_fb': return c.reply(buttons('And can you log into Facebook? Meta use it to confirm the number is yours.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
     case 'live_photo': case 'live_contacts': case 'live_source': return livePrompt(c);
@@ -593,6 +694,18 @@ function passToAdmin(text: string) {
   const cmd = parseAdminCommand(text);
   return !!cmd && !['addProduct', 'greet', 'help'].includes(cmd.tool);
 }
+
+// Steps whose answer is free text: only the one-word commands count there.
+const FREE_TEXT: Step[] = ['owner_name', 'city', 'area', 'street', 'location_confirm', 'prep_custom', 'policies_edit', 'fee_local', 'fee_city', 'interstate_fee', 'msg_custom'];
+const ONE_WORD = /^(help|products|my products|fee|hours|policies|messages|orders|categories|after ?hours|customers|commands)$/i;
+function isCommand(text: string, step: Step) {
+  const t = text.trim().replace(/[.!]+$/, '');
+  if (ONE_WORD.test(t)) return true;
+  return !FREE_TEXT.includes(step) && passToAdmin(t);
+}
+
+// After a command in the middle of signup: the question for the step they were on.
+export function resumeOnboarding(c: Ctx) { return prompt(c); }
 
 async function startOver(c: Ctx) {
   const { db } = c.ctx;

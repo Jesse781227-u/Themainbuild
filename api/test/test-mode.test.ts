@@ -9,7 +9,7 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   const bot = new Bot();
   const from = '2348036661111';
   const { businessId, last } = await signUp(bot, from, { shop: 'Tolu Treats', product: 'Chin chin 1500' });
-  assert.deepEqual(last[0].options, ['test:start', 'ob:connect']);
+  assert.deepEqual(last.at(-1)!.options, ['test:start', 'ob:connect']);
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tolu' });
 
   const start = await say('Test my shop', 'test:start');
@@ -43,7 +43,7 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   assert.match(back[0].text, /You're back with Relay 👋[\s\S]*Ready to connect/);
   assert.deepEqual(back[0].options, ['ob:connect', 'test:start']);
   assert.equal((await doc('conversations', `admin_${from}`)).testMode, null);
-  assert.match((await say('Connect now', 'ob:connect'))[0].text, /Relay's fee is \*1% of each paid order\*/, 'signup carries on where it was');
+  assert.match((await say('Connect now', 'ob:connect'))[0].text, /Quick check: is your shop's number on the \*WhatsApp Business\* app/, 'signup carries on where it was');
 });
 
 test('TEST: when the owner pays the fee, customers see the shop\'s prices only', async () => {
@@ -57,7 +57,7 @@ test('TEST: when the owner pays the fee, customers see the shop\'s prices only',
   await say('Buy', `buy:${p._id}`);
   const confirm = await say('Checkout', 'checkout');
   assert.doesNotMatch(confirm[0].text, /Service fee/);
-  assert.match(confirm[0].text, /Total: about ₦10,000/);
+  assert.match(confirm[0].text, /Total: ₦10,000\n/);
   const pay = await say('Confirm order', 'confirm');
   assert.match(pay[0].text, /₦10,000\./);
   const paid = await say('Pay (test)', pay[0].options[0]);

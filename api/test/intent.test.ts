@@ -41,7 +41,7 @@ test('intent: tools are scoped to the caller business', async () => {
     : m.startsWith('sneak') ? { tool: 'addProduct', args: { name: 'Sneaky', price: '100', businessId: fx.b.id } } : null);
   const bot = new Bot(llm);
   const r1 = await bot.send('admin', { from: owner(), text: 'nuke the other shop product' });
-  assert.match(r1[0].text, /couldn't find/);
+  assert.match(r1[0].text, /couldn't find|Did you mean \*Product biz-a\*/, 'only its own products are ever offered');
   assert.equal((await doc('products', fx.b.product)).deletedAt, null);
   await bot.send('admin', { from: owner(), text: 'sneak one in' });
   const sneaky = (await listProducts(db, fx.b.id)).find(p => p.name === 'Sneaky');
@@ -55,7 +55,7 @@ test('intent: tools are scoped to the caller business', async () => {
 test('intent: destructive actions need confirmation', async () => {
   const bot = new Bot();
   const ask = await bot.send('admin', { from: owner(), text: `delete Product ${fx.a.id}` });
-  assert.match(ask[0].text, /Delete Product biz-a/);
+  assert.match(ask[0].text, /Delete \*Product biz-a\* \(₦1,000\)\?/);
   assert.deepEqual(ask[0].options, ['yes', 'no']);
   assert.equal((await doc('products', fx.a.product)).deletedAt, null, 'nothing happens before YES');
   assert.match((await bot.send('admin', { from: owner(), text: 'no' }))[0].text, /cancelled/i);
@@ -66,7 +66,7 @@ test('intent: destructive actions need confirmation', async () => {
   // Ask again and confirm with the button.
   await bot.send('admin', { from: owner(), text: `delete Product ${fx.a.id}` });
   const done = await bot.send('admin', { from: owner(), choice: 'yes', text: 'Yes' });
-  assert.match(done[0].text, /Deleted Product biz-a/);
+  assert.match(done[0].text, /🗑️ Deleted \*Product biz-a\*\. You now have \d+ products?\./);
   assert.ok((await doc('products', fx.a.product)).deletedAt);
 });
 

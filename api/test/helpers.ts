@@ -135,7 +135,7 @@ export async function seedCart(id: string, businessId: string, customerId: strin
 // Signup for tests that only need a shop: name → one typed product → preview → (type) → no photos →
 // location → hours → pickup → default policies. Stops at "ready" (Test my shop / Connect now), or
 // with until: 'linked', after the connect link. Returns the business id and the last replies.
-export async function signUp(bot: Bot, from: string, o: { shop?: string; product?: string; type?: string; name?: string; until?: 'ready' | 'linked' } = {}) {
+export async function signUp(bot: Bot, from: string, o: { shop?: string; product?: string; type?: string; name?: string; until?: 'ready' | 'linked'; fee?: 'customer' | 'owner' } = {}) {
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: o.name ?? 'Tayo' });
   await say('hi');
   await say(o.shop ?? 'Test Shop');
@@ -147,14 +147,16 @@ export async function signUp(bot: Bot, from: string, o: { shop?: string; product
   if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', `btype:${o.type ?? 'other'}`);
   if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
   await say('Lagos, Ikeja');
+  await say('No pickup address', 'loc:nostreet');
+  await say('Yes', 'loc:ok');
   last = await say('8am-9pm');
   last = await say('Yes, every day', 'hrs:same');
   if (last.some(m => m.options.some(id => id.startsWith('prep:')))) last = await say('30–60 min', 'prep:1');
   await say('Pickup', 'dl:pickup');
   last = await say('Use these', 'pol:use');
+  last = await say('Who pays', `fee:${o.fee ?? 'customer'}`);
   if (o.until === 'linked') {
     await say('Connect now', 'ob:connect');
-    await say('My customers', 'fee:customer');
     await say('Yes', 'wa:yes');
     last = await say('Yes', 'fb:yes');
   }

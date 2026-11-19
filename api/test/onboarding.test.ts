@@ -68,23 +68,53 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const summary = await say(MENU);
   assert.match(summary[0].text, /I found \*6 products\* in 3 categories/);
   const added = await say('Add all 6', 'imp:all');
-  assert.match(added[0].text, /Added 6 products in 3 categories/);
-  assert.match(added[1].text, /^✅ 6 products in 3 categories: Meals · Snacks · Drinks\. Here's what your customers will see 👇$/);
-  assert.equal((added[2].content as any).interactive.type, 'carousel', 'the real carousel');
-  assert.match(added[2].text, /Hi, welcome to Mama Ada's Kitchen 👋/);
-  assert.deepEqual(added[3].options, ['ok:yes', 'ok:fix', 'prod:more']);
+  assert.match(added[0].text, /^Done ✅ Added 6 products in 3 categories: Meals · Snacks · Drinks\.\n\nHere's what your customers will see 👇$/, 'one confirmation, not two');
+  assert.equal((added[1].content as any).interactive.type, 'carousel', 'the real carousel');
+  assert.match(added[1].text, /Hi, welcome to Mama Ada's Kitchen 👋/);
+  assert.deepEqual(added[2].options, ['ok:yes', 'ok:fix', 'prod:more']);
+  // The preview's buttons work: the owner can open a section.
+  const meals = await say('See Meals', added[1].options[0]);
+  assert.equal((meals[0].content as any).interactive.type, 'carousel');
+  assert.match(meals[0].text, /Meals/);
+  assert.deepEqual(meals[1].options, ['ok:yes', 'ok:fix', 'prod:more']);
   biz = await doc('businesses', bizId);
   assert.deepEqual([biz.category, biz.businessTypeInferred], ['food_beverage', true], 'the menu tells us it is food: no type question');
   assert.ok(biz.messages?.welcome && biz.messages?.paymentThanks, 'customer messages drafted quietly');
 
   assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product again with the new price/);
-  assert.match((await say('Zobo 800'))[0].text, /Updated Zobo: price ₦700 → ₦800/);
+  assert.match((await say('Zobo 800'))[0].text, /^Updated \*Zobo\*: ₦700 → ₦800$/);
+  // Part of the name is enough when it's clearly one product: updated, not added again.
+  const fixed = await say('jollof rice 4000');
+  assert.match(fixed[0].text, /^Updated \*Jollof rice & chicken\*: ₦3,500 → ₦4,000$/);
+  assert.deepEqual(fixed[1].options, ['ok:yes', 'ok:fix', 'ok:see']);
+  // Delete during signup: the Yes button deletes, then back to the question.
+  const ask = await say('delete meat pie');
+  assert.match(ask[0].text, /^Delete \*Meat pie\* \(₦800\)\? Customers won't see it any more\.\n/);
+  assert.deepEqual(ask[0].options, ['yes', 'no']);
+  assert.equal(ask.length, 1, 'the signup question waits until they answer');
+  const gone = await say('Yes, delete it', 'yes');
+  assert.match(gone[0].text, /^🗑️ Deleted \*Meat pie\*\. You now have 5 products\.$/);
+  assert.deepEqual(gone[1].options, ['ok:yes', 'ok:fix', 'prod:more'], 'back to where they were');
+  assert.equal((await db.query('products', [['businessId', '==', bizId]])).filter(p => !p.deletedAt).length, 5);
+  // A new name says so.
+  const fresh = await say('kunu 600');
+  assert.match(JSON.stringify(fresh), /Added new product \*Kunu\* ₦600 in Drinks/);
   const photos = await say('Looks right', 'ok:yes');
   assert.match(photos[0].text, /6 products have no photo yet[\s\S]*up to 5/);
+  // Commands work at every step, then the step's question comes back.
+  const list = await say('PRODUCTS');
+  assert.match(list[0].text, /\*Meals\*\n• Fried rice & turkey — ₦4,000/);
+  assert.doesNotMatch(list[0].text, /no stock count/);
+  assert.deepEqual(list[1].options, ['ph:skip']);
   assert.deepEqual(photos[0].options, ['ph:skip']);
 
   assert.match((await say('Skip for now', 'ph:skip'))[0].text, /^\*Step 3 of 6\* · Where is Mama Ada's Kitchen\?/);
-  assert.match((await say('Lagos, Yaba'))[0].text, /^\*Step 4 of 6\* · What time do you open and close/);
+  const street = await say("it's in Lagos, Yaba, near Tejuosho market");
+  assert.match(street[0].text, /What's the street or building in Yaba\?/);
+  const where = await say('12 Herbert Macaulay Way');
+  assert.match(where[0].text, /^📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?\n/);
+  assert.deepEqual(where[0].options, ['loc:ok', 'loc:fix']);
+  assert.match((await say('Yes', 'loc:ok'))[0].text, /^\*Step 4 of 6\* · What time do you open and close/);
   const same = await say('8am - 9pm');
   assert.match(same[0].text, /8am–9pm\. Same every day\?/);
   assert.deepEqual(same[0].options, ['hrs:same', 'hrs:perday', 'hrs:closed']);
@@ -99,23 +129,26 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.match((await say('3k'))[0].text, /other states/);
   assert.deepEqual((await say('Yes', 'is:yes'))[0].options, ['is:flat', 'is:quote']);
   const policies = await say('I quote per order', 'is:quote');
-  assert.match(policies[0].text, /what most food shops use:\n\n• No returns on food\./);
-  const ready = await say('Use these', 'pol:use');
-  assert.match(ready[0].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉[\s\S]*TEST/);
-  assert.deepEqual(ready[0].options, ['test:start', 'ob:connect']);
+  assert.equal(policies[0].text, '✅ Delivery: ₦1,500 within Yaba · ₦3,000 elsewhere in Lagos · other states: you quote per order. Pickup is free.');
+  assert.match(policies[1].text, /what most food shops use:\n\n• No returns on food\./);
+  // Who pays the fee comes before TEST, so the pretend order shows the right total.
+  const fee = await say('Use these', 'pol:use');
+  assert.match(fee[0].text, /^\*Step 6 of 6\* · Relay's fee is \*1% of each paid order\*, at most ₦2,000/);
+  assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
+  const ready = await say("I'll pay it", 'fee:owner');
+  assert.equal(ready[0].text, "👍 You'll pay the fee — customers see your prices only.");
+  assert.match(ready[1].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉[\s\S]*TEST/);
+  assert.deepEqual(ready[1].options, ['test:start', 'ob:connect']);
+  assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
 
   biz = await doc('businesses', bizId);
-  assert.deepEqual([biz.city, biz.area, biz.prepTime, biz.fulfilment, biz.shipsInterstate, biz.interstatePricing], ['Lagos', 'Yaba', '30–60 min', 'both', true, 'quote']);
+  assert.deepEqual([biz.city, biz.area, biz.address, biz.landmark, biz.prepTime, biz.fulfilment, biz.shipsInterstate, biz.interstatePricing], ['Lagos', 'Yaba', '12 Herbert Macaulay Way', 'Tejuosho Market', '30–60 min', 'both', true, 'quote']);
   assert.deepEqual([biz.hours.mon, biz.hours.sun], [{ open: '08:00', close: '21:00' }, null]);
   assert.match(biz.policies.returns, /No returns on food/);
   const zones = await db.query('deliveryZones', [['businessId', '==', bizId]]);
   assert.deepEqual(zones.map(z => [z.match, z.feeKobo]).sort(), [['Lagos', 300_000], ['Yaba', 150_000]]);
 
-  const fee = await say('Connect now', 'ob:connect');
-  assert.match(fee[0].text, /Relay's fee is \*1% of each paid order\*, at most ₦2,000/);
-  assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
-  assert.match((await say("I'll pay it", 'fee:owner'))[0].text, /WhatsApp Business/);
-  assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
+  assert.match((await say('Connect now', 'ob:connect'))[0].text, /WhatsApp Business/);
   assert.match((await say('Not sure', 'wa:unsure'))[0].text, /Switching is free and keeps your chats/);
   assert.match((await say('Done', 'wa:done'))[0].text, /log into Facebook/);
   assert.match((await say('No', 'fb:no'))[0].text, /create a free account/);
@@ -240,11 +273,13 @@ async function signUpRest(bot: Bot, from: string) {
   if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
   if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
   await say('Lagos, Ikeja');
+  await say('No pickup address', 'loc:nostreet');
+  await say('Yes', 'loc:ok');
   await say('Mon-Sat 9am-7pm, Sun closed');
   await say('Pickup', 'dl:pickup');
   await say('Skip', 'pol:skip');
-  await say('Connect now', 'ob:connect');
   await say('My customers', 'fee:customer');
+  await say('Connect now', 'ob:connect');
   await say('Yes', 'wa:yes');
   await say('Yes', 'fb:yes');
 }

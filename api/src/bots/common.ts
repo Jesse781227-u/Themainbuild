@@ -119,12 +119,22 @@ export async function notifyOwner(db: Firestore, deps: BotDeps, business: Pick<B
   if (created) await deps.enqueue([{ kind: 'outbox', messageId: id }]);
 }
 
+// Button and row titles: one line, no stray spaces, cut at a word (WhatsApp allows 20 and 24 characters).
+export function fitTitle(raw: string, max: number) {
+  const t = raw.replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max - 1);
+  // Cut at the last whole word (unless the cut already falls between words).
+  const cut = (/[\s,.;:–-]/.test(t[max - 1]) ? head : head.replace(/\s+\S*$/, '')).replace(/[\s,.;:–-]+$/, '');
+  return `${cut.length >= max / 2 ? cut : t.slice(0, max - 1)}…`;
+}
+
 export const buttons = (body: string, items: [id: string, title: string][]) => ({
   type: 'interactive' as const,
-  interactive: { type: 'button', body: { text: body }, action: { buttons: items.slice(0, 3).map(([id, title]) => ({ type: 'reply', reply: { id, title: title.slice(0, 20) } })) } },
+  interactive: { type: 'button', body: { text: body }, action: { buttons: items.slice(0, 3).map(([id, title]) => ({ type: 'reply', reply: { id, title: fitTitle(title, 20) } })) } },
 });
 
 export const list = (body: string, button: string, rows: { id: string; title: string; description?: string }[], sectionTitle = 'Options') => ({
   type: 'interactive' as const,
-  interactive: { type: 'list', body: { text: body }, action: { button: button.slice(0, 20), sections: [{ title: sectionTitle.slice(0, 24), rows: rows.slice(0, 10).map(r => ({ id: r.id, title: r.title.slice(0, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } },
+  interactive: { type: 'list', body: { text: body }, action: { button: fitTitle(button, 20), sections: [{ title: sectionTitle.slice(0, 24), rows: rows.slice(0, 10).map(r => ({ id: r.id, title: fitTitle(r.title, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } },
 });

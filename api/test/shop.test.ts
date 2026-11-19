@@ -40,7 +40,7 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   assert.match(more[0].text, /• 3 × Product biz-a: ₦3,000/);
   // No delivery zones yet → pickup confirmation directly.
   const confirm = await shop(bot, me, { choice: 'checkout', text: 'Checkout' });
-  assert.match(confirm[0].text, /Pickup: free\nService fee: ₦30\nTotal: about ₦3,030/);
+  assert.match(confirm[0].text, /Pickup: free\nService fee: ₦30\nTotal: ₦3,030\n/);
   const stockBefore = (await doc('products', fx.a.product)).stock;
   const paid = await shop(bot, me, { choice: 'confirm', text: 'Confirm order' });
   // Test environments use simulated payments: a "Pay ₦X" button to the payment page.

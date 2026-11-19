@@ -13,7 +13,7 @@ import { deleteCategory, listCategories, moveCategoryProducts } from '../service
 import { HELP, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
-import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
+import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
 import { handleMessageInput } from './messages-flow';
@@ -85,16 +85,31 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   }
 
   // ── Onboarding ──
+  // YES/NO to "Delete …?" asked during signup goes to that question, not to the signup step.
+  const confirming = !!conv.pendingAction && (choiceId === 'yes' || choiceId === 'no' || (!choiceId && (YES.test(text) || NO.test(text))));
+  let resume = false;
   if (!business || ob) {
     // The shop being set up isn't always the active one (NEW SHOP, before its name is given).
     if (ob?.businessId && ob.businessId !== business?.id) business = (await db.get(db.doc(C.businesses, ob.businessId))) as Business | null;
     else if (ob?.adding && !ob.businessId) business = null;
     if (business?.status === 'deleted') return;
-    const res = await handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply, react: reactTo }, text, choiceId, photo, input);
-    if (res !== 'pass' || !business) return;
+    if (!confirming || !business) {
+      const res = await handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply, react: reactTo }, text, choiceId, photo, input);
+      if (res !== 'pass' || !business) return;
+    }
+    // A command in the middle of signup (PRODUCTS, delete X, FEE…): answer it, then back to the step.
+    resume = !!ob && ob.stage !== 'live';
   }
-  business = business!;
-  if (business.status === 'deleted') return;
+  if (!business || business.status === 'deleted') return;
+  let held = false; // a YES/NO question was just asked: don't repeat the signup step under it
+  const out = await everyday(business);
+  if (resume && !held) {
+    const now = normalise(((await db.get(convRef)) as AdminConversation | null)?.onboarding);
+    if (now && now.stage !== 'live') await resumeOnboarding({ ctx, deps, business, ob: now, state, reply, react: reactTo });
+  }
+  return out;
+
+  async function everyday(business: Business): Promise<unknown> {
   const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
 
   // ── A whole menu / price list (PDF, photo or pasted list), and its Add all / Cancel ──
@@ -177,10 +192,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (prepared.kind === 'reply') return reply(prepared.text);
   if (prepared.kind === 'confirm') {
     await db.set(convRef, { pendingAction: { tool: prepared.tool, args: prepared.args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
+    held = true;
     return reply(buttons(prepared.prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
   }
   log('info', 'admin_tool', { businessId: business.id, tool: prepared.tool });
   return reply(await runTool(prepared.tool, prepared.args, toolCtx));
+  }
 }
 
 async function storeImage(ctx: AdminContext, deps: BotDeps, business: Business, imageId: string) {
