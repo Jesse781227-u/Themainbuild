@@ -217,7 +217,7 @@ function render() {
     const due = core.filter(t => t.due === d);
     return `<div class="day w${w} ${d < today ? 'past' : ''} ${d === today ? 'today' : ''} ${od ? 'has-overdue' : ''}" title="${fmtDay(d)}${due.length ? ` · due: ${due.map(t => t.id).join(', ')}` : ''}"></div>`;
   }).join('');
-  $('#tlLabels').innerHTML = plan.weeks.map(w => `<span>W${w.n} · ${esc(w.label)}</span>`).join('');
+  $('#tlLabels').innerHTML = plan.weeks.map(w => `<span>${esc(w.label)}</span>`).join('');
 
   $('#weeks').innerHTML = plan.weeks.map(w => {
     const wt = tasks.filter(t => t.week === w.n);
@@ -225,7 +225,7 @@ function render() {
     const wcore = wt.filter(t => !t.stretch);
     const current = today >= w.from && today <= w.to;
     return `<section class="week ${current ? 'current' : ''}">
-      <div class="week-head"><h2>Week ${w.n}: ${esc(w.label)}${current ? ' <span class="chip c-work">this week</span>' : ''}</h2><span class="detail">${fmtDay(w.from)} – ${fmtDay(w.to)} · ${wcore.filter(t => t.done).length}/${wcore.length} done</span></div>
+      <div class="week-head"><h2>${esc(w.label)}${current ? ' <span class="chip c-work">today</span>' : ''}</h2><span class="detail">${fmtDay(w.from)} – ${fmtDay(w.to)} · ${wcore.filter(t => t.done).length}/${wcore.length} done</span></div>
       <div class="goal">Exit: ${esc(w.goal)}</div>
       <div class="bar"><i style="width:${pct(wcore)}%"></i></div>
       <div style="margin-top:8px">${shown.length ? shown.map(taskHtml).join('') : '<div class="empty">Nothing here for this filter.</div>'}</div>

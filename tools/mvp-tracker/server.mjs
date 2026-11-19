@@ -15,6 +15,7 @@ const PORT = Number(process.env.TRACKER_PORT || 4700);
 const SCAN_EXT = /\.(ts|tsx|js|mjs|json|html|yaml|yml|rules)$/;
 
 // ── state ────────────────────────────────────────────────────────────────
+const TEST_PORT = Number(process.env.TEST_EMULATOR_PORT || 8181);
 const emptyState = () => ({ manual: {}, notes: {}, settings: { stagingApiUrl: '', prodApiUrl: '' }, tests: null });
 function readState() {
   try { return { ...emptyState(), ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch { return emptyState(); }
@@ -175,8 +176,10 @@ async function runTests(reason) {
     writeState(s => { s.tests = { ranAt: new Date().toISOString(), reason, skipped: 'api/test does not exist yet', results: {}, summary: { passed: 0, failed: 0 } }; });
     return;
   }
-  if (!(await portOpen(8080))) {
-    writeState(s => { s.tests = { ...(s.tests || { results: {} }), skipped: 'Firestore emulator is not running (start it with npm run dev)', checkedAt: new Date().toISOString() }; });
+  // Tests wipe the database they run against, so they use a separate test emulator (TEST_EMULATOR_PORT,
+  // default 8181), never the 8080 one that holds the local test chats.
+  if (!(await portOpen(TEST_PORT))) {
+    writeState(s => { s.tests = { ...(s.tests || { results: {} }), skipped: `Test emulator is not running on port ${TEST_PORT} (tests never use 8080, which holds your test chats)`, checkedAt: new Date().toISOString() }; });
     return;
   }
   running = true;
@@ -184,7 +187,7 @@ async function runTests(reason) {
   const [cmd, args] = pkg.scripts?.['test:tracker']
     ? ['npm', ['run', 'test:tracker', '--silent']]
     : ['node', ['--import', 'tsx', '--test', '--test-reporter=tap', 'test/**/*.test.ts']];
-  const env = { ...process.env, RELAY_ENV: 'development', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080', FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:9199', GCLOUD_PROJECT: process.env.GCLOUD_PROJECT || 'demo-relay' };
+  const env = { ...process.env, RELAY_ENV: 'development', FIRESTORE_EMULATOR_HOST: `127.0.0.1:${TEST_PORT}`, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:9199', GCLOUD_PROJECT: process.env.GCLOUD_PROJECT || 'demo-relay' };
   const started = Date.now();
   let output = '';
   await new Promise(resolve => {

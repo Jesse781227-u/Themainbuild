@@ -1,104 +1,98 @@
-// Relay pivot plan: WhatsApp + Instagram-native rebuild (decisions in docs/PIVOT_AUDIT.md §6).
+// Relay: one-week MVP, set up end to end (20–26 Nov 2026), including Smart Reach.
 //
-// Phases are gated: the next one starts only when Jesse says go. The dates below are proposed
-// targets, not commitments; edit them freely. The tracker groups by `weeks`, which here are phases.
+// Each "week" below is one day. owner 'claude' tasks are only ever marked done by their checks
+// passing (a named test passing, a file existing…), so "done" always means the evidence is in the
+// repo. owner 'you' tasks get a checkbox; some also tick themselves when detectable (a key set, a
+// placeholder gone, the production API answering).
 //
-// owner 'claude' tasks are only ever marked done by their checks passing. There is no
-// manual checkbox for them, so "done" always means the evidence exists in the repo.
-// owner 'you' tasks get a checkbox in the UI; some also have checks that tick them
-// automatically when the thing is detectable (Java installed, env key set, staging up).
+// Smart Reach follows its brief: each phase is built only after "go" on the one before. The
+// test names under each task are the ones that will prove it.
 //
-// Check kinds:
-//   test        a test with this exact name passed in the last API test run
-//   has / lacks a regex is present in / absent from a file or directory
-//   exists      a file or directory exists
-//   envKey      a key is set to a non-empty value in an env file (value is never read out)
-//   cmd         a command exits 0
-//   merged      a commit is reachable from a branch
-//   pushed      a commit exists on some remote branch
-//   http        GET <setting URL><path> returns 2xx (URL is set in the tracker's settings)
-//   allTests    the last API test run passed, with at least `min` tests
+// Check kinds: test · allTests · has / lacks · exists · envKey · cmd · merged · pushed · http
 
 export const plan = {
-  title: 'Relay pivot: WhatsApp-native',
+  title: 'Relay: 1-week MVP, end to end',
   start: '2026-11-16',
-  end: '2026-12-18',
+  end: '2026-11-26',
   weeks: [
-    { n: 1, label: 'Phase 1 · Strip', from: '2026-11-16', to: '2026-11-16', goal: 'Web app, web push, n8n, storefronts and Firebase-auth tenancy are gone; config fails closed; the API builds and every test passes.' },
-    { n: 2, label: 'Phase 2 · Foundation', from: '2026-11-17', to: '2026-11-27', goal: 'The API runs on Cloudflare Workers (Hono + Firestore REST, Queues, Cron Triggers); webhooks route to the right bot; channel layer, new data model, Bachs split payments, stock holds that expire, and an idempotent on-paid pipeline.' },
-    { n: 3, label: 'Phase 3 · Bots', from: '2026-11-28', to: '2026-12-11', goal: 'An owner onboards and manages stock by chat; a customer browses, checks out and pays on WhatsApp; Instagram DMs get basic replies.' },
-    { n: 4, label: 'Phase 4 · Reports & broadcasts', from: '2026-12-12', to: '2026-12-18', goal: 'Owners get the 20:00 daily summary and can broadcast templates to opted-in customers with the cost shown first.' },
+    { n: 0, label: 'Day 0 · Already built', from: '2026-11-16', to: '2026-11-19', goal: 'Signup, shop bot, payments (test mode), wallet, menus and commands, Status posts, sizes and colours, hours: built and tested locally.' },
+    { n: 1, label: 'Day 1 · Fri 20 Nov', from: '2026-11-20', to: '2026-11-20', goal: 'Smart Reach decisions made; customers\' consent and signals recorded; every marketing message logged.' },
+    { n: 2, label: 'Day 2 · Sat 21 Nov', from: '2026-11-21', to: '2026-11-21', goal: 'Smart Reach Phase 1 done: the cheapest-route plan (open window + owner-sent links) and the first two triggers.' },
+    { n: 3, label: 'Day 3 · Sun 22 Nov', from: '2026-11-22', to: '2026-11-22', goal: 'Phase 2: segments, plain-language campaigns, templates, paid sends approved from the wallet, attribution.' },
+    { n: 4, label: 'Day 4 · Mon 23 Nov', from: '2026-11-23', to: '2026-11-23', goal: 'Phase 3: Relay suggests, the other triggers, Status uses Smart Reach audiences, reports.' },
+    { n: 5, label: 'Day 5 · Tue 24 Nov', from: '2026-11-24', to: '2026-11-24', goal: 'Phase 4: personal carousels, free ad window, offer codes, Instagram route. Smart Reach complete.' },
+    { n: 6, label: 'Day 6 · Wed 25 Nov', from: '2026-11-25', to: '2026-11-25', goal: 'Production set up: domain, secrets, indexes, the real Relay number, commands synced.' },
+    { n: 7, label: 'Day 7 · Thu 26 Nov', from: '2026-11-26', to: '2026-11-26', goal: 'Full run-through, pilot shops lined up, branch merged. Ready to switch on as soon as Meta and Bachs allow.' },
   ],
 };
 
 const t = name => ({ kind: 'test', name });
 
 export const tasks = [
-  // ───────────── Phase 1 · Strip ─────────────
-  { id: 'C1', week: 1, due: '2026-11-16', owner: 'claude', title: 'Config fails closed', detail: 'RELAY_ENV required; 64-hex encryption key and Meta secrets required outside development; no fallback key in production; Meta verify fails closed; webhooks exempt from the IP rate limiter.',
-    checks: [t('config: RELAY_ENV is required'), t('config: production requires a 64-hex TOKEN_ENCRYPTION_KEY'), t('config: production requires Meta secrets'), t('crypto: no fallback key outside development'), t('meta: webhook verification fails closed'), t('rate limit: webhooks are exempt')] },
-  { id: 'C2', week: 1, due: '2026-11-16', owner: 'claude', title: 'n8n, web push, storefront and dashboard code removed',
-    checks: [{ kind: 'lacks', path: 'api/src', re: '[Nn]8[Nn]', label: 'no n8n in the API' }, { kind: 'lacks', path: 'api/src', re: 'pushSubscriptions|messaging\\(\\)', label: 'no web push' }, { kind: 'lacks', path: 'api/src', re: 'storefronts', label: 'no storefronts' }, { kind: 'lacks', path: 'api/src', re: 'verifyIdToken', label: 'no Firebase-auth tenancy' }] },
-  { id: 'C3', week: 1, due: '2026-11-16', owner: 'claude', title: 'Web app removed; one source of domain types',
-    checks: [{ kind: 'lacks', file: 'package.json', re: 'cd web', label: 'root scripts no longer build web' }, { kind: 'exists', path: 'api/src/domain/commerce.ts' }] },
-  { id: 'C4', week: 1, due: '2026-11-16', owner: 'claude', title: 'Checkout integrity and tenant isolation still hold at the service level',
-    checks: [t('checkout: duplicate lines cannot oversell'), t('checkout: expired cart is rejected'), t('checkout: order snapshots item name and price'), t('tenant: inventory adjust rejects another business product'), t('tenant: delivery method rejects another business order'), t('tenant: batch assignment rejects another business order'), t('tenant: product create cannot overwrite another business product')] },
-  { id: 'C5', week: 1, due: '2026-11-16', owner: 'claude', title: 'Firestore denies all client access',
-    checks: [t('rules: clients cannot read any collection'), t('rules: clients cannot write any collection')] },
+  // ───────────── Day 0 · Already built (proof only) ─────────────
+  { id: 'B1', week: 0, due: '2026-11-19', owner: 'claude', title: 'Signup by chat: menu upload, preview, location, hours, delivery, policies, messages, TEST, connect',
+    checks: [t('onboarding v2: hi → shop name → menu → preview → location → hours → delivery → policies → ready → connect link'), t('location: sentences become area, city, street and landmark'), t('hours: whole weeks in different words go straight to the check')] },
+  { id: 'B2', week: 0, due: '2026-11-19', owner: 'claude', title: 'Shop bot: welcome first, browse, sizes and colours, cart, checkout, delivery prices',
+    checks: [t('first message: "hi" gets the welcome and three options, no carousel'), t('shop: checkout flow creates order awaiting payment'), t('customer: Add to cart asks which size; the cart, the order and the stock hold go by size'), t('delivery: a Yaba address gets the Yaba price, not the Lagos one')] },
+  { id: 'B3', week: 0, due: '2026-11-19', owner: 'claude', title: 'Payments (test mode), receipts, wallet, verify and withdraw',
+    checks: [t('shop: checkout flow creates order awaiting payment'), t('wallet: older sales are counted from the ledger; a new payment is added at once'), t('withdraw: minimum, daily limit, confirm once, paid at once in test mode')] },
+  { id: 'B4', week: 0, due: '2026-11-19', owner: 'claude', title: 'Owner menus and / commands, follow-up buttons, targeted Status posts',
+    checks: [t('commands: the registry makes a valid WhatsApp command list, and a bad entry stops the sync'), t('follow-ups: at most 3 buttons, and with three the last is Menu'), t('status: /status → picture + caption + 5 to mention → change people → posted → a day later, who ordered')] },
 
-  { id: 'Y1', week: 1, due: '2026-11-18', owner: 'you', title: 'Install Java 21 (and Firebase CLI)', detail: 'So the emulator tests run locally, not only in CI. `winget install EclipseAdoptium.Temurin.21.JDK` then `npm i -g firebase-tools`.',
-    checks: [{ kind: 'cmd', run: 'java -version', label: 'java on PATH' }, { kind: 'cmd', run: 'firebase --version', label: 'firebase CLI on PATH' }] },
-  { id: 'Y2', week: 1, due: '2026-11-18', owner: 'you', title: 'Shut down the Render services (relay-web and relay-api)', detail: 'Hosting moved to Cloudflare. Deleting render.yaml does not stop running services.', checks: [] },
-  { id: 'Y3', week: 1, due: '2026-11-18', owner: 'you', title: 'Start Meta Business Verification and the Tech Provider application', detail: 'Launch blocker for Embedded Signup; Meta review takes weeks.', checks: [] },
+  // ───────────── Day 1 ─────────────
+  { id: 'Y1', week: 1, due: '2026-11-20', owner: 'you', title: 'Answer the 10 Smart Reach questions', detail: 'Phase order, who pays service/utility message costs, what counts as a "regular", frequency cap and quiet hours, default triggers for food vs fashion, opt-in wording, message rates, Instagram, keep or replace broadcasts. Asked one at a time in the chat.', checks: [] },
+  { id: 'Y2', week: 1, due: '2026-11-20', owner: 'you', title: 'Rotate the credentials pasted in chat earlier', detail: 'Meta system-user access token, Meta app secret, the number PIN, and the Firebase key file. Put the new values in api/.dev.vars and the staging secrets.', checks: [] },
+  { id: 'R1', week: 1, due: '2026-11-20', owner: 'claude', title: 'Message costs in one config module', detail: 'Service allowance (1,000/month), marketing and utility rates, free entry window hours, owner-sent = free (flag). Rates as config, not hard-coded.',
+    checks: [{ kind: 'exists', path: 'api/src/services/messaging-costs.ts' }, { kind: 'has', file: 'api/src/config.ts', re: 'FREE_ENTRY_WINDOW_HOURS', label: 'free entry window is config' }] },
+  { id: 'R2', week: 1, due: '2026-11-20', owner: 'claude', title: 'Customer signals and consent', detail: 'Views, questions, carts, orders and replies recorded (ids only). Opt-in at checkout unticked; "Stop updates" stops everything at once; "Start updates" turns it back on.',
+    checks: [t('reach: signals are recorded for views, questions, carts, orders and replies'), t('reach: checkout opt-in is unticked by default'), t('reach: stop updates opts out at once and every send respects it')] },
+  { id: 'R3', week: 1, due: '2026-11-20', owner: 'claude', title: 'Sends log: the source of truth for cost and results', detail: 'Every marketing message is one record: route, cost, status, and later the reply or order it led to. Service messages counted per month.',
+    checks: [t('reach: sends log is the source of truth for cost')] },
 
-  // ───────────── Phase 2 · Foundation ─────────────
-  { id: 'Y4', week: 2, due: '2026-11-20', owner: 'you', title: 'Bachs: account, API keys, and docs for sub-accounts, splits and webhooks',
+  // ───────────── Day 2 ─────────────
+  { id: 'Y3', week: 2, due: '2026-11-21', owner: 'you', title: 'Submit Meta Business Verification (portfolio Relayng01)', detail: 'The one blocker for real WhatsApp: until it is approved, Meta refuses messages ("Business Account locked") and no templates can be approved. Review can take days to weeks, so it needs to start now.', checks: [] },
+  { id: 'R4', week: 2, due: '2026-11-21', owner: 'claude', title: 'Delivery router: open window first, then owner-sent links', detail: 'Skips opted-out, capped (2/week) and reported customers; queues during quiet hours (21:00–08:00 Lagos); falls through when the free allowance is used up.',
+    checks: [t('router: open window is free and used first'), t('router: service allowance used up falls through'), t('router: opted out, capped and quiet hours are skipped or queued'), t('router: owner-sent links are encoded, capped at 30, and mark-sent updates sends')] },
+  { id: 'R5', week: 2, due: '2026-11-21', owner: 'claude', title: 'Route plan shown before anything is sent', detail: '"18 free in their chat · 9 from your phone · ₦0" [Send all] [Free ones only] [Edit message] [Cancel].',
+    checks: [t('route plan: counts and cost per route before sending')] },
+  { id: 'R6', week: 2, due: '2026-11-21', owner: 'claude', title: 'First triggers: back in stock, abandoned cart', detail: 'Fire once per event, only to people who wanted it, inside the caps. Smart Reach Phase 1 complete: summary, then wait for "go".',
+    checks: [t('trigger: back in stock fires once per restock for people who wanted it'), t('trigger: abandoned cart after an hour, once')] },
+
+  // ───────────── Day 3 ─────────────
+  { id: 'Y4', week: 3, due: '2026-11-22', owner: 'you', title: 'Bachs: sandbox account, API keys and docs', detail: 'Docs needed for: payment collection and its webhook, payouts to a bank account, and account-name check. Until then real payouts stay manual (fail closed).',
     checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'BACHS_API_KEY' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'BACHS_WEBHOOK_SECRET' }] },
-  { id: 'Y5', week: 2, due: '2026-11-20', owner: 'you', title: 'Meta test number + app secrets in api/.dev.vars',
-    checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'META_APP_SECRET' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'META_VERIFY_TOKEN' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'ADMIN_BOT_PHONE_NUMBER_ID' }] },
-  { id: 'Y6', week: 2, due: '2026-11-17', owner: 'you', title: 'Cloudflare account (Workers Paid plan for Queues) and a wrangler login', detail: 'Then create the resources wrangler.toml names, per environment: queues relay-events-<env> and relay-events-<env>-dlq (npx wrangler queues create …), and R2 buckets relay-product-images-<env> (npx wrangler r2 bucket create …).', checks: [{ kind: 'cmd', run: 'npx wrangler --version', label: 'wrangler available' }] },
-  { id: 'Y7', week: 2, due: '2026-11-27', owner: 'you', title: 'Legal review of the drafted Privacy, Terms and Data Deletion pages', detail: 'Drafts in api/public/. Fill every [bracketed] value, then remove the DRAFT banner.', checks: [{ kind: 'lacks', path: 'api/public', re: '\\[[A-Z]{2,}[A-Z ]*[\\],]', label: 'no [PLACEHOLDER] values left' }, { kind: 'lacks', path: 'api/public', re: 'class="draft"', label: 'draft banner removed' }] },
+  { id: 'R7', week: 3, due: '2026-11-22', owner: 'claude', title: 'Segments: built-in groups and plain-language ones', detail: 'Top 10%, 3+ orders, one-time, active, cooling, lapsed, "bought X" per category. "My sneaker buyers" → a checked rule with a count. Refreshed on every paid order and nightly.',
+    checks: [t('segments: each rule type selects the right customers'), t('segments: plain language becomes a validated rule with a count'), t('segments: refresh on a paid order')] },
+  { id: 'R8', week: 3, due: '2026-11-22', owner: 'claude', title: 'Templates and personal messages', detail: 'Marketing template library (text + image, product carousel) with a submit script; every variable checked per customer; broken messages skipped, never sent.',
+    checks: [t('templates: library validates variables and submit script lists them'), t('personal: a message with a missing variable is skipped, not sent broken')] },
+  { id: 'R9', week: 3, due: '2026-11-22', owner: 'claude', title: 'Paid sends from the wallet, attribution and campaign reports', detail: 'Paid templates need the owner\'s OK and enough wallet balance. A reply or order within 48h counts for the last send. Sent → replied → ordered → revenue, cost, revenue per ₦1.',
+    checks: [t('route plan: paid sends need approval and enough wallet balance'), t('attribution: reply or order within 48h links to the last send'), t('report: campaign numbers match the sends log')] },
 
-  { id: 'C0', week: 2, due: '2026-11-19', owner: 'claude', title: 'API runs on Cloudflare Workers', detail: 'Hono instead of Express; Firestore over REST (transactions via beginTransaction/commit) instead of firebase-admin; wrangler.toml with Queues and Cron Triggers.',
-    checks: [{ kind: 'exists', path: 'api/wrangler.toml' }, { kind: 'lacks', file: 'api/package.json', re: '"express"', label: 'no Express' }, { kind: 'lacks', file: 'api/package.json', re: 'firebase-admin', label: 'no firebase-admin at runtime' }] },
-  { id: 'C6', week: 2, due: '2026-11-19', owner: 'claude', title: 'Phone, money and Lagos-time helpers',
-    checks: [t('phone: normalises Nigerian numbers to E.164'), t('money: naira to kobo is exact'), t('money: fee is 1% of goods capped at 2000 naira'), t('time: today boundaries use Africa/Lagos')] },
-  { id: 'C7', week: 2, due: '2026-11-20', owner: 'claude', title: 'Webhook router: save pending, ack fast, route to the right bot',
-    checks: [t('router: admin bot number routes to admin handler'), t('router: merchant number routes to shop handler'), t('router: unknown number is ignored'), t('webhook: duplicate message is processed once'), t('webhook: queued event is retried after a failure')] },
-  { id: 'C8', week: 2, due: '2026-11-21', owner: 'claude', title: 'Channel layer with the 24-hour window guard',
-    checks: [t('window: free-form allowed within 24 hours'), t('window: free-form blocked after 24 hours')] },
-  { id: 'C9', week: 2, due: '2026-11-24', owner: 'claude', title: 'Stock hold reserves and auto-releases',
-    checks: [t('hold: checkout reserves stock until timeout'), t('hold: expired unpaid order releases stock'), t('hold: release is idempotent')] },
-  { id: 'C10', week: 2, due: '2026-11-26', owner: 'claude', title: 'Bachs: split payment, unique-amount matching, verified idempotent webhook',
-    checks: [t('payments: pending orders get unique amounts per business'), t('payments: webhook rejects bad signature'), t('payments: webhook matches by amount and marks order paid'), t('payments: duplicate webhook is idempotent')] },
-  { id: 'C11', week: 2, due: '2026-11-27', owner: 'claude', title: 'On-paid pipeline runs exactly once',
-    checks: [t('paid: pipeline is idempotent'), t('paid: updates customer stats, ledger and daily stats')] },
-  { id: 'C12', week: 2, due: '2026-11-27', owner: 'claude', title: 'Cron Triggers for hold release and the daily summary',
-    checks: [{ kind: 'has', file: 'api/wrangler.toml', re: 'crons', label: 'cron triggers configured' }, t('jobs: scheduled handler releases expired holds')] },
+  // ───────────── Day 4 ─────────────
+  { id: 'Y5', week: 4, due: '2026-11-23', owner: 'you', title: 'Update the Terms and Privacy pages', detail: 'They still say Relay does not hold money and customers always pay the fee. Add: Relay holds the wallet, who pays the fee, BVN/bank details for withdrawals, marketing consent and Stop updates, Status mentions.',
+    checks: [{ kind: 'lacks', path: 'api/public', re: 'does not hold merchant funds', label: '"Relay does not hold merchant funds" removed' }] },
+  { id: 'Y6', week: 4, due: '2026-11-23', owner: 'you', title: 'Ask a lawyer or Bachs about holding shops\' money', detail: 'Holding funds for merchants in Nigeria usually needs a CBN licence or a licensed partner holding them. Needed before real money goes into wallets.', checks: [] },
+  { id: 'R10', week: 4, due: '2026-11-23', owner: 'claude', title: 'Relay suggests (max once a day) and the remaining triggers', detail: 'Price drop, after delivery, first-order thanks with the opt-in ask (on); usual order due and win back (off until turned on). Toggles in /reach.',
+    checks: [t('suggest: Relay suggests at most once a day per shop'), t('trigger: price drop, after delivery and first order thanks'), t('trigger: usual order due and win back stay off until turned on')] },
+  { id: 'R11', week: 4, due: '2026-11-23', owner: 'claude', title: 'Status posts use Smart Reach audiences; weekly report', detail: 'Captions say "Reply *KEYWORD* to order" so replies open free windows. Weekly summary names the best trigger; monthly message-cost line.',
+    checks: [t('status: reach segments pick the mentions and captions use a reply keyword'), t('report: weekly summary names the best trigger')] },
 
-  // ───────────── Phase 3 · Bots ─────────────
-  { id: 'Y8', week: 3, due: '2026-11-28', owner: 'you', title: 'Gemini and OpenAI API keys in api/.dev.vars',
-    checks: [{ kind: 'envKey', file: 'api/.dev.vars', key: 'GEMINI_API_KEY' }, { kind: 'envKey', file: 'api/.dev.vars', key: 'OPENAI_API_KEY' }] },
-  { id: 'Y9', week: 3, due: '2026-12-05', owner: 'you', title: 'Request Instagram messaging permissions in Meta App Review', checks: [] },
-  { id: 'Y10', week: 3, due: '2026-12-11', owner: 'you', title: 'Line up 3–5 pilot merchants', checks: [] },
+  // ───────────── Day 5 ─────────────
+  { id: 'Y7', week: 5, due: '2026-11-24', owner: 'you', title: 'Nigerian message rates, and templates submitted once verified', detail: 'Marketing / utility / service rates into config (or confirm the placeholders). After Business Verification: submit the templates in docs/meta-templates.md and the Smart Reach library.', checks: [] },
+  { id: 'R12', week: 5, due: '2026-11-24', owner: 'claude', title: 'Personal carousels, free ad window, offer codes, Instagram route', detail: '"Picked for you" product carousels; the 72h free window when a customer came from a click-to-WhatsApp ad; single-use personal codes checked at checkout; free Instagram DMs inside 24h.',
+    checks: [t('carousel: picked-for-you products per customer'), t('router: free entry window from ad referral is detected and used'), t('offer codes: single use, per customer, expiry checked at checkout'), t('router: instagram route inside the 24h window')] },
+  { id: 'R13', week: 5, due: '2026-11-24', owner: 'claude', title: 'Indexes for the Smart Reach queries', checks: [{ kind: 'has', file: 'firestore.indexes.json', re: 'customerSignals', label: 'customerSignals index' }, { kind: 'has', file: 'firestore.indexes.json', re: '"sends"', label: 'sends index' }] },
 
-  { id: 'C13', week: 3, due: '2026-12-02', owner: 'claude', title: 'Intent → tool mapping, scoped and confirmed',
-    checks: [t('intent: add product maps to addProduct'), t('intent: tools are scoped to the caller business'), t('intent: destructive actions need confirmation'), t('intent: off-topic requests are redirected')] },
-  { id: 'C14', week: 3, due: '2026-12-05', owner: 'claude', title: 'Admin Bot onboarding by chat', detail: 'Business info → first products → Embedded Signup link → connected.',
-    checks: [t('admin: new owner is onboarded by chat'), t('admin: embedded signup writes waNumbers')] },
-  { id: 'C15', week: 3, due: '2026-12-09', owner: 'claude', title: 'Shop Bot: browse → checkout Flow → pay',
-    checks: [t('shop: greeting lists categories'), t('shop: checkout flow creates order awaiting payment'), t('shop: returning customer is recognised')] },
-  { id: 'C16', week: 3, due: '2026-12-10', owner: 'claude', title: 'Owner takeover until handback',
-    checks: [t('takeover: owner reply silences the bot'), t('takeover: handback resumes the bot')] },
-  { id: 'C17', week: 3, due: '2026-12-11', owner: 'claude', title: 'Instagram DMs: basic receive and reply',
-    checks: [t('instagram: DM routes to the shop handler')] },
-  { id: 'C18', week: 3, due: '2026-12-11', owner: 'claude', title: 'Webhook simulator for both bots', checks: [{ kind: 'exists', path: 'api/scripts/simulate-webhook.ts' }] },
+  // ───────────── Day 6 ─────────────
+  { id: 'Y8', week: 6, due: '2026-11-25', owner: 'you', title: 'Production address and secrets', detail: 'A real domain for the API (wrangler.toml still has a placeholder), Cloudflare production queues and R2 bucket, and production secrets: TOKEN_ENCRYPTION_KEY, Meta, Firebase, Gemini, OPS_API_KEY.',
+    checks: [{ kind: 'lacks', file: 'api/wrangler.toml', re: 'relay-api-production\\.example\\.workers\\.dev', label: 'production address is real' }, { kind: 'http', setting: 'prodApiUrl', path: '/health' }] },
+  { id: 'Y9', week: 6, due: '2026-11-25', owner: 'you', title: 'Firebase: Blaze plan and production indexes', detail: 'Blaze is needed for the webhook-log TTL. Then deploy firestore.indexes.json to relayafrica-fcc2a.', checks: [] },
+  { id: 'Y10', week: 6, due: '2026-11-25', owner: 'you', title: 'Register the real Relay (Admin Bot) number and sync its commands', detail: 'Once it can receive the code: add it in Production setup, set ADMIN_BOT_PHONE_NUMBER_ID, then run npm run sync:commands (try -- --dry-run first).', checks: [] },
+  { id: 'C1', week: 6, due: '2026-11-25', owner: 'claude', title: 'Staging matches the branch, every check green', checks: [{ kind: 'http', setting: 'stagingApiUrl', path: '/health' }, { kind: 'allTests', min: 200 }] },
 
-  // ───────────── Phase 4 · Reports & broadcasts ─────────────
-  { id: 'Y11', week: 4, due: '2026-12-15', owner: 'you', title: 'Get the message templates approved by Meta', detail: 'Exact names and bodies are in docs/meta-templates.md (daily summary, receipt, broadcast). Also set MARKETING_MESSAGE_COST_KOBO.', checks: [] },
-  { id: 'C19', week: 4, due: '2026-12-15', owner: 'claude', title: 'Daily summary at 20:00 Lagos',
-    checks: [t('summary: daily summary uses Lagos day'), t('summary: uses a template outside the 24-hour window')] },
-  { id: 'C20', week: 4, due: '2026-12-17', owner: 'claude', title: 'Broadcasts to opted-in customers with cost shown first',
-    checks: [t('broadcast: only opted-in customers are targeted'), t('broadcast: owner sees audience size and cost before sending')] },
-  { id: 'C21', week: 4, due: '2026-12-18', owner: 'claude', title: 'Full API test suite green', checks: [{ kind: 'allTests', min: 60 }] },
+  // ───────────── Day 7 ─────────────
+  { id: 'Y11', week: 7, due: '2026-11-26', owner: 'you', title: 'Line up 3–5 pilot shops', detail: 'Run each through signup in the test chat (or for real once Meta allows): menu, hours, delivery, TEST, wallet verify.', checks: [] },
+  { id: 'Y12', week: 7, due: '2026-11-26', owner: 'you', title: 'Full run-through yourself', detail: 'In the test chat: sign up a shop, order as a customer, pay (test), withdraw (test), make a Status, send a Smart Reach campaign, stop updates as a customer.', checks: [] },
+  { id: 'C2', week: 7, due: '2026-11-26', owner: 'claude', title: 'pivot/whatsapp-native merged into main', detail: 'After your go.', checks: [{ kind: 'merged', commit: 'pivot/whatsapp-native', into: 'main' }] },
+  { id: 'C3', week: 7, due: '2026-11-26', owner: 'claude', title: 'Full API test suite green with Smart Reach', checks: [{ kind: 'allTests', min: 230 }] },
 ];
