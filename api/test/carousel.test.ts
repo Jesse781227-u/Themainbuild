@@ -69,13 +69,15 @@ test('shop: customers browse categories as carousels, Buy adds to the cart, sear
   await saveWhatsAppConnection(db, getConfig(env), { businessId: fx.b.id, wabaId: 'waba-b', phoneNumberId: fx.b.pnid, accessToken: 'merchant-b' });
   const bot = new Bot();
   const c = { from: '2348090000002', to: fx.b.pnid };
-  const hi = await bot.send('shop', { ...c, text: 'hi' });
-  assert.match(hi[0].text, /welcome to Business biz-b 👋 What are you looking for\?/);
+  const hello = await bot.send('shop', { ...c, text: 'hi' });
+  assert.deepEqual(hello[0].options, ['menu', 'ask', 'track'], 'a plain hi gets the welcome, no carousel');
+  const hi = await bot.send('shop', { ...c, text: 'send me your menu' });
+  assert.match(hi[0].text, /^Here's what we have 👇/);
   assert.ok(hi[0].options.includes(`cat:${kicks.id}`) && hi[0].options.includes(`cat:${bags.id}`));
   assert.equal(ia(hi[0].content).type, 'carousel', 'categories are swipeable cards too');
   assert.match(hi[0].text, /Sneakers · 3 items · from ₦25,000\n2\. Bags · 1 item · from ₦9,000\nReply with a number to choose\./);
   const back = await bot.send('shop', { ...c, choice: 'menu', text: 'Menu' });
-  assert.match(back[0].text, /^Here is everything we have\. What are you looking for\?/, 'no second welcome');
+  assert.match(back[0].text, /^Here's what we have 👇\n1\./, 'no second welcome');
 
   const list = await bot.send('shop', { ...c, choice: `cat:${kicks.id}`, text: 'Sneakers' });
   assert.equal(ia(list[0].content).type, 'carousel');
@@ -84,7 +86,7 @@ test('shop: customers browse categories as carousels, Buy adds to the cart, sear
   const white = (await db.query('products', [['businessId', '==', fx.b.id]])).find(p => p.name === 'White AF1')!;
   assert.match((await bot.send('shop', { ...c, choice: `buy:${white._id}`, text: 'Sold out' }))[0].text, /White AF1 is sold out right now/);
   const black = (await db.query('products', [['businessId', '==', fx.b.id]])).find(p => p.name === 'Black AF1')!;
-  assert.match((await bot.send('shop', { ...c, choice: `buy:${black._id}`, text: 'Buy' }))[0].text, /Added 1 × Black AF1/);
+  assert.match((await bot.send('shop', { ...c, choice: `buy:${black._id}`, text: 'Buy' })).at(-1)!.text, /Added 1 × Black AF1/);
   assert.match((await bot.send('shop', { ...c, choice: `det:${black._id}`, text: 'Details' }))[0].text, /\*Black AF1\*\n₦25,000/);
 
   const found = await bot.send('shop', { ...c, text: 'af1 sneakers' });

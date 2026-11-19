@@ -79,7 +79,6 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.deepEqual(meals[1].options, ['ok:yes', 'ok:fix', 'prod:more']);
   biz = await doc('businesses', bizId);
   assert.deepEqual([biz.category, biz.businessTypeInferred], ['food_beverage', true], 'the menu tells us it is food: no type question');
-  assert.ok(biz.messages?.welcome && biz.messages?.paymentThanks, 'customer messages drafted quietly');
 
   assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product again with the new price/);
   assert.match((await say('Zobo 800'))[0].text, /^Updated \*Zobo\*: ₦700 → ₦800$/);
@@ -131,15 +130,43 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const policies = await say('I quote per order', 'is:quote');
   assert.equal(policies[0].text, '✅ Delivery: ₦1,500 within Yaba · ₦3,000 elsewhere in Lagos · other states: you quote per order. Pickup is free.');
   assert.match(policies[1].text, /what most food shops use:\n\n• No returns on food\./);
+  // Optional: how the shop talks to customers. Three samples each for the three that matter most.
+  const offer = await say('Use these', 'pol:use');
+  assert.deepEqual(offer[0].options, ['msgs:choose', 'msgs:default']);
+  const welcome = await say('Choose messages', 'msgs:choose');
+  assert.match(welcome[0].text, /^Message 1 of 3 · \*Welcome\* — sent the first reply to a new customer\.\n\nNow:\n[\s\S]*\*Option 1\* \(warm and chatty\)\n[\s\S]*\*Option 2\* \(short and professional\)\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?\n\n\*Option 3\* \(playful, with a light Naija touch\)/);
+  assert.deepEqual(welcome[1].options, ['msgpick:welcome:1', 'msgpick:welcome:2', 'msgpick:welcome:3', 'msgedit:welcome', 'msgkeep:welcome']);
+  const thanks = await say('Option 2', 'msgpick:welcome:2');
+  assert.match(thanks[0].text, /^Saved ✅ Here's exactly how customers will see your \*welcome\* message:\n\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?$/);
+  assert.match(thanks[1].text, /^Message 2 of 3 · \*Thank you after payment\*/);
+  // Their own words: checked, shown, then saved.
+  await say('Write my own', 'msgedit:paymentThanks');
+  assert.match((await say('Thanks {custmer}! Got your {total}.'))[0].text, /I don't know \{custmer\}/);
+  const mine = await say('Thanks {customer_name}! We got your {total} for {order_id} 🙏');
+  assert.match(mine[0].text, /^Here's how customers will see it:\n\nThanks Ada! We got your ₦12,500 for RLY-7KQ2M 🙏/);
+  assert.deepEqual(mine[0].options, ['msgsave:paymentThanks', 'msgedit:paymentThanks']);
+  const third = await say('Save', 'msgsave:paymentThanks');
+  assert.match(third[1].text, /^Message 3 of 3 · \*Showing what you sell\*/);
+  const fee = await say('Keep the current one', 'msgkeep:menuIntro');
+  assert.match(fee.map(m => m.text).join('\n'), /That's your messages done 👍/);
+  biz = await doc('businesses', bizId);
+  assert.equal(biz.messages.welcome, "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
+  assert.equal(biz.messages.paymentThanks, 'Thanks {customer_name}! We got your {total} for {order_id} 🙏');
+  assert.equal(biz.messages.menuIntro, undefined, 'kept the default');
   // Who pays the fee comes before TEST, so the pretend order shows the right total.
-  const fee = await say('Use these', 'pol:use');
-  assert.match(fee[0].text, /^\*Step 6 of 6\* · Relay's fee is \*1% of each paid order\*, at most ₦2,000/);
+  assert.match(fee.at(-1)!.text, /^\*Step 6 of 6\* · Relay's fee is \*1% of each paid order\*, at most ₦2,000/);
+  fee[0] = fee.at(-1)!;
   assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
   const ready = await say("I'll pay it", 'fee:owner');
   assert.equal(ready[0].text, "👍 You'll pay the fee — customers see your prices only.");
   assert.match(ready[1].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉[\s\S]*TEST/);
   assert.deepEqual(ready[1].options, ['test:start', 'ob:connect']);
   assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
+  // TEST: the welcome they picked (option 2) is the first thing a customer gets for "hi".
+  const test = await say('Test my shop', 'test:start');
+  assert.equal(test[1].text.split('\n')[0], "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
+  assert.deepEqual(test[1].options, ['menu', 'ask', 'track'], 'no carousel on a plain hi');
+  await say('EXIT');
 
   biz = await doc('businesses', bizId);
   assert.deepEqual([biz.city, biz.area, biz.address, biz.landmark, biz.prepTime, biz.fulfilment, biz.shipsInterstate, biz.interstatePricing], ['Lagos', 'Yaba', '12 Herbert Macaulay Way', 'Tejuosho Market', '30–60 min', 'both', true, 'quote']);
@@ -278,6 +305,7 @@ async function signUpRest(bot: Bot, from: string) {
   await say('Mon-Sat 9am-7pm, Sun closed');
   await say('Pickup', 'dl:pickup');
   await say('Skip', 'pol:skip');
+  await say('Use defaults', 'msgs:default');
   await say('My customers', 'fee:customer');
   await say('Connect now', 'ob:connect');
   await say('Yes', 'wa:yes');

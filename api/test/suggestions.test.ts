@@ -24,9 +24,9 @@ const ia = (m: { content: unknown }) => (m.content as { interactive: { type: str
 
 test('suggestions: with no signal, only the same-category upgrade is offered', async () => {
   const r = await shop(new Bot(), '2348091200001', `add:${ids['Jollof rice']}`);
-  assert.match(r[0].text, /Added 1 × Jollof rice/);
+  assert.match(r[1].text, /Added 1 × Jollof rice/, 'the cart comes last, so its Checkout button stays at the bottom');
   assert.equal(r.length, 2);
-  assert.match(r[1].text, /^Want to upgrade your Jollof rice\?\n\n\*Jollof special\*\n₦3,200/);
+  assert.match(r[0].text, /^Want to upgrade your Jollof rice\?\n\n\*Jollof special\*\n₦3,200/);
 });
 
 test('suggestions: owner pairings come first, then the upgrade; sold out and in-cart items are skipped; once per item', async () => {
@@ -36,9 +36,9 @@ test('suggestions: owner pairings come first, then the upgrade; sold out and in-
   const me = '2348091200002';
   await shop(bot, me, `add:${ids['Plantain']}`);
   const r = await shop(bot, me, `add:${ids['Jollof rice']}`);
-  assert.equal(ia(r[1]).type, 'carousel');
-  assert.match(r[1].text, /^Goes well with your Jollof rice 👇\n1\. Zobo · ₦500\n2\. ⬆️ Upgrade/, 'Chapman is sold out, Plantain is already in the cart');
-  assert.deepEqual(r[1].options, [`buy:${ids['Zobo']}`, `buy:${ids['Jollof special']}`]);
+  assert.equal(ia(r[0]).type, 'carousel');
+  assert.match(r[0].text, /^Goes well with your Jollof rice 👇\n1\. Zobo · ₦500\n2\. ⬆️ Upgrade/, 'Chapman is sold out, Plantain is already in the cart');
+  assert.deepEqual(r[0].options, [`buy:${ids['Zobo']}`, `buy:${ids['Jollof special']}`]);
   assert.equal((await shop(bot, me, `add:${ids['Jollof rice']}`)).length, 1, 'adding it again: no repeat suggestions');
   const fromSuggestion = await shop(bot, me, `buy:${ids['Zobo']}`);
   assert.equal(fromSuggestion.length, 1, 'adding the suggested Zobo: just the cart, no second suggestion');
@@ -52,7 +52,7 @@ test('suggestions: what customers bought together, and the AI pick (cached)', as
   const asked: string[] = [];
   const bot = new Bot({ async chooseTool() { return null; }, async pickPairs({ anchor }) { asked.push(anchor.name); return { cross: [ids['Zobo'], 'not-a-real-id'], upsell: null }; } });
   const r = await shop(bot, '2348091200003', `add:${ids['Fried rice']}`);
-  assert.match(r[1].text, /^Goes well with your Fried rice 👇\n1\. Plantain · ₦700\n2\. Zobo · ₦500/, 'bought together first, then the AI');
+  assert.match(r[0].text, /^Goes well with your Fried rice 👇\n1\. Plantain · ₦700\n2\. Zobo · ₦500/, 'bought together first, then the AI');
   assert.deepEqual(asked, ['Fried rice']);
   assert.deepEqual((await doc('products', ids['Fried rice'])).aiPairs.ids, [ids['Zobo']], 'unknown ids are dropped');
   await shop(bot, '2348091200004', `add:${ids['Fried rice']}`);

@@ -20,13 +20,16 @@ before(async () => {
 const shop = (bot: Bot, from: string, o: { text?: string; choice?: string; name?: string } = {}) => bot.send('shop', { from, to: fx.a.pnid, ...o });
 const convId = (phone: string) => `${fx.a.id}_wa_${phone}`;
 
-test('shop: with one category the greeting goes straight to its products', async () => {
+test('shop: a first hello gets the welcome and light options; with one category, See what we have opens its products', async () => {
   const bot = new Bot();
   const [r] = await shop(bot, '2348091110001', { text: 'Hello', name: 'Chidi Okafor' });
   assert.equal(r.phoneNumberId, fx.a.pnid, "replies come from the merchant's own number");
   assert.equal(r.to, '+2348091110001');
-  assert.match(r.text, /^Hi Chidi, welcome to Business biz-a 👋\n\n\*Product biz-a\*\n₦1,000/);
-  assert.deepEqual(r.options, [`buy:${fx.a.product}`, 'menu', 'cart']);
+  assert.match(r.text, /^Hi Chidi! 👋 Welcome to \*Business biz-a\*\. How can we help you today\?\n/);
+  assert.deepEqual(r.options, ['menu', 'ask', 'track'], 'no carousel on a plain hello');
+  const [all] = await shop(bot, '2348091110001', { choice: 'menu', text: 'See what we have' });
+  assert.match(all.text, /^Here's what we have 👇\n\n\*Product biz-a\*\n₦1,000/);
+  assert.deepEqual(all.options, [`buy:${fx.a.product}`, 'menu', 'cart']);
 });
 
 test('shop: checkout flow creates order awaiting payment', async () => {
@@ -35,7 +38,7 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   await shop(bot, me, { text: 'hi' });
   assert.deepEqual((await shop(bot, me, { choice: 'cat:cat-food', text: 'Food' }))[0].options, [`buy:${fx.a.product}`, 'menu', 'cart']);
   const cart = await shop(bot, me, { text: '1' }); // typed number picks the first option (Buy)
-  assert.match(cart[0].text, /Added 1 × Product biz-a\.[\s\S]*Subtotal: ₦1,000/);
+  assert.match(cart[0].text, /Added 1 × Product biz-a to your cart 🛒[\s\S]*Subtotal: ₦1,000/);
   const more = await shop(bot, me, { text: '2 product biz-a' });
   assert.match(more[0].text, /• 3 × Product biz-a: ₦3,000/);
   // No delivery zones yet → pickup confirmation directly.
@@ -84,7 +87,9 @@ test('shop: returning customer is recognised', async () => {
 test('shop: off-topic and unknown products are handled without guessing', async () => {
   const bot = new Bot();
   const me = '2348091110004';
-  assert.match((await shop(bot, me, { text: '3 shawarma' }))[0].text, /welcome to Business biz-a/, 'without an LLM, unknown text shows the menu');
+  const first = await shop(bot, me, { text: '3 shawarma' });
+  assert.match(first[0].text, /Welcome to \*Business biz-a\*/, 'without an LLM, unknown text gets the welcome');
+  assert.deepEqual(first[0].options, ['menu', 'ask', 'track']);
   const llmBot = new Bot({ async chooseTool() { return { tool: 'offTopic', args: {} }; } });
   assert.match((await shop(llmBot, me, { text: 'who will win the election?' }))[0].text, /only help with our products and your orders/);
 });
@@ -130,7 +135,9 @@ test('instagram: DM routes to the shop handler', async () => {
   assert.equal(r.phoneNumberId, 'ig-a');
   assert.equal(r.to, 'igsid-42');
   // Instagram has no buttons or carousels: the same message arrives as numbered text.
-  assert.match(r.text, /welcome to Business biz-a 👋[\s\S]*Product biz-a[\s\S]*1\. Add to cart\n2\. Browse the shop\n3\. My cart\nReply with a number\./);
+  assert.match(r.text, /Welcome to \*Business biz-a\*[\s\S]*1\. See what we have\n2\. Ask a question\n3\. Track my order\nReply with a number\./);
+  const [all] = await bot.send('instagram', { from: 'igsid-42', to: 'ig-a', text: '1' });
+  assert.match(all.text, /Product biz-a[\s\S]*1\. Add to cart\n2\. Browse the shop\n3\. My cart\nReply with a number\./);
   const [added] = await bot.send('instagram', { from: 'igsid-42', to: 'ig-a', text: '1' });
   assert.match(added.text, /Added 1 × Product biz-a/);
   assert.equal((await doc('conversations', `${fx.a.id}_ig_igsid42`)).channel, 'instagram');

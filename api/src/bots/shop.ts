@@ -14,7 +14,7 @@ import { send, optionIds, resolveSender, type OutboundContent } from '../service
 import { listCategories, listProducts } from '../services/catalog';
 import { categoryCarousel, productCarousel, productDetails, suggestionMessage } from './product-cards';
 import { suggestFor } from '../services/suggestions';
-import { renderMessage } from '../services/shop-messages';
+import { DEFAULT_MESSAGES, fill, renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { byPriority, listZones, quoteDelivery } from '../services/delivery';
 import { describeLocation } from '../services/location';
@@ -30,10 +30,17 @@ import { deleteShopperData, deletionCode } from './deletion';
 import { react, showTyping, slowJob } from '../services/presence';
 
 const CART_HOURS = 24;
+// A new conversation (welcome first) after this long without a message.
+const SESSION_HOURS = 12;
 
 type Step = 'browse' | 'await_address' | 'confirm' | 'confirm_delete';
-interface ShopState { step: Step; options?: string[]; delivery?: OrderDelivery | null; suggested?: string[] /* products we've already suggested pairings for */ }
-interface Run { deps: BotDeps; state: ShopState }
+interface ShopState {
+  step: Step; options?: string[]; delivery?: OrderDelivery | null;
+  suggested?: string[];      // products we've already suggested pairings for
+  greetedAt?: string | null; // when this conversation's welcome was sent
+  pidgin?: boolean;          // the customer writes in Pidgin: the bot's own words follow
+}
+interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */ }
 type ShopConversation = Conversation & { shop?: ShopState | null };
 
 const SHOP_TOOLS: ToolSpec[] = [
@@ -70,7 +77,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     const c: OutboundContent = typeof content === 'string' ? { type: 'text', text: content } : content;
     await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: shopWords(c, business) });
     const options = optionIds(c);
-    if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, options });
+    if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, greetedAt: state.greetedAt ?? null, pidgin: state.pidgin ?? false, options });
   };
 
   const run: Run = { deps, state };
@@ -113,9 +120,26 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   // ── Talk to a person ──
   if (/\b(human|agent|real person|customer (care|service)|talk to (someone|the owner|owner|a person)|speak to)\b/.test(lower)) return handOver(ctx, deps, business, customer, reply);
 
+  // ── The first message of a conversation: welcome first, then answer what they actually said ──
+  if (!choice && text.trim()) {
+    const fresh = !state.greetedAt || Date.now() - new Date(state.greetedAt).getTime() > SESSION_HOURS * 3600_000;
+    if (PIDGIN.test(lower)) state.pidgin = true;
+    else if (fresh) state.pidgin = false;
+    if (fresh) {
+      run.first = true;
+      state.greetedAt = new Date().toISOString();
+      await setState({ ...state, step: 'browse' });
+      const handled = await firstMessage(ctx, run, business, customer, text, reply);
+      if (handled) return;
+    }
+  }
+
   // ── Choices from lists and buttons ──
   if (choice) {
     const [kind, id] = choice.split(':');
+    if (kind === 'ask') return reply(state.pidgin ? 'Sure! Wetin you wan know? Ask about anything: prices, delivery, opening hours… 🙂' : 'Sure! What would you like to know? You can ask about prices, delivery, opening hours or anything else. 🙂');
+    if (kind === 'track') return orderStatus(db, conversationId, reply);
+    if (kind === 'again') return orderAgain(ctx, run, business, reply);
     if (kind === 'menu') return greet(ctx, business, customer, reply, { again: true });
     if (kind === 'cats') return greet(ctx, business, customer, reply, { again: true, page: Number(id) || 0 });
     if (kind === 'cat') return showCategory(ctx, business, id, reply);
@@ -164,8 +188,106 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
       if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
       return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
     }
-    default: return greet(ctx, business, customer, reply);
+    // Nothing more specific: the welcome on a first message (never the whole menu unasked).
+    default: return run.first ? welcomeOnly(ctx, run, business, customer, reply) : greet(ctx, business, customer, reply);
   }
+}
+
+// The welcome (or welcome back) with a few light options: no carousel.
+async function welcomeOnly(ctx: ShopContext, run: Run, business: Business, customer: Customer | null, reply: Reply) {
+  const name = customer?.name?.split(' ')[0];
+  const returning = (customer?.orderCount ?? 0) > 0;
+  const closed = closedNote(business, customer);
+  const hello = renderMessage(business, returning ? 'welcomeBack' : 'welcome', { customer: name });
+  const lastPaid = returning ? (await recentOrders(ctx.db, [['customerId', '==', ctx.conversationId]], 10)).find(o => o.businessId === business.id && o.status === 'paid') : undefined;
+  const options: [string, string][] = [
+    ...(lastPaid ? [['again', 'Order again'] as [string, string]] : []),
+    ['menu', say(run.state.pidgin, 'See what we have', 'See wetin we get')],
+    ...(lastPaid ? [] : [['ask', 'Ask a question'] as [string, string]]),
+    ['track', 'Track my order'],
+  ];
+  return reply(buttons(closed ? `${hello}\n\n${closed}` : hello, options), { step: 'browse' });
+}
+
+// Customers writing in Pidgin ("where una dey?", "abeg wetin una get").
+const PIDGIN = /\b(una|wetin|abeg|dey|abi|wahala|sabi|oya|wan|how far|na so|sef|shey|biko|make i|i go|e don|no vex|dis|dat)\b/i;
+const GREETING = /^(hi+|hello+|hey+|hiya|helo|good (morning|afternoon|evening|day)|howdy|how far|how you dey|how una dey|hi there|hello there|morning|evening|afternoon)[\s!.,🙂👋😊]*(there|o|oo)?[\s!.]*$/i;
+const MENU_ASK = /\b(menu|catalog(ue)?|price ?list|prices|what do you (sell|have)|what (do )?you have|wetin (una|you) (dey )?(sell|get|have)|wetin una get|show me (what you have|your (products|items|stuff))|send (me )?(your )?(menu|catalog(ue)?|list|prices)|see (your|what you have)|your products)\b/i;
+const ASK_PREFIX = /^(please\s+|abeg\s+|hi,?\s+|hello,?\s+)*(do you (have|sell|stock)|have you got|you get|una get|una dey sell|you dey sell|is there|are there|any|how much (is|are|be|for|na)|what'?s the price of|price of|price for|i (want|need|would like)( to buy)?|i wan( buy)?|can i (get|buy|order)|looking for)\s+/i;
+
+// Pidgin versions of the bot's own words (the owner's messages stay as they wrote them).
+const say = (pidgin: boolean | undefined, english: string, naija: string) => (pidgin ? naija : english);
+
+// "Hi Ada! 👋 Welcome to *X*. How can we help you today?" → "Hi Ada! 👋 Welcome to *X*." (for when we
+// answer straight away, the closing question goes).
+function shortWelcome(business: Business, customer: Customer | null) {
+  const name = customer?.name?.split(' ')[0];
+  const returning = (customer?.orderCount ?? 0) > 0;
+  const full = renderMessage(business, returning ? 'welcomeBack' : 'welcome', { customer: name });
+  const short = full.replace(/\s*[^.!?\n]*\?\s*$/, '').trim();
+  return short.length >= 5 ? short : full;
+}
+
+async function firstMessage(ctx: ShopContext, run: Run, business: Business, customer: Customer | null, text: string, reply: Reply): Promise<boolean> {
+  const lower = text.trim().toLowerCase();
+  const pidgin = run.state.pidgin;
+  const closed = closedNote(business, customer);
+
+  // Just a greeting: the welcome and a few light options, no carousel.
+  if (GREETING.test(lower)) { await welcomeOnly(ctx, run, business, customer, reply); return true; }
+  const welcome = closed ? `${shortWelcome(business, customer)}\n\n${closed}` : shortWelcome(business, customer);
+
+  // Asking to see everything: the welcome line, then the sections.
+  if (MENU_ASK.test(lower) && !ASK_PREFIX.test(lower)) { await greet(ctx, business, customer, reply, { intro: welcome }); return true; }
+
+  // A question about the shop (where, when, delivery, returns): the welcome line and the answer.
+  const topic = infoTopic(lower);
+  if (topic) {
+    const info = await shopInfo(ctx.db, business, topic, pidgin);
+    if (!info) return false;
+    await reply(buttons(`${welcome}\n\n${info}`, [['menu', say(pidgin, 'See what we have', 'See wetin we get')], ['ask', 'Ask a question']]), { step: 'browse' });
+    return true;
+  }
+
+  // A specific product ("do you have boots?", "how much is the hoodie"): just the matching ones.
+  const wanted = lower.replace(ASK_PREFIX, '').replace(/^(the|a|an|some|una|your)\s+/, '').replace(/[?.!]+$/, '').replace(/\s+(abeg|please|o)$/, '').trim();
+  if (wanted && wanted !== lower.replace(/[?.!]+$/, '') || ASK_PREFIX.test(lower)) {
+    const exact = (await findProducts(ctx.db, business.id, wanted)).filter(p => p.available);
+    const matches = exact.length ? exact : await search(ctx.db, business.id, wanted);
+    if (matches.length) {
+      await sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `"${wanted.slice(0, 30)}"`, key: 'all', intro: welcome }));
+      return true;
+    }
+    // Nothing like it: say so, and offer the closest section.
+    const cats = await listCategories(ctx.db, business.id);
+    const words = wanted.split(/\s+/).filter(w => w.length >= 3);
+    const near = cats.find(c => words.some(w => c.name.toLowerCase().includes(w.replace(/s$/, ''))));
+    await reply(buttons(`${welcome}\n\n${say(pidgin, `Sorry, we don't have "${wanted.slice(0, 40)}" right now.`, `Sorry o, we no get "${wanted.slice(0, 40)}" right now.`)}`, [...(near ? [[`cat:${near.id}`, `See ${near.name}`] as [string, string]] : []), ['menu', say(pidgin, 'See what we have', 'See wetin we get')]]), { step: 'browse' });
+    return true;
+  }
+  // Something else ("I want to order", a product name on its own…): the usual handling.
+  return false;
+}
+
+// Which shop question this is, if any (English or Pidgin).
+function infoTopic(lower: string): 'policy' | 'hours' | 'location' | 'delivery' | null {
+  if (POLICY_QUESTION.test(lower)) return 'policy';
+  if (/\b(what time|opening hours|are you open|open today|open now|when do you (open|close)|closing time|close today|una (dey )?open|una don close|what time una|una dey work)\b/.test(lower)) return 'hours';
+  if (/\b(where are you|where is (the )?(shop|store)|your (address|location)|located|where una dey|where (you|una) (dey|de)|wia una dey|una address|where una shop)\b/.test(lower)) return 'location';
+  if (/\b(do you deliver|delivery (fee|price|cost)|how much (is|for) delivery|una (dey|fit) deliver|you dey deliver|una dey do delivery)\b/.test(lower)) return 'delivery';
+  return null;
+}
+
+// "Order again": their last paid order's items back in the cart (what's still available).
+async function orderAgain(ctx: ShopContext, run: Run, business: Business, reply: Reply) {
+  const last = (await recentOrders(ctx.db, [['customerId', '==', ctx.conversationId]], 10)).find(o => o.businessId === business.id && o.status === 'paid');
+  if (!last) return greet(ctx, business, null, reply, { again: true });
+  const products = (await ctx.db.getAll(last.items.map(i => ctx.db.doc(C.products, i.productId)))) as (Product | null)[];
+  const ok = last.items.filter((_, n) => { const p = products[n]; return p && !p.deletedAt && p.available && hasStock(p); });
+  if (!ok.length) return reply(buttons(`Sorry, the items from your last order (${last.ref}) aren't available right now.`, [['menu', 'See what we have']]));
+  const now = new Date();
+  await ctx.db.set(ctx.db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: ok.map(i => ({ productId: i.productId, qty: i.qty })), expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: now.toISOString() });
+  return showCart(ctx, business, reply, ok.length < last.items.length ? `Here's your last order again (some items aren't available right now).` : `Here's your last order again 👍`);
 }
 
 type Reply = (content: OutboundContent | string, next?: ShopState) => Promise<void>;
@@ -194,20 +316,21 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
 // Products customers can see: everything not hidden or deleted, including sold-out items (shown marked).
 const visible = async (db: Firestore, businessId: string) => (await listProducts(db, businessId)).filter(p => p.available);
 
-async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply, opts: { again?: boolean; page?: number } = {}) {
+async function greet(ctx: ShopContext, business: Business, customer: Customer | null, reply: Reply, opts: { again?: boolean; page?: number; intro?: string } = {}) {
   const page = opts.page ?? 0;
   const name = customer?.name?.split(' ')[0];
-  // New customers get the shop's own welcome message (set during signup, MESSAGES to change).
-  // Back to the menu mid-chat: no second welcome.
-  let hello = opts.again ? 'Here is everything we have.' : (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
-  const closed = closedNote(business);
-  if (closed) hello = `${hello}\n\n${closed}`;
+  // What's above the products: the shop's own "here's what we have" message (MESSAGES to change),
+  // after the welcome line when this is the first message.
+  const show = renderMessage(business, 'menuIntro', { customer: name });
+  let hello = opts.intro ? `${opts.intro}\n\n${show}` : show;
+  const closed = opts.intro || opts.again ? null : closedNote(business, customer);
+  if (closed) hello = `${closed}\n\n${hello}`;
   const products = await visible(ctx.db, business.id);
   if (!products.length) return reply(`${hello} We're updating our menu right now. Please check back soon.`, { step: 'browse' });
   const cats = (await listCategories(ctx.db, business.id)).filter(c => products.some(p => p.categoryId === c.id));
   // One category (or none yet): go straight to the products.
   if (cats.length <= 1) return sendAll(reply, productCarousel(ctx.cfg, business, cats.length ? products.filter(p => p.categoryId === cats[0].id) : products, { title: cats[0]?.name ?? 'Our products', key: cats[0]?.id ?? 'all', intro: hello }));
-  return reply(categoryCarousel(ctx.cfg, cats, products, { intro: `${hello} What are you looking for?`, page }), { step: 'browse' });
+  return reply(categoryCarousel(ctx.cfg, cats, products, { intro: hello, page }), { step: 'browse' });
 }
 
 async function showCategory(ctx: ShopContext, business: Business, key: string, reply: Reply, page = 0) {
@@ -272,13 +395,16 @@ async function addToCart(ctx: ShopContext, run: Run, business: Business, product
   // and never twice for the same item in a chat.
   const suggest = business.suggestions !== false && !cart?.suggestedAt && !run.state.suggested?.includes(p.id);
   if (suggest) run.state.suggested = [...(run.state.suggested ?? []), p.id].slice(-30);
-  await showCart(ctx, business, reply, `Added ${qty} × ${p.name}.`);
-  if (!suggest) return;
-  const picks = await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
+  const added = renderMessage(business, 'addedToCart', { customer: (await db.get(db.doc(C.customers, ctx.conversationId)) as Customer | null)?.name, item: `${qty} × ${p.name}` });
+  // The suggestion goes first and the cart last, so the cart's Checkout button is at the bottom and
+  // nothing arrives under it a moment later.
+  const picks = suggest ? await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; }) : null;
   const out = picks ? suggestionMessage(ctx.cfg, p, picks) : null;
-  if (!out) return;
-  await db.update(db.doc(C.carts, ctx.conversationId), { suggestedAt: new Date().toISOString() });
-  await reply(out, { step: 'browse' });
+  if (out) {
+    await db.update(db.doc(C.carts, ctx.conversationId), { suggestedAt: new Date().toISOString() });
+    await reply(out, { step: 'browse' });
+  }
+  await showCart(ctx, business, reply, added);
 }
 
 async function cartLines(db: Firestore, cart: Cart) {
@@ -339,7 +465,7 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
   if (ctx.cfg.PAYMENTS_MODE === 'simulated') {
     // A "Pay ₦X" button to the test payment page (until Bachs payment links exist).
     const link = await createPayLink(ctx.db, order);
-    await reply(payMessage(ctx.cfg, order, link.token, minutes), { step: 'browse' });
+    await reply(payMessage(ctx.cfg, order, link.token, minutes, renderMessage(business, 'orderConfirmed', { customer: (await ctx.db.get(ctx.db.doc(C.customers, ctx.conversationId)) as Customer | null)?.name, order: order.ref, amount: formatKobo(order.payAmountKobo) })), { step: 'browse' });
   } else {
     await reply(`${paymentInstructions(order, (business as Business & { paymentDetails?: string | null }).paymentDetails ?? null)}\nWe're holding your items for ${minutes} minutes.`, { step: 'browse' });
   }
@@ -371,23 +497,37 @@ export const shopAddress = (b: Pick<Business, 'address' | 'area' | 'city' | 'lan
 // Other states with "I quote per order": the delivery price isn't known yet.
 const quoteLater = (d: OrderDelivery) => d.method !== 'pickup' && !d.feeKobo && /to be confirmed/.test(d.timeframe ?? '');
 
-// When the shop is closed: what the greeting says (null when open or no hours are set).
-function closedNote(business: Business, now = new Date()) {
+// When the shop is closed: the shop's own "we're closed" message, and what the customer can still
+// do (null when open or no hours are set).
+function closedNote(business: Business, customer?: Customer | null, now = new Date()) {
   const open = openNow(business.hours, now);
   if (open.open) return null;
-  const back = open.next ? ` We open again at ${open.next}.` : '';
-  return business.afterHours === 'menu' ? `🌙 We're closed right now.${back} Have a look at the menu meanwhile.` : `🌙 We're closed right now.${back} You can still order, and we'll get it ready when we open.`;
+  // No opening time coming up (closed all week): the 'we open again …' sentence is left out.
+  const template = business.messages?.closed || DEFAULT_MESSAGES.closed;
+  const note = fill(open.next ? template : template.replace(/[^.!?\n]*\{opens\}[^.!?\n]*[.!?]?/g, ''), business.name, { customer: customer?.name, opens: `at ${open.next}` });
+  return business.afterHours === 'menu' ? `${note} Have a look at what we have meanwhile.` : `${note} You can still order, and we'll get it ready when we open.`;
 }
 
 // Answers from the shop's own settings; null when there's nothing to say (a person answers instead).
-async function shopInfo(db: Firestore, business: Business, topic: string): Promise<string | null> {
+async function shopInfo(db: Firestore, business: Business, topic: string, pidgin?: boolean): Promise<string | null> {
+  if (topic === 'location') {
+    const where = shopAddress(business);
+    if (!where) return null;
+    const hours = business.hours ? describeHours(business.hours) : null;
+    return pidgin
+      ? `Na here we dey: 📍 ${where}.${hours ? `\nWe dey open ${hours}.` : ''}`
+      : `📍 ${business.name}: ${where}.${hours ? `\nOpening hours: ${hours}.` : ''}`;
+  }
+  if (topic === 'hours' && pidgin && business.hours) {
+    const open = openNow(business.hours);
+    return `We dey open ${describeHours(business.hours)}.${open.open ? ' We dey open now o.' : ` We don close for now${open.next ? `, we go open again ${open.next}` : ''}.`}`;
+  }
   if (topic === 'policy') { const p = policyText(business.policies); return p ? `Our policy at ${business.name}:\n${p}` : null; }
   if (topic === 'hours') {
     if (!business.hours) return `You can order from ${business.name} here any time.`;
     const open = openNow(business.hours);
     return `Our opening hours: ${describeHours(business.hours)}.${open.open ? " We're open now." : ` We're closed right now${open.next ? ` and open again at ${open.next}` : ''}.`}`;
   }
-  if (topic === 'location') { const where = shopAddress(business); return where ? `📍 ${business.name}: ${where}.` : null; }
   if (topic === 'delivery') {
     const zones = await listZones(db, business.id);
     if (business.fulfilment === 'pickup' || (!zones.length && !business.shipsInterstate)) return `${business.name} does pickup only for now.`;

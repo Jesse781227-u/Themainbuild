@@ -39,7 +39,7 @@ export function productCarousel(cfg: Pick<Config, 'API_BASE_URL'>, business: Pic
   const shown = page * PER_PAGE + slice.length;
   const cards = slice.map(p => cardFor(cfg, p));
   if (shown < all.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*See more*\n${all.length - shown} more in ${opts.title}`, buttons: [[`more:${opts.key}:${page + 1}`, `More ${opts.title}`.length <= 17 ? `More ${opts.title} ➡️` : 'Next page ➡️'], ['menu', 'All sections']] });
-  const body = page ? `${opts.title} (more) 👇` : opts.intro ? `${opts.intro} Swipe to see what we have 👇` : `${opts.title} at ${business.name} 👇 Swipe to see more.`;
+  const body = page ? `${opts.title} (more) 👇` : opts.intro ? (opts.intro.includes('👇') ? opts.intro : `${opts.intro} Swipe to see what we have 👇`) : `${opts.title} at ${business.name} 👇 Swipe to see more.`;
   return [carousel(body, cards)];
 }
 
@@ -69,7 +69,7 @@ export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: 
   });
   const shown = page * PER_PAGE + slice.length;
   if (shown < categories.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*More sections*\n${categories.length - shown} more`, buttons: [[`cats:${page + 1}`, 'More sections ➡️']] });
-  return carousel(page ? 'More sections 👇' : `${opts.intro} Swipe to pick a section 👇`, cards);
+  return carousel(page ? 'More sections 👇' : opts.intro.includes('👇') ? opts.intro : `${opts.intro} Swipe to pick a section 👇`, cards);
 }
 
 // After "Added to cart": what goes with it, then (at the end) a slightly better version of it.

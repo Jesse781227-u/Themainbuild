@@ -66,7 +66,8 @@ export async function testOrder(ctx: ShopContext, business: Business, cart: Cart
     status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt: at, paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
   };
   await ctx.db.create(ctx.db.doc(C.testReceipts, token), { token, businessId: business.id, order: { ...order }, createdAt: at });
-  return reply(buttons(`🧪 Test order ${order.ref}: ${formatKobo(payAmountKobo)}.\n\nIn your real shop the customer gets a *Pay ${formatKobo(payAmountKobo)}* button here and pays by card or transfer. Tap *Pay now (test)* to see what happens next. No real money moves.`, [[`testpay:${token}`, 'Pay now (test)'], ['menu', 'Back to menu']]), { step: 'browse' });
+  const confirmed = renderMessage(business, 'orderConfirmed', { order: order.ref, amount: formatKobo(payAmountKobo) });
+  return reply(buttons(`${confirmed}\n\n🧪 Test order ${order.ref}: ${formatKobo(payAmountKobo)}.\n\nIn your real shop the customer gets a *Pay ${formatKobo(payAmountKobo)}* button here and pays by card or transfer. Tap *Pay now (test)* to see what happens next. No real money moves.`, [[`testpay:${token}`, 'Pay now (test)'], ['menu', 'Back to menu']]), { step: 'browse' });
 }
 
 export async function testPaid(ctx: ShopContext, business: Business, token: string, reply: Reply) {

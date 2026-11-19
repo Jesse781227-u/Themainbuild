@@ -129,8 +129,8 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   // ── The shop's messages to customers (MESSAGES) ──
   const msg = await handleMessageInput(flow, choiceId, text);
   if (msg) {
-    if (msg.done) return reply('Saved ✅ Customers will get that message from now on. Send MESSAGES to change another.');
     for (const o of msg.out) await reply(o);
+    if (msg.done) return reply(buttons('Want to change another message?', [['msgmenu', 'Change another'], ['g:help', 'What can you do?']]));
     return;
   }
 

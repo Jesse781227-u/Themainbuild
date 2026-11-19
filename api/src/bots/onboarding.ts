@@ -31,7 +31,8 @@ import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } 
 import { openTicket } from '../services/support';
 import { buttons, findProducts, list, storeProfilePhoto, type BotDeps, type Input } from './common';
 import { handleImport, parsePastedMenu } from './catalog-import';
-import { draftAllMessages } from './messages-flow';
+import { handleMessageInput, showChoices } from './messages-flow';
+import { SIGNUP_MESSAGES } from '../services/shop-messages';
 import { log } from '../lib/logger';
 import { parseAdminCommand } from './intent';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
@@ -56,6 +57,7 @@ export interface Onboarding {
   draft?: { city?: string; hours?: Hours; loc?: Location; streetAsked?: boolean };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number; photosAdded?: number;
   photosId?: string | null;            // photos from the uploaded file, being matched in the background
+  msgIndex?: number;                   // which of SIGNUP_MESSAGES the owner is choosing wording for
 }
 
 const RESUME_AFTER_MS = 30 * 60_000;
@@ -218,7 +220,6 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (!t) return prompt(c);
       await c.ctx.db.update(c.ctx.db.doc(C.businesses, c.business!.id), { category: t.id, businessTypeInferred: false, updatedAt: now.toISOString() });
       c.business!.category = t.id;
-      await draftMessagesOnce(c);
       return toPhotos(c);
     }
     case 'photos': {
@@ -350,8 +351,8 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return toPolicies(c);
     }
     case 'policies': {
-      if (choiceId === 'pol:use' || (!choiceId && /^(use|yes|ok)/i.test(text.trim()))) { await patchBusiness(c, { policies: defaultPolicies(c.business!.category) }); return toReady(c); }
-      if (choiceId === 'pol:skip' || (!choiceId && SKIP.test(text.trim()))) { await patchBusiness(c, { policies: null }); return toReady(c); }
+      if (choiceId === 'pol:use' || (!choiceId && /^(use|yes|ok)/i.test(text.trim()))) { await patchBusiness(c, { policies: defaultPolicies(c.business!.category) }); return toMessages(c); }
+      if (choiceId === 'pol:skip' || (!choiceId && SKIP.test(text.trim()))) { await patchBusiness(c, { policies: null }); return toMessages(c); }
       if (choiceId === 'pol:edit') { await setOb(c, { step: 'policies_edit' }); return c.reply('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.'); }
       return prompt(c);
     }
@@ -360,7 +361,23 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (choiceId || t.length < 5) return prompt(c);
       await patchBusiness(c, { policies: { ...defaultPolicies(c.business!.category), custom: t } });
       await c.reply('Saved ✅ Send *POLICIES* any time to change them.');
-      return toReady(c);
+      return toMessages(c);
+    }
+    // Optional: the owner picks the wording of the three messages customers see most.
+    case 'msg_offer': {
+      if (choiceId === 'msgs:choose' || (!choiceId && /^(choose|yes)/i.test(text.trim()))) { await setOb(c, { step: 'msg_pick', msgIndex: 0 }); return prompt(c); }
+      if (choiceId === 'msgs:default' || (!choiceId && /^(use defaults?|defaults?|no|skip)/i.test(text.trim()))) return toReady(c);
+      return prompt(c);
+    }
+    case 'msg_pick': case 'msg_custom': case 'msg_confirm': {
+      const r = await handleMessageInput(flowFor(c), choiceId, text);
+      if (!r) return prompt(c);
+      await sendAll(c, r.out);
+      if (!r.done) return;
+      const next = (c.ob.msgIndex ?? 0) + 1;
+      if (next >= SIGNUP_MESSAGES.length) { await c.reply('That\'s your messages done 👍 Send *MESSAGES* any time to change these or the others (welcome back, closed, order updates…).'); return toReady(c); }
+      await setOb(c, { msgIndex: next });
+      return prompt(c);
     }
 
     case 'ready': {
@@ -468,8 +485,6 @@ async function showPreview(c: Ctx, opts: { added?: number; again?: boolean } = {
     : `✅ ${n} product${n === 1 ? '' : 's'}${catLine}. Here's what your customers will see 👇`);
   await sendAll(c, await shopPreview(c, `Hi, welcome to ${biz.name} 👋`));
   await c.reply(buttons('Does that look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
-  // All the customer messages (welcome, thank-you, order updates) are drafted now, quietly; MESSAGES changes them.
-  if (biz.category !== 'other' || biz.businessTypeInferred) await draftMessagesOnce(c);
 }
 
 // What a customer sees first: the sections (or the products, with one section).
@@ -503,10 +518,6 @@ async function previewTap(c: Ctx, choiceId: string) {
   return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
 }
 
-async function draftMessagesOnce(c: Ctx) {
-  if (c.business!.messages) return;
-  try { await draftAllMessages(flowFor(c)); } catch (e) { log('warn', 'draft_messages_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); }
-}
 
 async function afterPreview(c: Ctx) {
   await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'preview', event: 'completed' });
@@ -585,6 +596,7 @@ async function toPolicies(c: Ctx) {
   return prompt(c);
 }
 // Who pays Relay's fee comes before TEST, so the pretend order already shows the right total.
+async function toMessages(c: Ctx) { await setOb(c, { step: 'msg_offer' }); return prompt(c); }
 async function toReady(c: Ctx) { await setStage(c, 'connect', 'fee_payer'); return prompt(c); }
 
 async function sendConnectLink(c: Ctx) {
@@ -696,6 +708,11 @@ async function prompt(c: Ctx): Promise<unknown> {
       return c.reply(buttons(`Your shop policies. These are what most ${t && t.id !== 'other' ? `${t.label.toLowerCase()} ` : ''}shops use:\n\n${text}\n\nYour shop assistant answers customers' questions about returns and problems from these.`, [['pol:use', 'Use these policies'], ['pol:edit', 'Write my own'], ['pol:skip', 'No policies for now']]));
     }
     case 'policies_edit': return c.reply('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.');
+    case 'msg_offer': return c.reply(buttons(`Want to choose how ${biz?.name ?? 'your shop'} talks to customers? I've written some options for your welcome, thank-you and "here's what we have" messages.`, [['msgs:choose', 'Choose messages'], ['msgs:default', 'Use defaults']]));
+    case 'msg_pick': case 'msg_custom': case 'msg_confirm': {
+      const i = Math.min(c.ob.msgIndex ?? 0, SIGNUP_MESSAGES.length - 1);
+      return sendAll(c, await showChoices(flowFor(c), SIGNUP_MESSAGES[i], `Message ${i + 1} of ${SIGNUP_MESSAGES.length} · `));
+    }
     case 'ready': return c.reply(buttons(`${L}${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
     case 'fee_payer': return c.reply(buttons(`${L}Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
     case 'check_wa': return c.reply(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
@@ -711,7 +728,7 @@ function passToAdmin(text: string) {
 }
 
 // Steps whose answer is free text: only the one-word commands count there.
-const FREE_TEXT: Step[] = ['owner_name', 'city', 'area', 'street', 'location_confirm', 'prep_custom', 'policies_edit', 'fee_local', 'fee_city', 'interstate_fee', 'msg_custom'];
+const FREE_TEXT: Step[] = ['msg_pick', 'owner_name', 'city', 'area', 'street', 'location_confirm', 'prep_custom', 'policies_edit', 'fee_local', 'fee_city', 'interstate_fee', 'msg_custom'];
 const ONE_WORD = /^(help|products|my products|fee|hours|policies|messages|orders|categories|after ?hours|customers|commands)$/i;
 function isCommand(text: string, step: Step) {
   const t = text.trim().replace(/[.!]+$/, '');

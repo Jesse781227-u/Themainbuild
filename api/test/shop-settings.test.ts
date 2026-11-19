@@ -26,7 +26,7 @@ test('shop: closed shops say so; "take orders" lets customers order, "menu only"
 
   await setBiz({ afterHours: 'menu' });
   const menu = await shop(bot, '2348091112002', 'hi');
-  assert.match(menu[0].text, /closed right now\. Have a look at the menu meanwhile/);
+  assert.match(menu[0].text, /closed right now\. Have a look at what we have meanwhile/);
   await shop(bot, '2348091112002', 'Buy', `buy:${fx.a.product}`);
   assert.match((await shop(bot, '2348091112002', 'Checkout', 'checkout'))[0].text, /Sorry, we're closed right now\. Your cart is saved/);
   await setBiz({ hours: null, afterHours: 'orders' });

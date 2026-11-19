@@ -154,6 +154,7 @@ export async function signUp(bot: Bot, from: string, o: { shop?: string; product
   if (last.some(m => m.options.some(id => id.startsWith('prep:')))) last = await say('30–60 min', 'prep:1');
   await say('Pickup', 'dl:pickup');
   last = await say('Use these', 'pol:use');
+  last = await say('Use defaults', 'msgs:default');
   last = await say('Who pays', `fee:${o.fee ?? 'customer'}`);
   if (o.until === 'linked') {
     await say('Connect now', 'ob:connect');

@@ -23,13 +23,13 @@ export async function createPayLink(db: Firestore, order: Pick<Order, 'id' | 'bu
 export const payUrl = (cfg: Pick<Config, 'API_BASE_URL'>, token: string) => `${cfg.API_BASE_URL}/pay/${token}`;
 
 // The checkout message: order summary and a button that opens the payment page.
-export function payMessage(cfg: Pick<Config, 'API_BASE_URL'>, order: Pick<Order, 'ref' | 'items' | 'payAmountKobo' | 'holdExpiresAt'>, token: string, minutes: number): OutboundContent {
+export function payMessage(cfg: Pick<Config, 'API_BASE_URL'>, order: Pick<Order, 'ref' | 'items' | 'payAmountKobo' | 'holdExpiresAt'>, token: string, minutes: number, intro?: string): OutboundContent {
   const items = order.items.map(l => `${l.qty} × ${l.name}`).join('\n');
   return {
     type: 'interactive',
     interactive: {
       type: 'cta_url',
-      body: { text: `Order ${order.ref}\n${items}\n\nTotal: *${formatKobo(order.payAmountKobo)}*\n\nTap below to pay securely. We're holding your items for ${minutes} minutes.` },
+      body: { text: `${intro ? `${intro}\n\n` : ''}Order ${order.ref}\n${items}\n\nTotal: *${formatKobo(order.payAmountKobo)}*\n\nTap below to pay securely. We're holding your items for ${minutes} minutes.` },
       footer: { text: 'Test payment: no real money moves' },
       action: { name: 'cta_url', parameters: { display_text: `Pay ${formatKobo(order.payAmountKobo)}`.slice(0, 20), url: payUrl(cfg, token) } },
     },
