@@ -26,6 +26,7 @@ export interface BotDeps {
 export interface Input {
   text: string; choiceId: string | null; imageId: string | null; audioId: string | null;
   document: { id: string; mimeType: string; filename: string } | null; // a file, e.g. a PDF menu
+  flow?: unknown;                                                       // a submitted WhatsApp Flow form (nfm_reply)
 }
 
 type Obj = Record<string, any>;
@@ -41,6 +42,7 @@ export function readInput(event: InboundEvent): Input {
     choiceId: reply?.id ? String(reply.id) : typeof m.button?.payload === 'string' ? m.button.payload : null,
     imageId: m.image?.id ? String(m.image.id) : null,
     audioId: m.audio?.id ? String(m.audio.id) : null,
+    flow: m.interactive?.nfm_reply ?? null,
     document: m.document?.id ? { id: String(m.document.id), mimeType: String(m.document.mime_type ?? 'application/octet-stream'), filename: String(m.document.filename ?? 'file').slice(0, 120) } : null,
   };
 }

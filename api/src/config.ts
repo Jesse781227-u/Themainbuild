@@ -18,6 +18,11 @@ const schema = z.object({
   META_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v21.0'),
   ADMIN_BOT_PHONE_NUMBER_ID: optionalString,
   ADMIN_BOT_ACCESS_TOKEN: optionalString,
+  // WhatsApp Flows (forms) for Add product, Hours and Delivery: off unless "true" and published in Meta.
+  FLOWS_ENABLED: optionalString,
+  FLOW_ID_ADD_PRODUCT: optionalString,
+  FLOW_ID_HOURS: optionalString,
+  FLOW_ID_DELIVERY: optionalString,
   // Embedded Signup (the merchant connects their own number).
   META_APP_ID: optionalString,
   META_ES_CONFIG_ID: optionalString,

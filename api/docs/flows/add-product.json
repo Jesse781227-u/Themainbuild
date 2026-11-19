@@ -1,0 +1,92 @@
+{
+  "version": "6.0",
+  "screens": [
+    {
+      "id": "PRODUCT",
+      "title": "Add product",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "cat1",
+              "title": "Clothing"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "form",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "name",
+                "label": "Product name",
+                "input-type": "text",
+                "required": true
+              },
+              {
+                "type": "TextInput",
+                "name": "price",
+                "label": "Price in naira",
+                "input-type": "number",
+                "required": true
+              },
+              {
+                "type": "Dropdown",
+                "name": "category",
+                "label": "Category",
+                "data-source": "${data.categories}",
+                "required": true
+              },
+              {
+                "type": "TextInput",
+                "name": "stock",
+                "label": "How many in stock (leave empty if you don't count)",
+                "input-type": "number",
+                "required": false
+              },
+              {
+                "type": "TextArea",
+                "name": "description",
+                "label": "Description (optional)",
+                "required": false
+              },
+              {
+                "type": "Footer",
+                "label": "Add product",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "name": "${form.name}",
+                    "price": "${form.price}",
+                    "category": "${form.category}",
+                    "stock": "${form.stock}",
+                    "description": "${form.description}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

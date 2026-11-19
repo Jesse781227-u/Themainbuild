@@ -1,0 +1,103 @@
+{
+  "version": "6.0",
+  "screens": [
+    {
+      "id": "ZONES",
+      "title": "Delivery prices",
+      "terminal": true,
+      "success": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "form",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "zone1_name",
+                "label": "Area 1",
+                "input-type": "text",
+                "required": true
+              },
+              {
+                "type": "TextInput",
+                "name": "zone1_fee",
+                "label": "Delivery price for area 1 in naira",
+                "input-type": "number",
+                "required": true
+              },
+              {
+                "type": "TextInput",
+                "name": "zone1_time",
+                "label": "How long (optional), e.g. same day",
+                "input-type": "text",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone2_name",
+                "label": "Area 2 (optional)",
+                "input-type": "text",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone2_fee",
+                "label": "Delivery price for area 2 in naira",
+                "input-type": "number",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone2_time",
+                "label": "How long (optional), e.g. same day",
+                "input-type": "text",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone3_name",
+                "label": "Area 3 (optional)",
+                "input-type": "text",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone3_fee",
+                "label": "Delivery price for area 3 in naira",
+                "input-type": "number",
+                "required": false
+              },
+              {
+                "type": "TextInput",
+                "name": "zone3_time",
+                "label": "How long (optional), e.g. same day",
+                "input-type": "text",
+                "required": false
+              },
+              {
+                "type": "Footer",
+                "label": "Save delivery",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "zone1_name": "${form.zone1_name}",
+                    "zone1_fee": "${form.zone1_fee}",
+                    "zone1_time": "${form.zone1_time}",
+                    "zone2_name": "${form.zone2_name}",
+                    "zone2_fee": "${form.zone2_fee}",
+                    "zone2_time": "${form.zone2_time}",
+                    "zone3_name": "${form.zone3_name}",
+                    "zone3_fee": "${form.zone3_fee}",
+                    "zone3_time": "${form.zone3_time}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

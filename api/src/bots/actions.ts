@@ -19,7 +19,9 @@ import { getOwner } from '../services/owners';
 import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
-import { describeHours } from '../services/hours';
+import { DAYS, describeHours } from '../services/hours';
+import { flowId, flowMessage } from '../services/flows';
+import { listCategories } from '../services/catalog';
 import { helpFor, runTool, type AdminToolName, type ToolCtx } from './admin-tools';
 import { buttons, findProducts, list, sectionList } from './common';
 import { messagesMenu } from './messages-flow';
@@ -180,11 +182,15 @@ async function reopen(c: ActionCtx): Promise<Out> {
 
 async function hours(c: ActionCtx): Promise<Out> {
   const h = c.business.hours;
+  const form = flowId(c.cfg, 'hours');
+  if (form) return flowMessage('hours', form, c.business.id, `${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set yet.'} Tap below to set them day by day.`, Object.fromEntries(DAYS.flatMap(d => [[`${d}_open`, h?.[d]?.open ?? 'closed'], [`${d}_close`, h?.[d]?.close ?? 'closed']])));
   return `${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set: customers can order any time.'}\n\nTo change them send e.g. *hours Mon–Sat 8am–9pm, Sun closed*, or *hours 8am–9pm* for every day.`;
 }
 
 async function delivery(c: ActionCtx): Promise<Out> {
   const zones = (await listZones(c.db, c.business.id)).sort(byPriority);
+  const form = flowId(c.cfg, 'delivery');
+  if (form) return flowMessage('delivery', form, c.business.id, `${zones.length ? `You deliver to ${zones.map(z => z.name).join(', ')}.` : 'No delivery prices yet.'} Tap below to add areas and prices.`);
   const how = c.business.fulfilment === 'pickup' ? 'Pickup only.' : zones.length ? `Delivery prices:\n${zones.map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}${z.timeframe ? `, ${z.timeframe}` : ''}`).join('\n')}${c.business.shipsInterstate && c.business.interstatePricing === 'quote' ? '\n• Other states: you quote per order' : ''}` : 'No delivery prices yet.';
   return `${how}\n\nTo add or change one send e.g. *delivery zone Lekki, 1500, same day*.`;
 }
@@ -194,7 +200,10 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'help', hint: 'Every command, with what it does', aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
   // Shop
   { id: 'add', command: 'add', hint: 'Add a product: send its name and price, with a photo if you have one', menu: { section: 'Shop', title: 'Add product' }, aliases: ['add', 'add product', 'add a product', 'new product'],
-    async run(c) { await c.setAwaiting('add'); return `Send the product's name and price, e.g. *${example(c.business, await listProducts(c.db, c.business.id))}*. Add a photo with it as the caption if you have one. Add a number at the end if you count stock.`; } },
+    async run(c) {
+      const form = flowId(c.cfg, 'add');
+      if (form) return flowMessage('add', form, c.business.id, 'Tap below to add a product: name, price, category and stock in one form.', { categories: (await listCategories(c.db, c.business.id)).map(x => ({ id: x.id, title: x.name })) });
+      await c.setAwaiting('add'); return `Send the product's name and price, e.g. *${example(c.business, await listProducts(c.db, c.business.id))}*. Add a photo with it as the caption if you have one. Add a number at the end if you count stock.`; } },
   { id: 'products', command: 'products', hint: 'See all your products and prices', menu: { section: 'Shop', title: 'My products' }, aliases: ['products', 'my products', 'product list', 'list products', 'stock', 'inventory', 'catalogue', 'catalog'], tool: { name: 'listProducts' }, next: [['add', 'Add product'], ['soldout', 'Mark sold out'], ['menu', 'Menu']], run: tool('listProducts') },
   { id: 'soldout', command: 'soldout', hint: 'Mark a product as sold out', menu: { section: 'Shop', title: 'Mark sold out' }, aliases: ['soldout', 'sold out', 'mark sold out', 'out of stock'], next: [['soldout', 'Mark another'], ['products', 'My products'], ['menu', 'Menu']], run: soldOut },
   // Orders
