@@ -37,6 +37,7 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
   const me = '2348091119001';
   const { pay, token } = await orderUpTo(bot, me);
   assert.equal(pay.options.length, 0);
+  await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'hi' }); // the owner's 24-hour window is open
 
   const page = await api('GET', `/pay/${token}`, {});
   assert.equal(page.status, 200);
@@ -64,6 +65,10 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
   const ownerPaid = await doc('outbox', `${order.id}_owner_paid`);
   assert.equal(ownerPaid.document.filename, `Receipt-${order.ref}.pdf`, 'the owner alert carries the receipt too');
   assert.match(ownerPaid.text, /Relay fee \(1%, paid by the customer\): ₦10\. You receive ₦1,0/, 'the fee is never a surprise');
+  assert.deepEqual(ownerPaid.buttons.map((b: { id: string }) => b.id), [`act:order:${order.ref}`, `act:ready:${order.ref}`, 'act:menu'], 'View order · Mark ready · Menu');
+  const alert = bot.transport.sent.find(m => m.to === fx.a.ownerPhone && (m.content as any).interactive?.header?.type === 'document');
+  assert.ok(alert, 'the owner gets the receipt on top of the buttons');
+  assert.equal((alert!.content as any).interactive.header.document.filename, `Receipt-${order.ref}.pdf`);
   assert.match((await doc('outbox', `${fx.a.id}_first_sale`)).text, /🎉 You just made your first sale on Relay: ₦1,0[\d.,]*! Your money is safe in your Relay wallet[\s\S]*Reply \*VERIFY\*/);
   assert.match((await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'verify' }))[0].text, /verification for withdrawals is opening very soon/);
   const again = await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: `receipt ${order.ref}` });

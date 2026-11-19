@@ -11,7 +11,8 @@
     "test:emulators": "npx -y firebase-tools@14 --config ../firebase.json --project demo-relay emulators:exec --only firestore \"npm test\"",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
-    "simulate": "tsx scripts/simulate-webhook.ts"
+    "simulate": "tsx scripts/simulate-webhook.ts",
+    "sync:commands": "tsx scripts/sync-commands.ts"
   },
   "dependencies": {
     "hono": "4.13.16",

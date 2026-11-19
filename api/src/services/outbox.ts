@@ -9,6 +9,10 @@ import { increment } from '../lib/firestore';
 import { log } from '../lib/logger';
 import type { OutboxMessage } from './on-paid';
 import { send, WindowClosedError, type Transport } from './channel';
+import { buttons } from '../bots/common';
+
+// A document (the receipt) on top of a button message.
+const withHeader = (c: ReturnType<typeof buttons>, doc: { link: string; filename: string } | null): OutboundContent => (doc ? { ...c, interactive: { ...c.interactive, header: { type: 'document', document: doc } } } as OutboundContent : c);
 
 const LEASE_MS = 2 * 60_000;
 export const MAX_SEND_ATTEMPTS = 5;
@@ -31,7 +35,10 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
     let messageId: string;
     let viaTemplate = false;
     try {
-      const content: OutboundContent = claimed.content ? claimed.content : claimed.document
+      const doc = claimed.document ? { link: `${cfg.API_BASE_URL}${claimed.document.path}`, filename: claimed.document.filename } : null;
+      const content: OutboundContent = claimed.content ? claimed.content : claimed.buttons?.length
+        ? withHeader(buttons(claimed.text.slice(0, 1024), claimed.buttons.map(b => [b.id, b.title] as [string, string])), doc)
+        : claimed.document
         ? { type: 'document', link: `${cfg.API_BASE_URL}${claimed.document.path}`, filename: claimed.document.filename, caption: claimed.text.slice(0, 1024) }
         : { type: 'text', text: claimed.text };
       ({ messageId } = await send(db, cfg, transport, { ...base, content }));

@@ -46,7 +46,7 @@ export async function queueDailySummaries(db: Firestore, now = new Date()) {
     const id = `${b.id}_summary_${s.date}`;
     const created = await db.create(db.doc(C.outbox, id), {
       id, businessId: b.id, audience: 'owner', channel: 'whatsapp', to: b.ownerPhone, conversationId: adminConversationId(b.ownerPhone),
-      kind: 'daily_summary', text: summaryText(b.name, s), status: 'pending', attempts: 0, createdAt: now.toISOString(),
+      kind: 'daily_summary', text: summaryText(b.name, s), buttons: [{ id: 'act:sales', title: 'Full report' }, { id: 'act:owing', title: 'Who owes me' }, { id: 'act:menu', title: 'Menu' }], status: 'pending', attempts: 0, createdAt: now.toISOString(),
       // Template body (Y11): {{1}} business, {{2}} date, {{3}} paid orders, {{4}} sales, {{5}} awaiting payment, {{6}} low stock.
       template: { key: 'daily_summary', params: [b.name, prettyDate(s.date), String(s.ordersPaid), formatKobo(s.salesKobo), String(s.unpaid), s.lowStock.slice(0, 5).join(', ') || 'none'] },
     });

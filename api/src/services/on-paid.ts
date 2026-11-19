@@ -23,6 +23,8 @@ export interface OutboxMessage {
   // Sent instead of the text when the 24-hour window is closed. Body parameters fill the template's
   // {{1}}, {{2}}, … in order. Messages without one are not sent outside the window.
   template?: { key: TemplateKey; params: string[] } | null;
+  // Reply buttons under the text (a document, if any, goes on top as the header).
+  buttons?: { id: string; title: string }[] | null; // Firestore keeps no arrays inside arrays
   // A full message (buttons, a list, an image) instead of plain text; text stays as a summary.
   content?: import('./channel').OutboundContent | null;
   // Sent as a document with the text as its caption (e.g. the PDF receipt). path is under API_BASE_URL.
@@ -101,6 +103,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     conversationId: adminConversationId(business.ownerPhone), kind: 'owner_order_paid', document: receipt,
     text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${order.feeKobo ? `
 Relay fee (1%${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}): ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
+    buttons: [{ id: `act:order:${order.ref}`, title: 'View order' }, { id: `act:ready:${order.ref}`, title: 'Mark ready' }, { id: 'act:menu', title: 'Menu' }],
   });
 
   if (business?.ownerPhone && !business.firstSaleAt) {

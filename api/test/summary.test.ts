@@ -52,7 +52,8 @@ test('summary: uses a template outside the 24-hour window', async () => {
   assert.equal((await doc('outbox', `${fx.a.id}_summary_2026-12-03`)).viaTemplate, true);
 
   const toB = transport.sent.find(m => m.to === fx.b.ownerPhone)!;
-  assert.equal(toB.content.type, 'text', 'inside the window the full text is sent');
+  assert.equal(toB.content.type, 'interactive', 'inside the window the full text is sent, with its buttons');
+  assert.deepEqual((toB.content as any).interactive.action.buttons.map((b: any) => b.reply.title), ['Full report', 'Who owes me', 'Menu']);
   assert.equal(toB.phoneNumberId, 'pn-admin');
 });
 

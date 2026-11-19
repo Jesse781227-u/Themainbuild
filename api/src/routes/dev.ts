@@ -8,6 +8,7 @@
 // bot path; replies are captured by send() in log mode (devMessages) and shown on the page.
 // Every route here 404s unless RELAY_ENV is development and META_SEND_MODE is log.
 import { Hono, type ExecutionContext } from 'hono';
+import { commandsPayload } from '../bots/actions';
 import { getConfig, type Config } from '../config';
 import { C, getDb } from '../db';
 import { chatPage } from '../dev/page';
@@ -62,7 +63,9 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
   });
 
   r.get('/', c => c.redirect('/dev/owner'));
-  r.get('/owner', c => c.html(chatPage({ role: 'owner', botNumber: getConfig(c.env).ADMIN_BOT_PHONE_NUMBER_ID ?? '', title: 'Relay', subtitle: 'Business account', defaultPhone: '', boot: BOOT, photoUrl: '/logo.png' })));
+  // What "npm run sync:commands" sets on the real Admin Bot number, shown the same way here.
+  const ownerAutomation = () => { const p = commandsPayload(); return { commands: p.commands.map(x => ({ name: x.command_name, hint: x.command_description })), iceBreakers: p.prompts }; };
+  r.get('/owner', c => c.html(chatPage({ role: 'owner', botNumber: getConfig(c.env).ADMIN_BOT_PHONE_NUMBER_ID ?? '', title: 'Relay', subtitle: 'Business account', defaultPhone: '', boot: BOOT, photoUrl: '/logo.png', ...ownerAutomation() })));
   r.get('/customer', c => c.html(chatPage({ role: 'customer', botNumber: '', title: 'Shop', subtitle: 'Business account', defaultPhone: CUSTOMER_PHONE, boot: BOOT })));
   // Open chat screens reload themselves when the local server restarts with new code.
   r.get('/version', c => c.json({ boot: BOOT }));

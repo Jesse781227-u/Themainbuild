@@ -474,7 +474,8 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
   } else {
     await reply(`${paymentInstructions(order, (business as Business & { paymentDetails?: string | null }).paymentDetails ?? null)}\nWe're holding your items for ${minutes} minutes.`, { step: 'browse' });
   }
-  await notifyOwner(ctx.db, deps, business, 'order_placed', `New order ${order.ref}: ${formatKobo(order.payAmountKobo)} awaiting payment (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).`, order.id);
+  const placed = `New order ${order.ref}: ${formatKobo(order.payAmountKobo)} awaiting payment (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).`;
+  await notifyOwner(ctx.db, deps, business, 'order_placed', placed, order.id, buttons(placed, [[`act:order:${order.ref}`, 'View order'], [`act:msgcust:${order.ref}`, 'Message customer'], ['act:menu', 'Menu']]));
 }
 
 async function orderStatus(db: Firestore, customerId: string, reply: Reply) {

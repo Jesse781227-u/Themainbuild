@@ -1,7 +1,9 @@
 // The /dev/owner and /dev/customer chat screens (development only), styled after the WhatsApp
 // mobile app. Plain HTML + JS, no build step. The client script avoids template literals and
 // backslashes so it can live inside this template string.
-export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string; boot?: string; photoUrl?: string }
+// commands: the "/" list (name + hint) WhatsApp shows for this number; iceBreakers: the starter
+// questions on a brand-new chat. Both come from the owner action registry (bots/actions.ts).
+export interface ChatPageConfig { role: 'owner' | 'customer'; botNumber: string; title: string; subtitle: string; defaultPhone: string; boot?: string; photoUrl?: string; commands?: { name: string; hint: string }[]; iceBreakers?: string[] }
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 4l1.4 1.4L7.8 11H20v2H7.8l5.6 5.6L12 20l-8-8z"/></svg>',
@@ -102,6 +104,15 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 #text { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 16.5px; padding: 8px 4px; min-width: 0; }
 #text::placeholder { color: var(--meta); }
 #fab { width: 48px; height: 48px; border-radius: 50%; border: 0; background: var(--green); color: var(--green-ink); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; flex: none; }
+.cmds { position: absolute; left: 8px; right: 8px; bottom: 64px; max-height: 50%; overflow-y: auto; background: var(--menu); border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.25); z-index: 5; display: none; }
+.cmds.open { display: block; }
+.cmds button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--ink); padding: 10px 16px; font: inherit; cursor: pointer; border-bottom: 1px solid var(--sep); }
+.cmds button b { color: var(--green); font-weight: 500; }
+.cmds button small { display: block; color: var(--meta); font-size: 13px; margin-top: 2px; }
+.cmds button.on, .cmds button:hover { background: var(--sep); }
+.ice { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 12px; }
+.ice button { border: 1px solid var(--green); color: var(--green); background: var(--sheet); border-radius: 18px; padding: 8px 16px; font: inherit; font-size: 14px; cursor: pointer; }
+.doc { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; background: var(--sep); color: var(--ink); text-decoration: none; font-size: 14px; }
 .empty { margin: auto 0; align-self: center; text-align: center; color: var(--meta); font-size: 14px; max-width: 280px; }
 .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.4); display: none; z-index: 5; }
 .scrim.open { display: block; }
@@ -143,6 +154,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     <button id="fresh">${cfg.role === 'owner' ? 'Start as a new business owner' : 'Start as a new customer'}</button>
   </div>
   <div id="log"></div>
+  <div class="cmds" id="cmds" role="listbox" aria-label="Commands"></div>
   <footer>
     <div class="field">
       <span class="ic">${ICON.emoji}</span>
@@ -238,6 +250,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     else if (c.type === 'interactive') {
       var i = c.interactive || {};
       if (i.header && i.header.type === 'image' && i.header.image) { var hi = el('img'); hi.src = i.header.image.link; hi.alt = ''; b.appendChild(hi); }
+      if (i.header && i.header.type === 'document' && i.header.document) { var dl = el('a', 'doc', '📄 ' + (i.header.document.filename || 'Document')); dl.href = i.header.document.link; dl.target = '_blank'; dl.rel = 'noopener'; b.appendChild(dl); }
       if (i.header && i.header.text) { var h = el('b', null, i.header.text); b.appendChild(h); b.appendChild(document.createTextNode(String.fromCharCode(10))); }
       richText(b, (i.body && i.body.text) || '');
       if (i.footer && i.footer.text) { b.appendChild(document.createTextNode(String.fromCharCode(10))); b.appendChild(el('small', null, i.footer.text)); }
@@ -300,7 +313,14 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     log.appendChild(el('div', 'notice', 'This business uses a secure service from Meta to manage this chat. Test mode: nothing is sent to a real phone.'));
     if (!list.length) {
       if (!bot && CFG.role === 'customer') { log.appendChild(el('p', 'empty', state.noShop || 'Looking for your shop…')); return; }
-      log.appendChild(el('p', 'empty', 'Say "hi" to ' + title + '.')); return;
+      log.appendChild(el('p', 'empty', 'Say "hi" to ' + title + '.'));
+      // Ice breakers: tap one to start, like on a brand-new WhatsApp chat.
+      if ((CFG.iceBreakers || []).length) {
+        var ice = el('div', 'ice');
+        CFG.iceBreakers.forEach(function (q) { var ib = el('button', null, q); ib.type = 'button'; ib.onclick = function () { send(q); }; ice.appendChild(ib); });
+        log.appendChild(ice);
+      }
+      return;
     }
     var reactions = {}, lastTyping = null, lastOut = null, shown = [];
     list.forEach(function (m) {
@@ -415,8 +435,35 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   $('cam').onclick = function () { $('photoIn').value = ''; $('photoIn').click(); };
   $('fileIn').onchange = function () { upload($('fileIn').files[0]); };
   $('photoIn').onchange = function () { upload($('photoIn').files[0]); };
-  $('text').oninput = fab;
-  $('text').onkeydown = function (e) { if (e.key === 'Enter') send($('text').value.trim()); };
+  // "/" opens the command list (name + hint), filtered as you type, like WhatsApp.
+  var cmdSel = 0;
+  function cmdMatches() {
+    var v = $('text').value;
+    if (v.charAt(0) !== '/' || v.indexOf(' ') >= 0) return [];
+    var q = v.slice(1).toLowerCase();
+    return (CFG.commands || []).filter(function (c) { return c.name.indexOf(q) === 0; });
+  }
+  function showCmds() {
+    var list = cmdMatches(), box = $('cmds');
+    box.innerHTML = '';
+    if (!list.length) { box.classList.remove('open'); return; }
+    if (cmdSel >= list.length) cmdSel = 0;
+    list.forEach(function (c, n) {
+      var row = el('button', n === cmdSel ? 'on' : null); row.type = 'button';
+      row.appendChild(el('b', null, '/' + c.name)); row.appendChild(el('small', null, c.hint));
+      row.onclick = function () { box.classList.remove('open'); send('/' + c.name); };
+      box.appendChild(row);
+    });
+    box.classList.add('open');
+  }
+  $('text').oninput = function () { fab(); cmdSel = 0; showCmds(); };
+  $('text').onkeydown = function (e) {
+    var list = cmdMatches();
+    if (list.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); cmdSel = (cmdSel + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length; showCmds(); return; }
+    if (list.length && e.key === 'Enter') { e.preventDefault(); $('cmds').classList.remove('open'); send('/' + list[cmdSel].name); return; }
+    if (e.key === 'Escape') { $('cmds').classList.remove('open'); return; }
+    if (e.key === 'Enter') send($('text').value.trim());
+  };
   $('fab').onclick = function () { var t = $('text').value.trim(); if (t) send(t); else $('text').focus(); };
   $('scrim').onclick = function () { closeSheet(); $('menu').classList.remove('open'); };
   $('sheetClose').onclick = closeSheet;
