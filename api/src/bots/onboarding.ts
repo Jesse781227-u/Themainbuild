@@ -79,6 +79,14 @@ export function profileName(raw: string | null | undefined) {
   return /\p{L}{2,}/u.test(name) ? name : null;
 }
 
+// "My name is Teniola" / "I'm Teniola" / "call me Teni" / "Teniola here" → the name.
+export function ownerNameFrom(text: string) {
+  return text.trim().replace(/[.!]+$/, '')
+    .replace(/^(hi|hello|hey)[,!\s]+/i, '')
+    .replace(/^(my name is|my name's|name is|i am|i'm|im|it'?s|this is|call me|na|you can call me|they call me)\s+/i, '')
+    .replace(/\s+(here|by name)$/i, '');
+}
+
 // Conversations from the first onboarding (owner name → type → … → categories → products) are
 // mapped onto the new steps.
 export function normalise(raw: unknown): Onboarding | null {
@@ -156,7 +164,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     case 'shop_name': {
       if (!c.ob.welcomed) { await setOb(c, { welcomed: true }); return c.reply(welcomeText(c, 'What\'s your shop called?')); }
       const name = text.trim().replace(/^(it'?s|it is|my shop is|my business is|we are|we're)\s+/i, '').replace(/[.!]+$/, '').slice(0, 80);
-      if (name.length < 2 || choiceId) return prompt(c);
+      if (name.length < 2 || choiceId || !/\p{L}{2}/u.test(name)) return c.reply(`${stepLabel('basics')}Sorry, what's your shop called?`);
       if (parseAdminCommand(name)?.tool === 'addProduct' || (parseProduct(name)?.priceKobo ?? 0) >= 10_000) return c.reply('That looks like a product. First, what\'s your shop called? You\'ll add products next.');
       if (c.business) {
         await c.ctx.db.update(c.ctx.db.doc(C.businesses, c.business.id), { name, termsAcceptedAt: c.business.termsAcceptedAt ?? now.toISOString(), termsVersion: c.ctx.cfg.TERMS_VERSION, updatedAt: now.toISOString() });
@@ -164,15 +172,16 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       } else await createShop(c, name);
       await setOb(c, { nameSet: true });
       await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'shop_name', event: 'completed' });
-      if (!c.business!.ownerName) { await setOb(c, { step: 'owner_name' }); return c.reply(`Lovely name! And what's *your* name?`); }
+      if (!c.business!.ownerName) { await setOb(c, { step: 'owner_name' }); return c.reply(`${stepLabel('basics')}Lovely name! And what's *your* name?`); }
       return afterBasics(c);
     }
     case 'owner_name': {
-      const name = profileName(text.replace(/^(my name is|i am|i'm|it'?s)\s+/i, ''));
-      if (!name || choiceId) return c.reply("What's your name? (Just so I know what to call you.)");
+      const name = profileName(ownerNameFrom(text));
+      if (!name || choiceId) return c.reply(`${stepLabel('basics')}What's your name? (Just so I know what to call you.)`);
       await c.ctx.db.update(c.ctx.db.doc(C.businesses, c.business!.id), { ownerName: name, updatedAt: now.toISOString() });
       c.business!.ownerName = name;
       await c.ctx.db.set(c.ctx.db.doc(C.ownerPhones, c.ctx.ownerPhone), { ownerName: name }, { merge: true });
+      await c.reply(`Nice to meet you, ${first(name)}! 👋`);
       return afterBasics(c);
     }
 
@@ -393,15 +402,16 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
     case 'check_wa': {
-      if (choiceId === 'wa:yes' || choiceId === 'wa:done') { await setOb(c, { step: 'check_fb' }); return prompt(c); }
-      if (choiceId === 'wa:no' || choiceId === 'wa:unsure') {
-        return c.reply(buttons("Switching is free and keeps your chats:\n1. Back up your chats (WhatsApp → Settings → Chats → Chat backup).\n2. Install *WhatsApp Business* from the Play Store or App Store.\n3. Open it and verify the same number. Your chats move over.\n\nTap *Done* once you're on WhatsApp Business, or tap *Call me* and we'll help.", [['wa:done', "I've switched"], ['ob:call', 'Call me']]));
+      if (choiceId === 'wa:yes' || choiceId === 'wa:done' || choiceId === 'wa:hasb') { await setOb(c, { step: 'check_fb' }); return prompt(c); }
+      if (choiceId === 'wa:unsure') return c.reply(buttons('Look at the app icon on your phone: WhatsApp Business has a "B" on it (regular WhatsApp has a phone). Which one does your shop\'s number use?', [['wa:hasb', 'It has a B'], ['wa:nob', 'No B']]));
+      if (choiceId === 'wa:no' || choiceId === 'wa:nob') {
+        return c.reply(buttons("Switching is free and keeps your chats:\n1. Back up your chats (WhatsApp → Settings → Chats → Chat backup).\n2. Install *WhatsApp Business* from the Play Store or App Store.\n3. Open it and verify the same number. Your chats move over.\n\nTap *I've switched* once you're on WhatsApp Business, or tap *Call me* and we'll help.", [['wa:done', "I've switched"], ['ob:call', 'Call me']]));
       }
       return prompt(c);
     }
     case 'check_fb': {
       if (choiceId === 'fb:yes' || choiceId === 'fb:now') return sendConnectLink(c);
-      if (choiceId === 'fb:no') return c.reply(buttons('Meta (who run WhatsApp) need a Facebook login to confirm the number is yours. You can create a free account at facebook.com in a few minutes, or tap *Call me* and we\'ll walk you through it.', [['fb:now', 'I have one now'], ['ob:call', 'Call me']]));
+      if (choiceId === 'fb:no') return c.reply(buttons('Meta (who runs WhatsApp) needs a Facebook login to set up the business account your shop\'s number is connected to. You can create a free one at facebook.com in a few minutes, or tap *Call me* and we\'ll walk you through it.', [['fb:now', 'I have one now'], ['ob:call', 'Call me']]));
       return prompt(c);
     }
     case 'live_photo': case 'live_contacts': case 'live_source':
@@ -664,61 +674,74 @@ async function livePrompt(c: Ctx) {
 async function prompt(c: Ctx): Promise<unknown> {
   const biz = c.business;
   const L = stepLabel(c.ob.stage);
+  // Every question says where they are ("*Step 4 of 6* · …"), once.
+  const ask = (content: Out): Promise<unknown> => c.reply(withLabel(content, L));
   switch (c.ob.step) {
-    case 'shop_name': return c.reply(c.ob.adding ? `${L}What's the new shop or branch called?` : welcomeText(c, 'What\'s your shop called?'));
-    case 'owner_name': return c.reply("What's your name?");
-    case 'products': return c.reply(`${L}Send your ${listWord(biz)}, price list or product photos (PDF, photo, or paste the list) and I'll set up your shop.\n\nNo list? Just type a product, e.g. *${example(biz ?? {})}*.`);
-    case 'preview': return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
-    case 'type': return c.reply(list(`What kind of business is ${biz?.name ?? 'it'}? This helps me set up the right defaults.`, 'Pick business type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
+    case 'shop_name': return ask(c.ob.adding ? `What's the new shop or branch called?` : welcomeText(c, 'What\'s your shop called?'));
+    case 'owner_name': return ask("What's *your* name?");
+    case 'products': return ask(`Send your ${listWord(biz)}, price list or product photos (PDF, photo, or paste the list) and I'll set up your shop.\n\nNo list? Just type a product, e.g. *${example(biz ?? {})}*.`);
+    case 'preview': return ask(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
+    case 'type': return ask(list(`What kind of business is ${biz?.name ?? 'it'}? This helps me set up the right defaults.`, 'Pick business type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
     case 'photos': {
       const without = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length) : [];
       const missing = without.length;
       const named = missing <= 3 ? without.map(p => `*${p.name}*`).join(', ').replace(/, ([^,]*)$/, ' and $1') : `${missing} products`;
-      return c.reply(buttons(`📷 ${named} ${missing === 1 ? 'has' : 'have'} no photo yet, so customers see a coloured card with the first letter.${missing > 3 ? `\nFor example: ${without.slice(0, 3).map(p => p.name).join(', ')}.` : ''}\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *${example(biz ?? {}, without, { nameOnly: true })}*.`, [['ph:skip', 'Add photos later']]));
+      return ask(buttons(`📷 ${named} ${missing === 1 ? 'has' : 'have'} no photo yet, so customers see a coloured card with the first letter.${missing > 3 ? `\nFor example: ${without.slice(0, 3).map(p => p.name).join(', ')}.` : ''}\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *${example(biz ?? {}, without, { nameOnly: true })}*.`, [['ph:skip', 'Add photos later']]));
     }
     case 'city': {
       const area = c.ob.draft?.loc?.area;
-      if (area) return c.reply(`Which city or state is *${area}* in?`);
-      return c.reply(`${L}Where is ${biz?.name ?? 'your shop'}? Send the address, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.\n\nCustomers who pick up their orders will be sent this address.`);
+      if (area) return ask(`Which city or state is *${area}* in?`);
+      return ask(`Where is ${biz?.name ?? 'your shop'}? Send the address, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.\n\nCustomers who pick up their orders will be sent this address.`);
     }
-    case 'area': return c.reply(`Which area${c.ob.draft?.loc?.city ? ` in ${c.ob.draft.loc.city}` : ''} is ${biz?.name ?? 'your shop'} in? e.g. *Yaba*`);
+    case 'area': return ask(`Which area${c.ob.draft?.loc?.city ? ` in ${c.ob.draft.loc.city}` : ''} is ${biz?.name ?? 'your shop'} in? e.g. *Yaba*`);
     case 'street': {
       const loc = c.ob.draft?.loc;
-      return c.reply(buttons(`What's the street or building in ${loc?.area ?? 'your area'}? e.g. *12 Herbert Macaulay Way*. Customers who pick up will be sent it.`, [['loc:nostreet', 'No pickup address']]));
+      return ask(buttons(`What's the street or building in ${loc?.area ?? 'your area'}? e.g. *12 Herbert Macaulay Way*. Customers who pick up will be sent it.`, [['loc:nostreet', 'No pickup address']]));
     }
-    case 'location_confirm': return c.reply(buttons(`📍 ${describeLocation(c.ob.draft?.loc ?? {})}. Is that right?`, [['loc:ok', 'Yes, that\'s right'], ['loc:fix', 'Fix it']]));
-    case 'hours': return c.reply(`${L}What time do you open and close? e.g. *8am – 9pm*\n\nDifferent on some days? Send it like *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.`);
+    case 'location_confirm': return ask(buttons(`📍 ${describeLocation(c.ob.draft?.loc ?? {})}. Is that right?`, [['loc:ok', 'Yes, that\'s right'], ['loc:fix', 'Fix it']]));
+    case 'hours': return ask(`What time do you open and close? e.g. *8am – 9pm*\n\nDifferent on some days? Send it like *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.`);
     case 'hours_same': {
       const h = validHours(c.ob.draft?.hours);
-      return c.reply(buttons(`${h ? `${describeHours(h).replace(/^Every day /, '')}. ` : ''}Same every day?`, [['hrs:same', 'Yes, every day'], ['hrs:perday', 'No, set per day'], ['hrs:closed', 'Closed some days']]));
+      return ask(buttons(`${h ? `${describeHours(h).replace(/^Every day /, '')}. ` : ''}Same every day?`, [['hrs:same', 'Yes, every day'], ['hrs:perday', 'No, set per day'], ['hrs:closed', 'Closed some days']]));
     }
-    case 'hours_perday': return c.reply('Send your hours by day, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
-    case 'hours_closed': return c.reply('Which days are you closed? e.g. *Sunday*.');
-    case 'prep': return c.reply(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
-    case 'prep_custom': return c.reply('How long does an order usually take? e.g. *45 minutes*');
-    case 'delivery': return c.reply(buttons(`${L}How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
-    case 'fee_local': return c.reply(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if it's free.`);
-    case 'fee_city': return c.reply(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
-    case 'interstate': return c.reply(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
-    case 'interstate_pricing': return c.reply(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
-    case 'interstate_fee': return c.reply('What\'s the flat price for other states? e.g. *6000*');
+    case 'hours_perday': return ask('Send your hours by day, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
+    case 'hours_closed': return ask('Which days are you closed? e.g. *Sunday*.');
+    case 'prep': return ask(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
+    case 'prep_custom': return ask('How long does an order usually take? e.g. *45 minutes*');
+    case 'delivery': return ask(buttons(`How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
+    case 'fee_local': return ask(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if it's free.`);
+    case 'fee_city': return ask(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
+    case 'interstate': return ask(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
+    case 'interstate_pricing': return ask(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
+    case 'interstate_fee': return ask('What\'s the flat price for other states? e.g. *6000*');
     case 'policies': {
       const t = typeOf(biz?.category);
       const text = policyText(defaultPolicies(biz?.category));
-      return c.reply(buttons(`Your shop policies. These are what most ${t && t.id !== 'other' ? `${t.label.toLowerCase()} ` : ''}shops use:\n\n${text}\n\nYour shop assistant answers customers' questions about returns and problems from these.`, [['pol:use', 'Use these policies'], ['pol:edit', 'Write my own'], ['pol:skip', 'No policies for now']]));
+      return ask(buttons(`Your shop policies. These are what most ${t && t.id !== 'other' ? `${t.label.toLowerCase()} ` : ''}shops use:\n\n${text}\n\nYour shop assistant answers customers' questions about returns and problems from these.`, [['pol:use', 'Use these policies'], ['pol:edit', 'Write my own'], ['pol:skip', 'No policies for now']]));
     }
-    case 'policies_edit': return c.reply('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.');
-    case 'msg_offer': return c.reply(buttons(`Want to choose how ${biz?.name ?? 'your shop'} talks to customers? I've written some options for your welcome, thank-you and "here's what we have" messages.`, [['msgs:choose', 'Choose messages'], ['msgs:default', 'Use defaults']]));
+    case 'policies_edit': return ask('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.');
+    case 'msg_offer': return ask(buttons(`Want to choose how ${biz?.name ?? 'your shop'} talks to customers? I've written some options for your welcome, thank-you and "here's what we have" messages.`, [['msgs:choose', 'Choose messages'], ['msgs:default', 'Use defaults']]));
     case 'msg_pick': case 'msg_custom': case 'msg_confirm': {
       const i = Math.min(c.ob.msgIndex ?? 0, SIGNUP_MESSAGES.length - 1);
-      return sendAll(c, await showChoices(flowFor(c), SIGNUP_MESSAGES[i], `Message ${i + 1} of ${SIGNUP_MESSAGES.length} · `));
+      const [first, ...rest] = await showChoices(flowFor(c), SIGNUP_MESSAGES[i], `Message ${i + 1} of ${SIGNUP_MESSAGES.length} · `);
+      await ask(first);
+      return sendAll(c, rest);
     }
-    case 'ready': return c.reply(buttons(`${L}${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
-    case 'fee_payer': return c.reply(buttons(`${L}Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
-    case 'check_wa': return c.reply(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
-    case 'check_fb': return c.reply(buttons('And can you log into Facebook? Meta use it to confirm the number is yours.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
+    case 'ready': return ask(buttons(`${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
+    case 'fee_payer': return ask(buttons(`Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
+    case 'check_wa': return ask(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
+    case 'check_fb': return ask(buttons('And can you log into Facebook? Meta (who runs WhatsApp) uses a Facebook login to set up your business account. Your number itself is confirmed with a code sent to it.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
     case 'live_photo': case 'live_contacts': case 'live_source': return livePrompt(c);
   }
+}
+
+// "*Step 4 of 6* · " in front of a question (text, buttons or list), unless it already has one.
+function withLabel(content: Out, label: string): Out {
+  if (!label) return content;
+  if (typeof content === 'string') return content.includes('*Step ') ? content : label + content;
+  const body = (content as { interactive?: { body?: { text: string } } }).interactive?.body;
+  if (body && !body.text.includes('*Step ')) body.text = label + body.text;
+  return content;
 }
 
 // Owner commands (PRODUCTS, delete X, categories, …) work during the product steps too.

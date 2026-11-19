@@ -8,6 +8,16 @@
 // like other quick replies, as interactive.button_reply).
 import type { OutboundContent } from './channel';
 
+// Button and row titles: one line, no stray spaces, cut at a word (WhatsApp allows 20 and 24 characters).
+export function fitTitle(raw: string, max: number) {
+  const t = raw.replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max - 1);
+  // Cut at the last whole word (unless the cut already falls between words).
+  const cut = (/[\s,.;:–-]/.test(t[max - 1]) ? head : head.replace(/\s+\S*$/, '')).replace(/[\s,.;:–-]+$/, '');
+  return `${cut.length >= max / 2 ? cut : t.slice(0, max - 1)}…`;
+}
+
 export const CAROUSEL = { minCards: 2, maxCards: 10, bodyMax: 1024, cardBodyMax: 160, titleMax: 20, idMax: 256 } as const;
 
 export interface CarouselCard { imageUrl: string; body: string; buttons: [id: string, title: string][] }
@@ -36,7 +46,7 @@ export function carousel(body: string, cards: CarouselCard[]): OutboundContent {
           card_index: i,
           header: { type: 'image', image: { link: c.imageUrl } },
           body: { text: clip(c.body, CAROUSEL.cardBodyMax) },
-          action: { buttons: c.buttons.map(([id, title]) => ({ type: 'quick_reply', quick_reply: { id: id.slice(0, CAROUSEL.idMax), title: title.slice(0, CAROUSEL.titleMax) } })) },
+          action: { buttons: c.buttons.map(([id, title]) => ({ type: 'quick_reply', quick_reply: { id: id.slice(0, CAROUSEL.idMax), title: fitTitle(title, CAROUSEL.titleMax) } })) },
         })),
       },
     },

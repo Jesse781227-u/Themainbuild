@@ -25,7 +25,7 @@ test('carousel: Meta limits are enforced in code', () => {
   assert.throws(() => carousel(' ', [card, card]), /CAROUSEL_BODY_REQUIRED/);
   const c = carousel('Body', [card, card]);
   assert.equal(cards(c)[0].body.text.length, CAROUSEL.cardBodyMax, 'card text cut to 160');
-  assert.equal(cards(c)[0].action.buttons[0].quick_reply.title.length, 20, 'button titles cut to 20');
+  assert.ok(cards(c)[0].action.buttons[0].quick_reply.title.length <= 20, 'button titles cut to 20, at a word');
   assert.equal(clip('one two three four', 12), 'one two…');
 });
 

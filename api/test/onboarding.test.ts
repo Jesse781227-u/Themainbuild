@@ -55,6 +55,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const hi = await say('Hi');
   assert.match(hi[0].text, /^Welcome to Relay, Ada 👋[\s\S]*about 5 minutes[\s\S]*agree to Relay's Terms: https?:\/\/\S+\/terms\nStuck\? Reply \*CALL\* anytime[\s\S]*\*Step 1 of 6\* · What's your shop called\?$/);
   assert.match((await say('add Jollof rice, 2500, 10'))[0].text, /looks like a product/);
+  assert.equal((await say('?'))[0].text, "*Step 1 of 6* · Sorry, what's your shop called?", 'junk gets a short re-ask, not the whole welcome');
 
   const products = await say("Mama Ada's Kitchen");
   assert.match(products[0].text, /^\*Step 2 of 6\* · Send your menu, price list or product photos/);
@@ -111,7 +112,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const street = await say("it's in Lagos, Yaba, near Tejuosho market");
   assert.match(street[0].text, /What's the street or building in Yaba\?/);
   const where = await say('12 Herbert Macaulay Way');
-  assert.match(where[0].text, /^📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?\n/);
+  assert.match(where[0].text, /^\*Step 3 of 6\* · 📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?\n/);
   assert.deepEqual(where[0].options, ['loc:ok', 'loc:fix']);
   assert.match((await say('Yes', 'loc:ok'))[0].text, /^\*Step 4 of 6\* · What time do you open and close/);
   const same = await say('8am - 9pm');
@@ -134,11 +135,11 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   const offer = await say('Use these', 'pol:use');
   assert.deepEqual(offer[0].options, ['msgs:choose', 'msgs:default']);
   const welcome = await say('Choose messages', 'msgs:choose');
-  assert.match(welcome[0].text, /^Message 1 of 3 · \*Welcome\* — sent the first reply to a new customer\.\n\nNow:\n[\s\S]*\*Option 1\* \(warm and chatty\)\n[\s\S]*\*Option 2\* \(short and professional\)\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?\n\n\*Option 3\* \(playful, with a light Naija touch\)/);
+  assert.match(welcome[0].text, /^\*Step 5 of 6\* · Message 1 of 3 · \*Welcome\* — sent as the first reply to a new customer\.\n\nNow:\n[\s\S]*\*Option 1\* \(warm and chatty\)\n[\s\S]*\*Option 2\* \(short and professional\)\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?\n\n\*Option 3\* \(playful, with a light Naija touch\)/);
   assert.deepEqual(welcome[1].options, ['msgpick:welcome:1', 'msgpick:welcome:2', 'msgpick:welcome:3', 'msgedit:welcome', 'msgkeep:welcome']);
   const thanks = await say('Option 2', 'msgpick:welcome:2');
   assert.match(thanks[0].text, /^Saved ✅ Here's exactly how customers will see your \*welcome\* message:\n\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?$/);
-  assert.match(thanks[1].text, /^Message 2 of 3 · \*Thank you after payment\*/);
+  assert.match(thanks[1].text, /^\*Step 5 of 6\* · Message 2 of 3 · \*Thank you after payment\*/);
   // Their own words: checked, shown, then saved.
   await say('Write my own', 'msgedit:paymentThanks');
   assert.match((await say('Thanks {custmer}! Got your {total}.'))[0].text, /I don't know \{custmer\}/);
@@ -146,7 +147,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.match(mine[0].text, /^Here's how customers will see it:\n\nThanks Ada! We got your ₦12,500 for RLY-7KQ2M 🙏/);
   assert.deepEqual(mine[0].options, ['msgsave:paymentThanks', 'msgedit:paymentThanks']);
   const third = await say('Save', 'msgsave:paymentThanks');
-  assert.match(third[1].text, /^Message 3 of 3 · \*Showing what you sell\*/);
+  assert.match(third[1].text, /^\*Step 5 of 6\* · Message 3 of 3 · \*Showing what you sell\*/);
   const fee = await say('Keep the current one', 'msgkeep:menuIntro');
   assert.match(fee.map(m => m.text).join('\n'), /That's your messages done 👍/);
   biz = await doc('businesses', bizId);
@@ -176,9 +177,15 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.deepEqual(zones.map(z => [z.match, z.feeKobo]).sort(), [['Lagos', 300_000], ['Yaba', 150_000]]);
 
   assert.match((await say('Connect now', 'ob:connect'))[0].text, /WhatsApp Business/);
-  assert.match((await say('Not sure', 'wa:unsure'))[0].text, /Switching is free and keeps your chats/);
-  assert.match((await say('Done', 'wa:done'))[0].text, /log into Facebook/);
-  assert.match((await say('No', 'fb:no'))[0].text, /create a free account/);
+  const unsure = await say('Not sure', 'wa:unsure');
+  assert.match(unsure[0].text, /WhatsApp Business has a "B" on it/);
+  assert.deepEqual(unsure[0].options, ['wa:hasb', 'wa:nob']);
+  const switching = await say('No B', 'wa:nob');
+  assert.match(switching[0].text, /Switching is free and keeps your chats[\s\S]*Tap \*I've switched\*/);
+  assert.deepEqual(switching[0].options, ['wa:done', 'ob:call']);
+  const fb = await say("I've switched", 'wa:done');
+  assert.match(fb[0].text, /^\*Step 6 of 6\* · And can you log into Facebook\? Meta \(who runs WhatsApp\) uses a Facebook login to set up your business account\. Your number itself is confirmed with a code/);
+  assert.match((await say('No', 'fb:no'))[0].text, /create a free one/);
   const link = await say('I have one now', 'fb:now');
   assert.match(link[0].text, /open this link[\s\S]*\/connect\/[A-Za-z0-9]+/);
   assert.equal((await conv(OWNER)).onboarding, null, 'the everyday Admin Bot from here');
@@ -201,8 +208,9 @@ test('onboarding v2: a menu as the very first message is read straight away; the
   assert.match(added[0].text, /Added 3 products/);
   assert.match(added[1].text, /\*Step 1 of 6\* · Now, what's your shop called\?/);
   assert.match((await bot.send('admin', { from, text: 'Suya Spot', name: '' }))[0].text, /what's \*your\* name\?/, 'no WhatsApp profile name: asked once');
-  const preview = await bot.send('admin', { from, text: 'Musa', name: '' });
-  assert.match(preview[0].text, /✅ 3 products/);
+  const preview = await bot.send('admin', { from, text: 'My name is Musa', name: '' });
+  assert.equal(preview[0].text, 'Nice to meet you, Musa! 👋');
+  assert.match(preview[1].text, /✅ 3 products/);
   const biz = await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId);
   assert.deepEqual([biz.name, biz.ownerName], ['Suya Spot', 'Musa']);
   assert.ok(biz.termsAcceptedAt, 'terms accepted when they replied');
@@ -223,7 +231,7 @@ test('onboarding v2: unclear products ask the business type; typed products work
   const type = await say('Looks right', 'ok:yes');
   assert.match(type[0].text, /What kind of business is Bisi Gifts/);
   assert.ok(type[0].options.includes('btype:general_services'));
-  assert.match((await say('Other', 'btype:other'))[0].text, /^📷 \*Gift hamper\* and \*Mystery box\* have no photo yet/);
+  assert.match((await say('Other', 'btype:other'))[0].text, /^\*Step 2 of 6\* · 📷 \*Gift hamper\* and \*Mystery box\* have no photo yet/);
 });
 
 test('onboarding v2: coming back after a break offers Continue or Start over; start over clears drafts', async () => {

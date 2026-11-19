@@ -1,4 +1,6 @@
 import { C } from '../db';
+import { fitTitle } from '../services/carousel';
+export { fitTitle };
 import type { Config } from '../config';
 import type { QueueJob, R2BucketLike } from '../env';
 import type { Firestore } from '../lib/firestore';
@@ -117,16 +119,6 @@ export async function notifyOwner(db: Firestore, deps: BotDeps, business: Pick<B
     conversationId: adminConversationId(business.ownerPhone), kind, text, ...(content ? { content } : {}), status: 'pending', attempts: 0, createdAt: new Date().toISOString(),
   });
   if (created) await deps.enqueue([{ kind: 'outbox', messageId: id }]);
-}
-
-// Button and row titles: one line, no stray spaces, cut at a word (WhatsApp allows 20 and 24 characters).
-export function fitTitle(raw: string, max: number) {
-  const t = raw.replace(/\s+/g, ' ').trim();
-  if (t.length <= max) return t;
-  const head = t.slice(0, max - 1);
-  // Cut at the last whole word (unless the cut already falls between words).
-  const cut = (/[\s,.;:–-]/.test(t[max - 1]) ? head : head.replace(/\s+\S*$/, '')).replace(/[\s,.;:–-]+$/, '');
-  return `${cut.length >= max / 2 ? cut : t.slice(0, max - 1)}…`;
 }
 
 export const buttons = (body: string, items: [id: string, title: string][]) => ({

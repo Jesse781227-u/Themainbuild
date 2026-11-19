@@ -69,9 +69,40 @@ export function queueMessage(body: QueueJob, attempts = 1) {
   return m satisfies QueueMessage<QueueJob>;
 }
 
+// WhatsApp's limits, checked on everything any test sends: reply buttons ≤3 with titles ≤20
+// characters, lists ≤10 rows with titles ≤24, and no line breaks in a title.
+export function whatsAppLimitProblems(content: OutboundContent): string[] {
+  const problems: string[] = [];
+  const ia = (content as { interactive?: Record<string, any> }).interactive;
+  if (!ia) return problems;
+  const title = (t: unknown, max: number, where: string) => {
+    if (typeof t !== 'string' || !t.trim()) problems.push(`${where}: empty title`);
+    else if (t.length > max) problems.push(`${where}: "${t}" is ${t.length} > ${max}`);
+    else if (/\n/.test(t)) problems.push(`${where}: "${t}" has a line break`);
+  };
+  if (ia.type === 'button') {
+    const bs = ia.action?.buttons ?? [];
+    if (bs.length > 3) problems.push(`${bs.length} buttons`);
+    for (const b of bs) title(b.reply?.title, 20, 'button');
+  }
+  if (ia.type === 'list') {
+    title(ia.action?.button, 20, 'list button');
+    const rows = (ia.action?.sections ?? []).flatMap((s: { rows: unknown[] }) => s.rows);
+    if (rows.length > 10) problems.push(`${rows.length} list rows`);
+    for (const r of rows) title(r.title, 24, 'list row');
+  }
+  if (ia.type === 'carousel') for (const c of ia.action?.cards ?? []) for (const b of c.action?.buttons ?? []) title(b.quick_reply?.title ?? b.reply?.title ?? b.parameters?.display_text, 20, 'card button');
+  return problems;
+}
+
 export class FakeTransport implements Transport {
   sent: { phoneNumberId: string; to: string; content: OutboundContent; channel: 'whatsapp' | 'instagram' }[] = [];
-  async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: OutboundContent) { this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content, channel: 'whatsapp' }); return { messageId: `wamid.${this.sent.length}` }; }
+  async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: OutboundContent) {
+    const problems = whatsAppLimitProblems(content);
+    if (problems.length) throw new Error(`WHATSAPP_LIMITS: ${problems.join('; ')}`);
+    this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content, channel: 'whatsapp' });
+    return { messageId: `wamid.${this.sent.length}` };
+  }
   async sendInstagram(sender: { igAccountId: string }, to: string, text: string) { this.sent.push({ phoneNumberId: sender.igAccountId, to, content: { type: 'text', text }, channel: 'instagram' }); return { messageId: `ig.${this.sent.length}` }; }
   typing: string[] = [];
   async markTyping(_sender: { phoneNumberId: string }, messageId: string) { this.typing.push(messageId); }

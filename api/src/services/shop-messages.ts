@@ -12,7 +12,7 @@ export const MESSAGE_KEYS = ['welcome', 'welcomeBack', 'menuIntro', 'addedToCart
 export type MessageKey = typeof MESSAGE_KEYS[number];
 
 export const MESSAGE_INFO: Record<MessageKey, { label: string; when: string; blanks: string[] }> = {
-  welcome: { label: 'Welcome', when: 'the first reply to a new customer', blanks: ['customer_name', 'shop'] },
+  welcome: { label: 'Welcome', when: 'as the first reply to a new customer', blanks: ['customer_name', 'shop'] },
   welcomeBack: { label: 'Welcome back', when: 'when a returning customer says hi', blanks: ['customer_name', 'shop'] },
   menuIntro: { label: 'Showing what you sell', when: 'above your products when a customer asks to see them', blanks: ['customer_name', 'shop'] },
   addedToCart: { label: 'Added to cart', when: 'when a customer adds something to their cart', blanks: ['customer_name', 'item', 'shop'] },
