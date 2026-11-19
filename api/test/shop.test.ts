@@ -130,7 +130,7 @@ test('instagram: DM routes to the shop handler', async () => {
   assert.equal(r.phoneNumberId, 'ig-a');
   assert.equal(r.to, 'igsid-42');
   // Instagram has no buttons or carousels: the same message arrives as numbered text.
-  assert.match(r.text, /welcome to Business biz-a 👋[\s\S]*Product biz-a[\s\S]*1\. Buy\n2\. Menu\n3\. View cart\nReply with a number\./);
+  assert.match(r.text, /welcome to Business biz-a 👋[\s\S]*Product biz-a[\s\S]*1\. Add to cart\n2\. Browse the shop\n3\. My cart\nReply with a number\./);
   const [added] = await bot.send('instagram', { from: 'igsid-42', to: 'ig-a', text: '1' });
   assert.match(added.text, /Added 1 × Product biz-a/);
   assert.equal((await doc('conversations', `${fx.a.id}_ig_igsid42`)).channel, 'instagram');

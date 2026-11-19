@@ -214,7 +214,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
         const added = (c.ob.photosAdded ?? 0) + 1;
         await setOb(c, { photosAdded: added });
         if (added >= MAX_TOP_PHOTOS) { await c.reply(`✅ Added to ${p.name}. That's ${MAX_TOP_PHOTOS} 👏 You can add more any time.`); return toLocation(c); }
-        return c.reply(buttons(`✅ Added to ${p.name}. Send another, or tap *Done*.`, [['ph:done', 'Done']]));
+        return c.reply(buttons(`✅ Added to ${p.name}. Send another, or tap *Done*.`, [['ph:done', "That's all photos"]]));
       }
       return prompt(c);
     }
@@ -340,7 +340,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     case 'check_wa': {
       if (choiceId === 'wa:yes' || choiceId === 'wa:done') { await setOb(c, { step: 'check_fb' }); return prompt(c); }
       if (choiceId === 'wa:no' || choiceId === 'wa:unsure') {
-        return c.reply(buttons("Switching is free and keeps your chats:\n1. Back up your chats (WhatsApp → Settings → Chats → Chat backup).\n2. Install *WhatsApp Business* from the Play Store or App Store.\n3. Open it and verify the same number. Your chats move over.\n\nTap *Done* once you're on WhatsApp Business, or tap *Call me* and we'll help.", [['wa:done', 'Done'], ['ob:call', 'Call me']]));
+        return c.reply(buttons("Switching is free and keeps your chats:\n1. Back up your chats (WhatsApp → Settings → Chats → Chat backup).\n2. Install *WhatsApp Business* from the Play Store or App Store.\n3. Open it and verify the same number. Your chats move over.\n\nTap *Done* once you're on WhatsApp Business, or tap *Call me* and we'll help.", [['wa:done', "I've switched"], ['ob:call', 'Call me']]));
       }
       return prompt(c);
     }
@@ -421,7 +421,7 @@ async function showPreview(c: Ctx) {
     ? [categoryCarousel(c.ctx.cfg, used, products, { intro: `${hello} What are you looking for?` })]
     : productCarousel(c.ctx.cfg, biz, products, { title: used[0]?.name ?? 'Our products', key: used[0]?.id ?? 'all', intro: hello });
   await sendAll(c, preview);
-  await c.reply(buttons('Does that look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Fix something'], ['prod:more', 'Add more']]));
+  await c.reply(buttons('Does that look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
   // All the customer messages (welcome, thank-you, order updates) are drafted now, quietly; MESSAGES changes them.
   if (biz.category !== 'other' || biz.businessTypeInferred) await draftMessagesOnce(c);
 }
@@ -499,7 +499,7 @@ async function live(c: Ctx, text: string, choiceId: string | null, input?: Input
     case 'live_photo': {
       if (input?.imageId && c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN) {
         const url = await storeProfilePhoto(c.ctx.cfg, c.deps, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, input.imageId, biz.id).catch(e => { log('warn', 'profile_photo_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
-        if (!url) return c.reply(buttons('Sorry, I couldn\'t save that photo. Try again, or skip for now.', [['lp:skip', 'Skip for now']]));
+        if (!url) return c.reply(buttons('Sorry, I couldn\'t save that photo. Try again, or skip for now.', [['lp:skip', 'Skip the picture']]));
         await patchBusiness(c, { profilePhotoUrl: url });
         await c.reply('Lovely ✅ That\'s your shop\'s picture now.');
       } else if (choiceId !== 'lp:skip') return 'pass';
@@ -532,9 +532,9 @@ async function finishLive(c: Ctx, text: string) {
 
 // The go-live questions, used right after connecting (go-live.ts) and when re-asked.
 export function liveQuestion(step: Step, business: Pick<Business, 'name'>): OutboundContent | null {
-  if (step === 'live_photo') return buttons(`Your WhatsApp Business profile has no picture yet. Send one for ${business.name}: your logo or a nice photo of your shop or products.`, [['lp:skip', 'Skip for now']]);
-  if (step === 'live_contacts') return buttons('WhatsApp can share the contacts and recent chats already on your shop\'s number. Add those people to your customer list (*CUSTOMERS*)? Only you see them, and you can remove them any time.', [['lc:yes', 'Yes, add them'], ['lc:no', 'No thanks']]);
-  if (step === 'live_source') return list('Last one, and optional: how did you hear about Relay?', 'Choose', SOURCES.map(([id, title]) => ({ id, title })), 'How you found us');
+  if (step === 'live_photo') return buttons(`Your WhatsApp Business profile has no picture yet. Send one for ${business.name}: your logo or a nice photo of your shop or products.`, [['lp:skip', 'Skip the picture']]);
+  if (step === 'live_contacts') return buttons('WhatsApp can share the contacts and recent chats already on your shop\'s number. Add those people to your customer list (*CUSTOMERS*)? Only you see them, and you can remove them any time.', [['lc:yes', 'Yes, add them'], ['lc:no', 'No, leave them out']]);
+  if (step === 'live_source') return list('Last one, and optional: how did you hear about Relay?', 'How I found Relay', SOURCES.map(([id, title]) => ({ id, title })), 'How you found us');
   return null;
 }
 
@@ -551,11 +551,11 @@ async function prompt(c: Ctx): Promise<unknown> {
     case 'shop_name': return c.reply(c.ob.adding ? `${L}What's the new shop or branch called?` : welcomeText(c, 'What\'s your shop called?'));
     case 'owner_name': return c.reply("What's your name?");
     case 'products': return c.reply(`${L}Send your menu, price list or product photos (PDF, photo, or paste the list) and I'll set up your shop.\n\nNo list? Just type a product, e.g. *Jollof rice & chicken 3500*.`);
-    case 'preview': return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Fix something'], ['prod:more', 'Add more']]));
-    case 'type': return c.reply(list(`What kind of business is ${biz?.name ?? 'it'}? This helps me set up the right defaults.`, 'Choose type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
+    case 'preview': return c.reply(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
+    case 'type': return c.reply(list(`What kind of business is ${biz?.name ?? 'it'}? This helps me set up the right defaults.`, 'Pick business type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
     case 'photos': {
       const missing = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length).length : 0;
-      return c.reply(buttons(`📷 ${missing} product${missing === 1 ? ' has' : 's have'} no photo yet, so customers see a coloured card with the first letter.\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *Jollof rice*.`, [['ph:skip', 'Skip for now']]));
+      return c.reply(buttons(`📷 ${missing} product${missing === 1 ? ' has' : 's have'} no photo yet, so customers see a coloured card with the first letter.\n\nSend photos of your top sellers (up to ${MAX_TOP_PHOTOS}): each photo with the product's name as the caption, e.g. *Jollof rice*.`, [['ph:skip', 'Add photos later']]));
     }
     case 'city': return c.reply(`${L}Where is ${biz?.name ?? 'your shop'}? Send the city and area, e.g. *Lagos, Yaba*.`);
     case 'area': return c.reply(`Which area in ${c.ob.draft?.city ?? 'your city'}?`);
@@ -566,24 +566,24 @@ async function prompt(c: Ctx): Promise<unknown> {
     }
     case 'hours_perday': return c.reply('Send your hours by day, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
     case 'hours_closed': return c.reply('Which days are you closed? e.g. *Sunday*.');
-    case 'prep': return c.reply(list('How long does an order usually take to prepare?', 'Choose', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
+    case 'prep': return c.reply(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
     case 'prep_custom': return c.reply('How long does an order usually take? e.g. *45 minutes*');
-    case 'delivery': return c.reply(buttons(`${L}How do customers get their orders?`, [['dl:pickup', 'Pickup'], ['dl:deliver', 'I deliver'], ['dl:both', 'Both']]));
+    case 'delivery': return c.reply(buttons(`${L}How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
     case 'fee_local': return c.reply(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if it's free.`);
     case 'fee_city': return c.reply(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
-    case 'interstate': return c.reply(buttons('Do you send orders to other states?', [['is:yes', 'Yes'], ['is:no', 'No']]));
+    case 'interstate': return c.reply(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
     case 'interstate_pricing': return c.reply(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
     case 'interstate_fee': return c.reply('What\'s the flat price for other states? e.g. *6000*');
     case 'policies': {
       const t = typeOf(biz?.category);
       const text = policyText(defaultPolicies(biz?.category));
-      return c.reply(buttons(`Your shop policies. These are what most ${t && t.id !== 'other' ? `${t.label.toLowerCase()} ` : ''}shops use:\n\n${text}\n\nYour shop assistant answers customers' questions about returns and problems from these.`, [['pol:use', 'Use these'], ['pol:edit', 'Edit'], ['pol:skip', 'Skip']]));
+      return c.reply(buttons(`Your shop policies. These are what most ${t && t.id !== 'other' ? `${t.label.toLowerCase()} ` : ''}shops use:\n\n${text}\n\nYour shop assistant answers customers' questions about returns and problems from these.`, [['pol:use', 'Use these policies'], ['pol:edit', 'Write my own'], ['pol:skip', 'No policies for now']]));
     }
     case 'policies_edit': return c.reply('Type your policies in your own words: returns, exchanges, refunds, and how customers should report a problem.');
-    case 'ready': return c.reply(buttons(`${L}${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect now']]));
-    case 'fee_payer': return c.reply(buttons(`Before you connect: Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers'], ['fee:owner', "I'll pay it"]]));
-    case 'check_wa': return c.reply(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', 'Yes'], ['wa:no', 'No'], ['wa:unsure', 'Not sure']]));
-    case 'check_fb': return c.reply(buttons('And can you log into Facebook? Meta use it to confirm the number is yours.', [['fb:yes', 'Yes'], ['fb:no', 'No']]));
+    case 'ready': return c.reply(buttons(`${L}${biz?.name ?? 'Your shop'} is ready 🎉\n\nBefore customers see it, try it yourself: tap *Test my shop* (or type *TEST*) to shop exactly as a customer would, with a pretend payment and a real receipt. Type *EXIT* to come back.\n\nThen we'll connect your WhatsApp number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
+    case 'fee_payer': return c.reply(buttons(`Before you connect: Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, and nothing on delivery charges.\n\nWho should pay it?\n• *My customers*: added to their total as a small service fee.\n• *I'll pay it*: customers pay your prices; the fee comes out of what you receive.\n\nYou can change this any time with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
+    case 'check_wa': return c.reply(buttons('Quick check: is your shop\'s number on the *WhatsApp Business* app (the green one with a "B"), not regular WhatsApp?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
+    case 'check_fb': return c.reply(buttons('And can you log into Facebook? Meta use it to confirm the number is yours.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
     case 'live_photo': case 'live_contacts': case 'live_source': return livePrompt(c);
   }
 }

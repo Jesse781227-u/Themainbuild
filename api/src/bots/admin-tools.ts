@@ -202,7 +202,7 @@ export const adminTools = {
       if (c.productCount) {
         const others = cats.filter(x => x.id !== c.id);
         if (!others.length) return `${c.name} has ${c.productCount} product${c.productCount === 1 ? '' : 's'} and it's your only category. Add another category first.`;
-        return list(`${c.name} has ${c.productCount} product${c.productCount === 1 ? '' : 's'}. Move them to…`, 'Choose category', others.slice(0, 10).map(o => ({ id: `movecat:${c.id}:${o.id}`, title: o.name })), 'Move to');
+        return list(`${c.name} has ${c.productCount} product${c.productCount === 1 ? '' : 's'}. Move them to…`, 'Pick a category', others.slice(0, 10).map(o => ({ id: `movecat:${c.id}:${o.id}`, title: o.name })), 'Move to');
       }
       await deleteCategory(ctx.db, ctx.business.id, c.id);
       return `Deleted the category ${c.name}.`;
@@ -457,7 +457,7 @@ export const adminTools = {
       const first = ctx.business.ownerName?.split(' ')[0];
       const notConnected = ctx.business.status === 'onboarding' ? '\n\nYour WhatsApp number isn\'t connected yet, so customers can\'t order. Send CONNECT to get the link.' : '';
       // Button titles are sent back as text, so they work as commands.
-      return buttons(`Hi${first ? ` ${first}` : ''} 👋 What would you like to do for ${ctx.business.name}?${notConnected}`, [['g:products', 'Products'], ['g:orders', 'Orders'], ['g:help', 'Help']]);
+      return buttons(`Hi${first ? ` ${first}` : ''} 👋 What would you like to do for ${ctx.business.name}?${notConnected}`, [['g:products', 'My products'], ['g:orders', 'Recent orders'], ['g:help', 'What can you do?']]);
     },
   }),
   offTopic: def({ spec: { name: 'offTopic', description: 'Anything not about running this shop (general questions, chit-chat, other topics).', params: {} }, schema: z.object({}), async run() { return OFF_TOPIC; } }),

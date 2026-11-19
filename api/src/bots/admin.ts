@@ -25,6 +25,16 @@ import { handleSettings } from './settings';
 
 const CONFIRM_MINUTES = 10;
 
+// The two buttons under each "are you sure?" question.
+const CONFIRM_LABELS: Record<string, [string, string][]> = {
+  deleteProduct: [['yes', 'Yes, delete it'], ['no', 'No, keep it']],
+  deleteCategory: [['yes', 'Yes, delete it'], ['no', 'No, keep it']],
+  markPaid: [['yes', 'Yes, mark as paid'], ['no', 'Not paid yet']],
+  cancelOrder: [['yes', 'Yes, cancel order'], ['no', 'No, keep order']],
+  deleteMyData: [['yes', 'Yes, delete account'], ['no', 'No, keep account']],
+  broadcast: [['yes', 'Yes, send it'], ['no', "No, don't send"]],
+};
+
 interface AdminConversation extends ProductFlowState { onboarding?: unknown; pendingAction?: { tool: string; args: Record<string, unknown>; expiresAt: string } | null }
 
 export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
@@ -164,7 +174,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (prepared.kind === 'reply') return reply(prepared.text);
   if (prepared.kind === 'confirm') {
     await db.set(convRef, { pendingAction: { tool: prepared.tool, args: prepared.args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
-    return reply(buttons(prepared.prompt, [['yes', 'Yes'], ['no', 'No']]));
+    return reply(buttons(prepared.prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
   }
   log('info', 'admin_tool', { businessId: business.id, tool: prepared.tool });
   return reply(await runTool(prepared.tool, prepared.args, toolCtx));
@@ -196,14 +206,14 @@ async function handleShops(ctx: AdminContext, business: Business, choiceId: stri
     const owner = await getOwner(db, ctx.ownerPhone);
     const all = ((await db.getAll((owner?.businessIds ?? [business.id]).map(id => db.doc(C.businesses, id)))) as (Business | null)[]).filter((b): b is Business => !!b && b.status !== 'deleted');
     if (all.length < 2) {
-      await reply(buttons(`You have one shop on this number: *${business.name}*. Want to add another shop or branch?`, [['newshop:yes', 'Add a shop'], ['newshop:no', 'No thanks']]));
+      await reply(buttons(`You have one shop on this number: *${business.name}*. Want to add another shop or branch?`, [['newshop:yes', 'Add a shop'], ['newshop:no', 'Not now']]));
       return true;
     }
-    await reply(list(`You're managing *${business.name}*. Which shop do you want to manage?`, 'Choose shop', all.slice(0, 10).map(b => ({ id: `shop:${b.id}`, title: b.name, description: [b.area, b.status === 'active' ? 'live' : 'setting up'].filter(Boolean).join(' · ') })), 'Your shops'));
+    await reply(list(`You're managing *${business.name}*. Which shop do you want to manage?`, 'Switch shop', all.slice(0, 10).map(b => ({ id: `shop:${b.id}`, title: b.name, description: [b.area, b.status === 'active' ? 'live' : 'setting up'].filter(Boolean).join(' · ') })), 'Your shops'));
     return true;
   }
   if (/^(new shop|add (a |another )?shop|new branch|add (a |another )?branch|another shop|open (a |another )?(shop|branch))$/.test(t)) {
-    await reply(buttons('Add another shop or branch? It gets its own WhatsApp number, products and wallet, and you manage it from this chat (send SWITCH to move between shops).', [['newshop:yes', 'Yes, add one'], ['newshop:no', 'Cancel']]));
+    await reply(buttons('Add another shop or branch? It gets its own WhatsApp number, products and wallet, and you manage it from this chat (send SWITCH to move between shops).', [['newshop:yes', 'Yes, add a shop'], ['newshop:no', 'Not now']]));
     return true;
   }
   if (choiceId === 'newshop:no') { await reply('OK.'); return true; }

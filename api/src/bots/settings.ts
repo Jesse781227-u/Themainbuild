@@ -41,7 +41,7 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   }
   if (/^after ?hours$/i.test(t)) {
     const now = business.afterHours === 'menu' ? 'customers see the menu but can\'t order' : 'customers can still order for when you open';
-    return buttons(`When you're closed, ${now}. Change it?`, [['ah:orders', 'Take orders'], ['ah:menu', 'Menu only']]);
+    return buttons(`When you're closed, ${now}. Change it?`, [['ah:orders', 'Take orders anyway'], ['ah:menu', 'Show menu only']]);
   }
 
   // Shop policies.
@@ -67,7 +67,7 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   }
   if (/^(fee|fees|relay fee|service fee)$/i.test(t)) {
     const who = business.feePayer === 'owner' ? 'You pay it: it comes out of what you receive' : 'Your customers pay it, as a service fee on their total';
-    return buttons(`Relay's fee is 1% of each paid order, at most ${formatKobo(cfg.FEE_CAP_KOBO)}, and nothing on delivery. ${who}.\n\nWho should pay it?`, [['fee:customer', 'My customers'], ['fee:owner', "I'll pay it"]]);
+    return buttons(`Relay's fee is 1% of each paid order, at most ${formatKobo(cfg.FEE_CAP_KOBO)}, and nothing on delivery. ${who}.\n\nWho should pay it?`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]);
   }
   return null;
 }

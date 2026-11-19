@@ -132,7 +132,7 @@ async function preview(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
   const list = updates === draft.items.length ? lines.map(l => l.replace(/ \(update\)$/, '')) : lines;
   let text = `I found *${draft.items.length} product${draft.items.length === 1 ? '' : 's'}* in ${groups.size} categor${groups.size === 1 ? 'y' : 'ies'}.${notes.length ? `\n\n${notes.join('\n')}` : ''}\n${list.join('\n')}`;
   if (text.length > 1000) text = `${text.slice(0, 990).replace(/\n[^\n]*$/, '')}\n…`; // WhatsApp button messages allow 1,024 characters
-  return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', 'Cancel']])];
+  return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', "Don't add these"]])];
 }
 
 // Saves the confirmed draft. Returns the messages and how many products were created.

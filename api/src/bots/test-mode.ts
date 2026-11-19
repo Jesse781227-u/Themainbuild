@@ -66,7 +66,7 @@ export async function testOrder(ctx: ShopContext, business: Business, cart: Cart
     status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt: at, paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
   };
   await ctx.db.create(ctx.db.doc(C.testReceipts, token), { token, businessId: business.id, order: { ...order }, createdAt: at });
-  return reply(buttons(`🧪 Test order ${order.ref}: ${formatKobo(payAmountKobo)}.\n\nIn your real shop the customer gets a *Pay ${formatKobo(payAmountKobo)}* button here and pays by card or transfer. Tap *Pay (test)* to see what happens next. No real money moves.`, [[`testpay:${token}`, 'Pay (test)'], ['menu', 'Back to menu']]), { step: 'browse' });
+  return reply(buttons(`🧪 Test order ${order.ref}: ${formatKobo(payAmountKobo)}.\n\nIn your real shop the customer gets a *Pay ${formatKobo(payAmountKobo)}* button here and pays by card or transfer. Tap *Pay now (test)* to see what happens next. No real money moves.`, [[`testpay:${token}`, 'Pay now (test)'], ['menu', 'Back to menu']]), { step: 'browse' });
 }
 
 export async function testPaid(ctx: ShopContext, business: Business, token: string, reply: Reply) {
@@ -80,5 +80,5 @@ export async function testPaid(ctx: ShopContext, business: Business, token: stri
   const thanks = renderMessage(business, 'paymentThanks', { order: order.ref, amount: formatKobo(order.payAmountKobo) });
   await reply({ type: 'document', link: `${ctx.cfg.API_BASE_URL}/receipts/test/${token}`, filename: receiptFilename(order), caption: thanks });
   const fee = order.feeKobo ? `\nRelay's fee on this order: ${formatKobo(order.feeKobo)} (${order.feePaidBy === 'owner' ? 'paid by you' : 'paid by the customer'}). You'd receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : '';
-  return reply(buttons(`🧪 That's what your customer gets after paying: your thank-you message and a PDF receipt. You'd also get a *Paid* alert here with the same receipt, and the money goes to your Relay wallet.${fee}\n\nKeep testing, or type *EXIT* to go back.`, [['menu', 'Shop again'], ['test:exit', 'Exit test']]), { step: 'browse' });
+  return reply(buttons(`🧪 That's what your customer gets after paying: your thank-you message and a PDF receipt. You'd also get a *Paid* alert here with the same receipt, and the money goes to your Relay wallet.${fee}\n\nKeep testing, or type *EXIT* to go back.`, [['menu', 'Shop again'], ['test:exit', 'Back to Relay']]), { step: 'browse' });
 }

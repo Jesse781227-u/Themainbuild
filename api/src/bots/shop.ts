@@ -65,7 +65,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   const setState = (s: ShopState | null) => db.set(db.doc(C.conversations, conversationId), { shop: s }, { merge: true });
   const reply = async (content: OutboundContent | string, next?: ShopState) => {
     const c: OutboundContent = typeof content === 'string' ? { type: 'text', text: content } : content;
-    await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: c });
+    await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: shopWords(c, business) });
     const options = optionIds(c);
     if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, options });
   };
@@ -97,7 +97,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     return;
   }
   if (/^delete my (data|details|info(rmation)?)$/.test(lower)) {
-    return reply(buttons(`Delete your details (name, number, cart and chat history) from ${business.name} on Relay? Orders you've paid for are kept for accounting.`, [['delete_yes', 'Yes, delete'], ['delete_no', 'No']]), { step: 'confirm_delete' });
+    return reply(buttons(`Delete your details (name, number, cart and chat history) from ${business.name} on Relay? Orders you've paid for are kept for accounting.`, [['delete_yes', 'Yes, delete my info'], ['delete_no', 'No, keep it']]), { step: 'confirm_delete' });
   }
 
   if (/^(subscribe|start updates|yes to updates)$/.test(lower)) {
@@ -132,11 +132,11 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (state.step === 'await_address' && text.length >= 3 && !/^(menu|cancel|cart)$/.test(lower)) {
     const quote = await quoteDelivery(db, businessId, text, 'self_arranged');
     if (!quote && business.shipsInterstate && business.interstatePricing === 'quote') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: 0, address: text.slice(0, 200), timeframe: `delivery price to be confirmed by ${business.name}` }, reply);
-    if (!quote) return reply(buttons(`Sorry, ${business.name} doesn't deliver to "${text.slice(0, 60)}" yet.`, [...(business.fulfilment !== 'delivery' ? [['pickup', 'Pickup instead'] as [string, string]] : []), ['menu', 'Back to menu']]), { step: 'browse' });
+    if (!quote) return reply(buttons(`Sorry, ${business.name} doesn't deliver to "${text.slice(0, 60)}" yet.`, [...(business.fulfilment !== 'delivery' ? [['pickup', "I'll pick it up"] as [string, string]] : []), ['menu', 'Back to menu']]), { step: 'browse' });
     return confirmOrder(ctx, business, quote, reply);
   }
   if (state.step === 'confirm' && YES.test(lower)) return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
-  if (state.step === 'confirm' && NO.test(lower)) return reply(buttons('No problem. Your cart is saved.', [['menu', 'Menu'], ['cart', 'View cart']]), { step: 'browse' });
+  if (state.step === 'confirm' && NO.test(lower)) return reply(buttons('No problem. Your cart is saved.', [['menu', 'See the menu'], ['cart', 'My cart']]), { step: 'browse' });
 
   // ── Free text ──
   const intent = await shopIntent(lower, text, deps.llm, db, businessId);
@@ -146,11 +146,11 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     case 'orderStatus': return orderStatus(db, conversationId, reply);
     case 'shopInfo': {
       const info = await shopInfo(db, business, String(intent.args.topic ?? ''));
-      if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'View cart']]));
+      if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'My cart']]));
       return handOver(ctx, deps, business, customer, reply);
     }
     case 'talkToHuman': return handOver(ctx, deps, business, customer, reply);
-    case 'offTopic': return reply(buttons(`I'm ${business.name}'s shop assistant, so I can only help with our products and your orders.`, [['menu', 'See the menu'], ['cart', 'View cart']]));
+    case 'offTopic': return reply(buttons(`I'm ${business.name}'s shop assistant, so I can only help with our products and your orders.`, [['menu', 'See the menu'], ['cart', 'My cart']]));
     case 'addToCart': {
       const asked = String(intent.args.product ?? '');
       const found = await findProducts(db, businessId, asked);
@@ -225,7 +225,7 @@ async function showProduct(ctx: ShopContext, business: Business, productId: stri
 async function buy(ctx: ShopContext, run: Run, business: Business, productId: string, reply: Reply) {
   const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
-  if (!hasStock(p)) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'View cart']]));
+  if (!hasStock(p)) return reply(buttons(`Sorry, ${p.name} is sold out right now.`, [['menu', 'Back to menu'], ['cart', 'My cart']]));
   return addToCart(ctx, run, business, p.id, 1, reply);
 }
 
@@ -261,7 +261,7 @@ async function addToCart(ctx: ShopContext, run: Run, business: Business, product
   const items = cart?.items.filter(i => i.productId !== p.id) ?? [];
   const already = cart?.items.find(i => i.productId === p.id)?.qty ?? 0;
   const want = already + qty;
-  if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'View cart'], ['menu', 'Menu']]));
+  if (tracksStock(p) && want > p.stock) return reply(buttons(`Sorry, only ${p.stock} ${p.name} left.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
   const now = new Date();
   await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString() });
   // Then, once per item per chat: what goes with it (remembered with the cart reply).
@@ -285,7 +285,7 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons(`${prefix ? prefix + '\n' : ''}Your cart is empty.`, [['menu', 'See the menu']]));
   const { text, subtotal } = await cartLines(ctx.db, cart);
-  return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Clear cart']]), { step: 'browse' });
+  return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Empty my cart']]), { step: 'browse' });
 }
 
 async function startCheckout(ctx: ShopContext, business: Business, reply: Reply) {
@@ -297,7 +297,7 @@ async function startCheckout(ctx: ShopContext, business: Business, reply: Reply)
   if (business.fulfilment === 'delivery') return reply('Please send your delivery address (area and street).', { step: 'await_address' });
   const zones = await listZones(ctx.db, business.id);
   if (!zones.length && !business.shipsInterstate) return confirmOrder(ctx, business, pickup(business), reply);
-  return reply(buttons('Delivery or pickup?', [['deliver', 'Delivery'], ['pickup', 'Pickup']]), { step: 'browse' });
+  return reply(buttons('Delivery or pickup?', [['deliver', 'Deliver to me'], ['pickup', "I'll pick it up"]]), { step: 'browse' });
 }
 
 async function confirmOrder(ctx: ShopContext, business: Business, delivery: OrderDelivery, reply: Reply) {
@@ -313,7 +313,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     `Total: about ${formatKobo(subtotal + delivery.feeKobo + fee)} (the exact amount comes next)`,
   ].join('\n');
-  return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Not yet']]), { step: 'confirm', delivery });
+  return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), { step: 'confirm', delivery });
 }
 
 async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, delivery: OrderDelivery | null, reply: Reply) {
@@ -325,7 +325,7 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
     order = await checkout(ctx.db, { cartId: cart.id, businessId: business.id, policy: policyFor(business, ctx.cfg), delivery });
   } catch (e) {
     const code = String(e instanceof Error ? e.message : e);
-    if (code.includes('INSUFFICIENT_STOCK') || code.includes('PRODUCT_UNAVAILABLE')) return reply(buttons('Sorry, something in your cart just sold out. Please check your cart.', [['cart', 'View cart'], ['menu', 'Menu']]), { step: 'browse' });
+    if (code.includes('INSUFFICIENT_STOCK') || code.includes('PRODUCT_UNAVAILABLE')) return reply(buttons('Sorry, something in your cart just sold out. Please check your cart.', [['cart', 'My cart'], ['menu', 'See the menu']]), { step: 'browse' });
     throw e;
   }
   const minutes = Math.round((new Date(order.holdExpiresAt).getTime() - Date.now()) / 60_000);
@@ -385,4 +385,12 @@ async function shopInfo(db: Firestore, business: Business, topic: string): Promi
     return `Delivery from ${business.name}:\n${lines.join('\n')}${business.fulfilment === 'both' ? '\nPickup is free.' : ''}`;
   }
   return null;
+}
+
+// "Menu" is a food word: other shops get "Browse the shop" / "Back to the shop" on their buttons.
+function shopWords(c: OutboundContent, business: Business): OutboundContent {
+  if (business.category === 'food_beverage' || c.type !== 'interactive') return c;
+  const swap: Record<string, string> = { 'See the menu': 'Browse the shop', 'Back to menu': 'Back to the shop' };
+  const json = JSON.stringify(c).replace(/"title":"(See the menu|Back to menu)"/g, (_m, t: string) => `"title":"${swap[t]}"`);
+  return JSON.parse(json) as OutboundContent;
 }

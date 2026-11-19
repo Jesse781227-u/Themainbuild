@@ -33,11 +33,11 @@ test('carousel: cards show photo or stand-in, price, sold out, Buy and Details',
   const withPhoto = cardFor(cfg, product(1, { images: ['https://cdn/af1.jpg'], description: 'Clean pair, size 42' }));
   assert.equal(withPhoto.imageUrl, 'https://cdn/af1.jpg');
   assert.equal(withPhoto.body, '*Item 01*\n₦1,000.01\nClean pair, size 42');
-  assert.deepEqual(withPhoto.buttons, [['buy:p1', 'Buy'], ['det:p1', 'Details']]);
+  assert.deepEqual(withPhoto.buttons, [['buy:p1', 'Add to cart'], ['det:p1', 'See details']]);
   const soldOut = cardFor(cfg, product(2, { stock: 0 }));
   assert.match(soldOut.imageUrl, /^https:\/\/relay\.test\/ph\/[0-9a-f]{6}\/I\.png$/, 'no photo: the shop colour and the first letter');
   assert.match(soldOut.body, /· Sold out$/);
-  assert.deepEqual(soldOut.buttons, [['buy:p2', 'Sold out'], ['det:p2', 'Details']], 'same two buttons, so every card matches');
+  assert.deepEqual(soldOut.buttons, [['buy:p2', 'Sold out'], ['det:p2', 'See details']], 'same two buttons, so every card matches');
 });
 
 test('carousel: pages of 9 with a See more card; sold out last; one product is a detail card', () => {

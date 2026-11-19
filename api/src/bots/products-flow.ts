@@ -39,13 +39,13 @@ export function parseProduct(text: string): { name: string; priceKobo: number; s
 
 export function card(p: Product, categoryName: string): OutboundContent {
   const body = `*${p.name}*\n${formatKobo(p.priceKobo)} · ${categoryName}\nStock: ${p.stock === null ? 'not tracked (always available)' : stockLabel(p)}`;
-  const content = buttons(body, [[`pok:${p.id}`, 'Correct'], [`pedit:${p.id}`, 'Edit']]);
+  const content = buttons(body, [[`pok:${p.id}`, 'Looks right'], [`pedit:${p.id}`, 'Fix it']]);
   if (p.images[0]) (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: p.images[0] } };
   return content;
 }
 
 const categoryPicker = (body: string, cats: Category[], idFor: (c: Category) => string, withNew: boolean) =>
-  list(body, 'Choose category', [...cats.slice(0, withNew ? 9 : 10).map(c => ({ id: idFor(c), title: c.name })), ...(withNew ? [{ id: 'pcat:new', title: '➕ New category' }] : [])], 'Your categories');
+  list(body, 'Pick a category', [...cats.slice(0, withNew ? 9 : 10).map(c => ({ id: idFor(c), title: c.name })), ...(withNew ? [{ id: 'pcat:new', title: '➕ New category' }] : [])], 'Your categories');
 
 async function save(f: FlowCtx, patch: ProductFlowState) {
   Object.assign(f.state, patch);

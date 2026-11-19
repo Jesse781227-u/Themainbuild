@@ -47,11 +47,11 @@ export function review(f: FlowCtx, key: MessageKey, intro = ''): OutboundContent
   const info = MESSAGE_INFO[key];
   const text = f.business.messages?.[key] || DEFAULT_MESSAGES[key];
   const blanks = /\{\w+\}/.test(text) ? `\n\nHow a customer sees it:\n${renderMessage(f.business, key, SAMPLE)}` : '';
-  return buttons(`${intro}*${info.label} message* (sent ${info.when}):\n\n${text}${blanks}`.slice(0, 1000), [[`msgok:${key}`, 'Use this'], [`msgedit:${key}`, 'Edit'], [`msgnew:${key}`, 'Try another']]);
+  return buttons(`${intro}*${info.label} message* (sent ${info.when}):\n\n${text}${blanks}`.slice(0, 1000), [[`msgok:${key}`, 'Use this message'], [`msgedit:${key}`, 'Write my own'], [`msgnew:${key}`, 'Write it differently']]);
 }
 
 export function messagesMenu(): OutboundContent {
-  return list('Your messages to customers. Pick one to see or change it:', 'Messages', MESSAGE_KEYS.map(k => ({ id: `msgshow:${k}`, title: MESSAGE_INFO[k].label, description: MESSAGE_INFO[k].when.slice(0, 72) })), 'Messages');
+  return list('Your messages to customers. Pick one to see or change it:', 'See my messages', MESSAGE_KEYS.map(k => ({ id: `msgshow:${k}`, title: MESSAGE_INFO[k].label, description: MESSAGE_INFO[k].when.slice(0, 72) })), 'Messages');
 }
 
 // Taps and typed text for this flow. done = the owner approved that message (signup moves on).

@@ -26,7 +26,7 @@ export function cardFor(cfg: Pick<Config, 'API_BASE_URL'>, p: Product): Carousel
   const head = `*${p.name}*\n${formatKobo(p.priceKobo)}${soldOut ? ' · Sold out' : ''}`;
   const room = CAROUSEL.cardBodyMax - head.length - 1;
   const desc = p.description && room > 20 ? `\n${clip(p.description.replace(/\s+/g, ' '), room)}` : '';
-  return { imageUrl: imageFor(cfg, p), body: `${head}${desc}`, buttons: [[`buy:${p.id}`, soldOut ? 'Sold out' : 'Buy'], [`det:${p.id}`, 'Details']] };
+  return { imageUrl: imageFor(cfg, p), body: `${head}${desc}`, buttons: [[`buy:${p.id}`, soldOut ? 'Sold out' : 'Add to cart'], [`det:${p.id}`, 'See details']] };
 }
 
 // One page of a category (or of search results). Returns the messages to send.
@@ -38,7 +38,7 @@ export function productCarousel(cfg: Pick<Config, 'API_BASE_URL'>, business: Pic
   if (slice.length === 1) return productDetails(cfg, slice[0], opts.intro);
   const shown = page * PER_PAGE + slice.length;
   const cards = slice.map(p => cardFor(cfg, p));
-  if (shown < all.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*See more*\n${all.length - shown} more in ${opts.title}`, buttons: [[`more:${opts.key}:${page + 1}`, 'See more ➡️'], ['menu', 'Menu']] });
+  if (shown < all.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*See more*\n${all.length - shown} more in ${opts.title}`, buttons: [[`more:${opts.key}:${page + 1}`, `More ${opts.title}`.length <= 17 ? `More ${opts.title} ➡️` : 'Next page ➡️'], ['menu', 'All sections']] });
   const body = page ? `${opts.title} (more) 👇` : opts.intro ? `${opts.intro} Swipe to see what we have 👇` : `${opts.title} at ${business.name} 👇 Swipe to see more.`;
   return [carousel(body, cards)];
 }
@@ -47,7 +47,7 @@ export function productCarousel(cfg: Pick<Config, 'API_BASE_URL'>, business: Pic
 export function productDetails(cfg: Pick<Config, 'API_BASE_URL'>, p: Product, intro?: string): OutboundContent[] {
   const soldOut = !hasStock(p);
   const body = `${intro ? `${intro}\n\n` : ''}*${p.name}*\n${formatKobo(p.priceKobo)}${p.description ? `\n\n${p.description}` : ''}${soldOut ? '\n\nSold out right now.' : ''}`;
-  const content = buttons(clip(body, 1000), soldOut ? [['menu', 'Menu']] : [[`buy:${p.id}`, 'Buy'], ['menu', 'Menu'], ['cart', 'View cart']]);
+  const content = buttons(clip(body, 1000), soldOut ? [['menu', 'See the menu']] : [[`buy:${p.id}`, 'Add to cart'], ['menu', 'See the menu'], ['cart', 'My cart']]);
   (content.interactive as Record<string, unknown>).header = { type: 'image', image: { link: imageFor(cfg, p) } };
   return [content];
 }
@@ -65,10 +65,10 @@ export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: 
     const from = inStock.length ? Math.min(...inStock.map(p => p.priceKobo)) : null;
     const cover = c.coverImage || items.find(p => p.images[0])?.images[0] || `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`;
     const count = `${items.length} item${items.length === 1 ? '' : 's'}`;
-    return { imageUrl: cover, body: `*${c.name}*\n${count}${from != null ? ` · from ${formatKobo(from)}` : ' · sold out'}`, buttons: [[`cat:${c.id}`, 'View']] };
+    return { imageUrl: cover, body: `*${c.name}*\n${count}${from != null ? ` · from ${formatKobo(from)}` : ' · sold out'}`, buttons: [[`cat:${c.id}`, `See ${c.name}`.length <= 20 ? `See ${c.name}` : 'Open this section']] };
   });
   const shown = page * PER_PAGE + slice.length;
-  if (shown < categories.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*More sections*\n${categories.length - shown} more`, buttons: [[`cats:${page + 1}`, 'See more ➡️']] });
+  if (shown < categories.length) cards.push({ imageUrl: `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`, body: `*More sections*\n${categories.length - shown} more`, buttons: [[`cats:${page + 1}`, 'More sections ➡️']] });
   return carousel(page ? 'More sections 👇' : `${opts.intro} Swipe to pick a section 👇`, cards);
 }
 
