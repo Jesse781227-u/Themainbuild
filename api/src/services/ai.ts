@@ -26,13 +26,19 @@ export interface LLMProvider {
   // Picks items that go with what a customer just added (cross) and maybe one dearer version (upsell). Ids only.
   pickPairs?(input: { shop: string; shopType: string; anchor: PairItem; candidates: PairItem[] }): Promise<{ cross: string[]; upsell: string | null }>;
   readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
+  // Which product each photo shows: returns, per photo (in order), a 1-based index into names, or null.
+  matchPhotos?(input: { names: string[]; photos: { mimeType: string; bytes: Uint8Array }[] }): Promise<(number | null)[]>;
 }
 
 export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)|text\/(plain|csv))$/;
 export const MAX_CATALOG_BYTES = 15_000_000;
-// Quick replies (choosing what an owner meant) vs reading a whole catalogue with photos.
+// Quick replies (choosing what an owner meant) vs reading a whole catalogue.
 const CHAT_TIMEOUT_MS = 30_000;
-const CATALOG_TIMEOUT_MS = 120_000;
+// Catalogues: models race. The main model starts; if it hasn't answered after HEDGE_MS (or fails),
+// the next one starts too, and the first good answer wins. Nothing waits longer than the total.
+const CATALOG_HEDGE_MS = 8_000;
+const CATALOG_TOTAL_MS = 75_000;
+const PHOTO_MATCH_TOTAL_MS = 150_000; // in the background, so it can take longer
 
 const MAX_IMAGE_BYTES = 4_000_000;
 
@@ -77,6 +83,40 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
     if (last) return last;
     throw new Error('GEMINI_FAILED: timeout');
   };
+  // The racing version, for slow calls (catalogues, photos).
+  const geminiRace = (init: RequestInit, hedgeMs: number, totalMs: number) => new Promise<Response>((resolve, reject) => {
+    const models = [...new Set([cfg.GEMINI_MODEL, ...String(cfg.GEMINI_FALLBACK_MODEL ?? '').split(',')].map(m => m.trim()).filter(Boolean))];
+    const attempts: AbortController[] = [];
+    let started = 0, finished = 0, done = false, last: Response | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const total = setTimeout(() => finish(null, new Error('GEMINI_FAILED: timeout')), totalMs);
+    function finish(res: Response | null, err?: Error, winner?: AbortController) {
+      if (done) return;
+      done = true;
+      clearTimeout(total);
+      if (timer) clearTimeout(timer);
+      for (const a of attempts) if (a !== winner) a.abort(); // stop the others, keep the winner's body
+      if (res) resolve(res); else reject(err ?? new Error('GEMINI_FAILED: timeout'));
+    }
+    function next() {
+      if (done || started >= models.length) return;
+      const model = models[started++];
+      if (timer) clearTimeout(timer);
+      if (started < models.length) timer = setTimeout(next, hedgeMs);
+      const attempt = new AbortController();
+      attempts.push(attempt);
+      doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { ...init, signal: attempt.signal })
+        .then(res => { if (res.ok) return finish(res, undefined, attempt); last = res; })
+        .catch(() => undefined)
+        .finally(() => {
+          finished++;
+          if (done) return;
+          if (started < models.length) next(); // this one failed: don't wait for the timer
+          else if (finished >= started) finish(last, new Error('GEMINI_FAILED: timeout'));
+        });
+    }
+    next();
+  });
   return {
     async chooseTool({ system, message, tools, imageUrl }) {
       const image = imageUrl ? await inlineImage(imageUrl, doFetch) : null;
@@ -167,7 +207,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       if (file) parts.push({ inlineData: { mimeType: file.mimeType, data: Buffer.from(file.bytes).toString('base64') } });
       (images ?? []).forEach((img, i) => parts.push({ text: `Photo ${i + 1}:` }, { inlineData: { mimeType: img.mimeType, data: Buffer.from(img.bytes).toString('base64') } }));
       if (text) parts.push({ text: text.slice(0, 30_000) });
-      const res = await gemini({
+      const res = await geminiRace({
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
         body: JSON.stringify({
@@ -178,11 +218,38 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
             responseSchema: { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, price: { type: 'NUMBER', nullable: true }, category: { type: 'STRING', nullable: true }, stock: { type: 'INTEGER', nullable: true }, description: { type: 'STRING', nullable: true }, image: { type: 'INTEGER', nullable: true } }, required: ['name', 'price', 'category'] } } }, required: ['items'] },
           },
         }),
-      }, CATALOG_TIMEOUT_MS);
+      }, CATALOG_HEDGE_MS, CATALOG_TOTAL_MS);
       if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
       const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
       const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
       try { return ((JSON.parse(raw) as { items?: CatalogItem[] }).items ?? []).slice(0, 300); } catch { return []; }
+    },
+
+    async matchPhotos({ names, photos }) {
+      const parts: Record<string, unknown>[] = [{ text: [
+        'These are product photos taken from a small shop\'s catalogue in Nigeria, followed by the shop\'s product list.',
+        'For each photo, say which product it shows, by its number in the list, or null if it shows none of them or you are not sure. Use each product at most once.',
+        'Products:', ...names.map((n, i) => `${i + 1}. ${n}`),
+      ].join('\n') }];
+      photos.forEach((p, i) => parts.push({ text: `Photo ${i + 1}:` }, { inlineData: { mimeType: p.mimeType, data: Buffer.from(p.bytes).toString('base64') } }));
+      const res = await geminiRace({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', properties: { photos: { type: 'ARRAY', items: { type: 'OBJECT', properties: { photo: { type: 'INTEGER' }, product: { type: 'INTEGER', nullable: true } }, required: ['photo', 'product'] } } }, required: ['photos'] } },
+        }),
+      }, CATALOG_HEDGE_MS, PHOTO_MATCH_TOTAL_MS);
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = json.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+      const out: (number | null)[] = photos.map(() => null);
+      try {
+        for (const r of (JSON.parse(raw) as { photos?: { photo: number; product: number | null }[] }).photos ?? []) {
+          if (Number.isInteger(r.photo) && r.photo >= 1 && r.photo <= photos.length && Number.isInteger(r.product) && r.product! >= 1 && r.product! <= names.length) out[r.photo - 1] = r.product!;
+        }
+      } catch { /* no matches */ }
+      return out;
     },
   };
 }

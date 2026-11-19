@@ -15,7 +15,8 @@ export interface RateLimiterLike { limit(opts: { key: string }): Promise<{ succe
 
 export type QueueJob =
   | { kind: 'inbound'; eventId: string }
-  | { kind: 'outbox'; messageId: string };
+  | { kind: 'outbox'; messageId: string }
+  | { kind: 'matchPhotos'; id: string };   // importPhotos/{id}
 
 export interface Env {
   // Plain vars and secrets (strings); validated by parseConfig.

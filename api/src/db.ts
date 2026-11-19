@@ -49,5 +49,6 @@ export const C = {
   deliveryBatches: 'deliveryBatches',
   supportTickets: 'supportTickets',     // CALL from an owner
   onboardingEvents: 'onboardingEvents', // step entered/completed, for drop-off analytics
-  testReceipts: 'testReceipts',         // TEST mode: pretend orders, never real ones
+  testReceipts: 'testReceipts',
+  importPhotos: 'importPhotos',         // photos from an uploaded PDF, matched to products in the background         // TEST mode: pretend orders, never real ones
 } as const;

@@ -17,7 +17,7 @@ import { buttons, fetchMedia, type Input } from './common';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
-export interface ImportDraft { items: ImportItem[]; skippedNoPrice: string[]; source: string }
+export interface ImportDraft { items: ImportItem[]; skippedNoPrice: string[]; source: string; photosId?: string | null /* photos being matched in the background */ }
 
 const MAX_ITEMS = 200;
 const MAX_PHOTOS = 40;
@@ -211,16 +211,23 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     // Product photos inside a PDF are saved and offered to the model to match with items.
     const photos = mimeType === 'application/pdf' ? await extractPdfImages(media.bytes, MAX_PHOTOS).catch(() => []) : [];
     const photoUrls = await storePhotos(f, photos);
-    const raw = await f.deps.llm.readCatalog({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats, images: photos.slice(0, photoUrls.length) });
-    const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f), photoUrls);
+    // The products first (fast); the photos are matched to them in the background (slow).
+    const raw = await f.deps.llm.readCatalog({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats });
+    const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f));
     if (!items.length) {
       return { out: [input.imageId && !input.document
         ? "I couldn't find products with prices in that photo. To add one product, send its photo with the name and price as the caption, e.g. *Black AF1 25k*."
         : "I couldn't find products with prices in that file. Try a clearer PDF or photo, or paste the list as a message."], created: 0 };
     }
-    const draft = { items, skippedNoPrice, source: input.document ? 'file' : 'photo' };
+    const photosId = photoUrls.length && f.deps.llm.matchPhotos ? randomId(12).replace(/[^A-Za-z0-9]/g, 'x') : null;
+    const draft: ImportDraft = { items, skippedNoPrice, source: input.document ? 'file' : 'photo', photosId };
     await saveDraft(f, draft);
-    return { out: await preview(f, draft), created: 0 };
+    if (photosId) {
+      await f.db.create(f.db.doc(C.importPhotos, photosId), { id: photosId, businessId: f.business.id, conversationId: f.convRef.id, ownerPhone: f.business.ownerPhone, names: items.map(i => i.name), photoUrls, status: 'pending', createdAt: new Date().toISOString() });
+      await f.deps.enqueue([{ kind: 'matchPhotos', id: photosId }]);
+    }
+    const out = await preview(f, draft);
+    return { out: photosId ? [...out, `📷 Your file has ${photoUrls.length} product photo${photoUrls.length === 1 ? '' : 's'}. I'm matching them to your products now and will add them in about a minute. You don't need to wait: tap *Add all* whenever you're ready.`] : out, created: 0 };
   } catch (e) {
     const error = String(e instanceof Error ? e.message : e);
     log('warn', 'catalog_read_failed', { businessId: f.business.id, error: error.slice(0, 160) });

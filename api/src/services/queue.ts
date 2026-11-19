@@ -10,6 +10,8 @@ import { createBotHandlers } from '../bots';
 import { claimEvent, markFailed, markProcessed } from './inbound';
 import { processOutbox } from './outbox';
 import { routeEvent, type Handlers } from './router';
+import { matchImportPhotos } from './import-photos';
+import { notifyOwner, type BotDeps } from '../bots/common';
 
 export interface QueueDeps { handlers?: Handlers; transport?: Transport; llm?: LLMProvider | null; transcriber?: Transcriber | null; fetch?: typeof fetch; now?: () => Date }
 
@@ -46,6 +48,11 @@ export async function handleQueueBatch(batch: MessageBatchLike<QueueJob>, env: E
         const result = await processOutbox(db, cfg, transport, job.messageId, deps.now?.());
         if (result === 'retry' || result === 'busy') msg.retry({ delaySeconds: result === 'busy' ? 30 : backoff(msg.attempts) });
         else msg.ack();
+      } else if (job.kind === 'matchPhotos') {
+        const llm = deps.llm !== undefined ? deps.llm : geminiProvider(cfg, doFetch);
+        const done = await matchImportPhotos(db, llm, env.PRODUCT_IMAGES, job.id);
+        if (done) await notifyOwner(db, { enqueue: jobs => enqueue(env, jobs) } as BotDeps, { id: done.businessId, ownerPhone: done.ownerPhone }, 'photos_matched', done.text, job.id);
+        msg.ack();
       } else {
         msg.ack();
       }

@@ -52,6 +52,7 @@ export interface Onboarding {
   welcomed?: boolean; nameSet?: boolean; typeConfident?: boolean;
   draft?: { city?: string; hours?: Hours };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number; photosAdded?: number;
+  photosId?: string | null;            // photos from the uploaded file, being matched in the background
 }
 
 const RESUME_AFTER_MS = 30 * 60_000;
@@ -116,7 +117,9 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
   if ((c.ob.stage === 'basics' || c.ob.stage === 'products') && (menuish || choiceId?.startsWith('imp:'))) {
     if (!c.business && menuish) await createShop(c, null);
     if (c.business) {
+      const photosId = c.state.importDraft?.photosId ?? null;
       const imported = await handleImport(flowFor(c), input!, text, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, c.reply);
+      if (imported?.created && photosId) await setOb(c, { photosId });
       if (imported) {
         await sendAll(c, imported.out);
         if (imported.created > 0) {
@@ -437,6 +440,8 @@ async function afterPreview(c: Ctx) {
 async function toPhotos(c: Ctx) {
   const products = await listProducts(c.ctx.db, c.business!.id);
   if (products.every(p => p.images.length)) return toLocation(c);
+  // Photos from their file are still being matched: don't ask for photos now.
+  if (c.ob.photosId && (await c.ctx.db.get(c.ctx.db.doc(C.importPhotos, c.ob.photosId)))?.status === 'pending') return toLocation(c);
   await setOb(c, { step: 'photos' });
   return prompt(c);
 }
