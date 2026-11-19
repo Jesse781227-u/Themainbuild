@@ -82,5 +82,5 @@ test('admin: HOURS, AFTER HOURS, POLICIES and FEE change the settings any time',
   assert.match(fee[0].text, /1% of each paid order, at most ₦2,000/);
   assert.match((await say("I'll pay it", 'fee:owner'))[0].text, /You pay Relay's fee from now on/);
   assert.equal((await doc('businesses', fx.a.id)).feePayer, 'owner');
-  assert.match((await say('help'))[0].text, /hours · hours 8am–9pm · after hours · policies · fee/);
+  assert.match((await say('Relay fee', 'act:fee'))[0].text, /Who should pay it\?/, 'settings are in the MENU now, not in HELP');
 });

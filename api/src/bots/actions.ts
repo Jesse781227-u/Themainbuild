@@ -28,6 +28,7 @@ import { buttons, findProducts, list, sectionList } from './common';
 import { messagesMenu } from './messages-flow';
 import { payoutHistory, startVerify, startWithdraw, walletView } from './wallet-flow';
 import { handleShops } from './shops';
+import { handleSettings } from './settings';
 import { startTest } from './test-mode';
 import type { AdminContext } from '../services/router';
 
@@ -260,7 +261,7 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
 
 export const ACTIONS: OwnerAction[] = [
   { id: 'menu', command: 'menu', hint: 'Everything Relay can do for your shop, to tap', aliases: ['menu', 'main menu', 'options', 'home', 'start', 'open my menu', 'set up my shop'], run: c => menu(c) },
-  { id: 'help', hint: 'Every command, with what it does', aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
+  { id: 'help', hint: 'What I can do, in short', tool: { name: 'help' }, aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
   // Shop
   { id: 'add', command: 'add', hint: 'Add a product: send its name and price, with a photo if you have one', menu: { section: 'Shop', title: 'Add product' }, aliases: ['add', 'add product', 'add a product', 'new product'],
     async run(c) {
@@ -289,6 +290,8 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'hours', command: 'hours', hint: 'See or change your opening hours', menu: { section: 'Settings', title: 'Opening hours' }, aliases: ['hours', 'opening hours', 'my hours'], next: [['delivery', 'Delivery'], ['menu', 'Menu']], run: hours },
   { id: 'delivery', command: 'delivery', hint: 'See or change your delivery areas and prices', menu: { section: 'Settings', title: 'Delivery' }, aliases: ['delivery', 'delivery prices', 'delivery zones', 'zones'], next: [['hours', 'Opening hours'], ['menu', 'Menu']], run: delivery },
   { id: 'messages', command: 'messages', hint: 'Choose the messages customers get from your shop', menu: { section: 'Settings', title: 'Messages' }, aliases: ['messages', 'my messages', 'customer messages'], async run() { return messagesMenu(); } },
+  { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies' }, aliases: ['policies', 'policy', 'my policies'], next: [['menu', 'Menu']], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; } },
+  { id: 'fee', hint: "Who pays Relay's 1% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
   { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', menu: { section: 'Settings', title: 'Pause my shop' }, aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
     hidden: c => !!c.business.pausedUntil },
   { id: 'reopen', hint: 'Open your shop for orders again', menu: { section: 'Settings', title: 'Reopen my shop' }, aliases: ['reopen', 'open shop', 'reopen shop', 'unpause'], next: [['menu', 'Menu']], run: reopen, hidden: c => !c.business.pausedUntil },
@@ -385,11 +388,11 @@ export async function handleActionTap(choiceId: string, c: Omit<ActionCtx, 'arg'
 }
 
 // HELP: the commands, from this list.
+// Short on purpose: the full list is the MENU (and "/" in WhatsApp). A few things to type, with this
+// shop's own products.
 export function helpText(business: Pick<Business, 'name' | 'category'>, products: { name: string; priceKobo: number }[] = []) {
-  const lines = ACTIONS.filter(a => a.command).map(a => `/${a.command} · ${a.hint}`);
-  // Then things to type with details (prices, stock, orders…), using this shop's own products.
-  const typed = helpFor(business, products).split('\n').slice(1).filter(l => !/^• (messages|customers|call|connect|products · orders|test)/.test(l));
-  return `Here's what I can do for ${business.name}. Tap *Menu*, or type a command:\n${lines.join('\n')}\n\nYou can also type (or say in a voice note):\n${typed.join('\n')}`;
+  const name = example(business, products, { nameOnly: true });
+  return `Tap *Menu* to see everything, or type / for the commands.\n\nOr just say it (voice notes work too):\n• add ${example(business, products)}\n• restock ${name} 5\n• RLY-ABCDE paid\n• how much did I make today?`;
 }
 
 // ── WhatsApp's own command list and ice breakers (npm run sync:commands) ──

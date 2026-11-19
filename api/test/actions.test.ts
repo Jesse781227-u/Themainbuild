@@ -55,20 +55,21 @@ test('menu: "hi" opens it; too many rows for one list → sections, each its own
   const hi = await bot.send('admin', { from: owner(), text: 'hi' });
   assert.deepEqual(hi[0].options, ['menu:Shop', 'menu:Orders', 'menu:Money', 'menu:Customers', 'menu:Settings', 'menu:Help']);
   const settings = await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' });
-  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:close'], 'one shop: no Switch shop; not paused: no Reopen');
+  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:fee', 'act:close'], 'one shop: no Switch shop; not paused: no Reopen');
   assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Shop', text: 'Shop' }))[0]), ['act:add', 'act:products', 'act:soldout']);
   // A second shop brings Switch shop; pausing swaps Pause for Reopen.
   await addShop(db, fx.a.ownerPhone, fx.b.id, {});
   await switchShop(db, fx.a.ownerPhone, fx.a.id); // adding makes the new one active
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: 'open' });
-  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:reopen', 'act:switch']);
+  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:fee', 'act:reopen', 'act:switch']);
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: null });
   // Unknown words: a short answer and the Menu, not a wall of help.
   const huh = await bot.send('admin', { from: owner(), text: 'blorp zzz' });
   assert.match(huh[0].text, /^Sorry, I didn't get that\./);
   assert.deepEqual(huh[0].options, ['act:menu', 'act:help']);
   const help = await bot.send('admin', { from: owner(), text: '/help' });
-  assert.match(help[0].text, /\/sales · Sales today, this week and this month/);
+  assert.match(help[0].text, /^Tap \*Menu\* to see everything, or type \/ for the commands\./);
+  assert.ok(help[0].text.length < 250, 'HELP is short: the MENU has the rest');
   assert.match(help[0].text, /restock Product biz-a 5/);
 });
 
