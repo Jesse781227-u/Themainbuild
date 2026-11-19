@@ -137,7 +137,9 @@ export async function signUp(bot: Bot, from: string, o: { shop?: string; product
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: o.name ?? 'Tayo' });
   await say('hi');
   await say(o.shop ?? 'Test Shop');
-  await say(o.product ?? 'Gift box 5000');
+  const card = await say(o.product ?? 'Gift box 5000');
+  const pick = card.flatMap(m => m.options).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
+  if (pick) await say('Category', pick); // the category wasn't clear: take the first
   let last = await say("That's all", 'prod:done');
   last = await say('Looks right', 'ok:yes');
   if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', `btype:${o.type ?? 'other'}`);

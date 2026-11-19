@@ -34,6 +34,10 @@ const FONT: Record<string, string> = {
   3: '11111000100010000010000011000101110', 4: '00010001100101010010111110001000010', 5: '11111100001111000001000011000101110',
   6: '00110010001000011110100011000101110', 7: '11111000010001000100010000100001000', 8: '01110100011000101110100011000101110',
   9: '01110100011000101111000010001001100',
+  ' ': '00000000000000000000000000000000000', '.': '00000000000000000000000000110001100', ',': '00000000000000000000011000010001000',
+  '-': '00000000000000011111000000000000000', '/': '00001000100001000100010001000010000', '&': '01100100101010001000101011001001101',
+  "'": '00100001000100000000000000000000000', '+': '00000001000010011111001000010000000', ':': '00000011000110000000011000110000000',
+  '!': '00100001000010000100001000000000100', '?': '01110100010000100010001000000000100',
 };
 
 const CRC_TABLE = (() => {
@@ -66,27 +70,17 @@ async function zlib(raw: Uint8Array) {
 const rgb = (hex: string) => [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
 const mix = (a: number[], b: number[], t: number) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 
-// A square PNG: the colour, a lighter disc, and the letter in white.
-export async function placeholderPng(hex: string, letter: string, size = 600): Promise<Uint8Array> {
-  const bg = rgb(hex), disc = mix(bg, [255, 255, 255], 0.14), ink = [255, 255, 255];
-  const glyph = FONT[letter] ?? FONT.R;
-  const scale = Math.floor(size / 15), gw = 5 * scale, gh = 7 * scale;
-  const gx = Math.floor((size - gw) / 2), gy = Math.floor((size - gh) / 2);
-  const r = size * 0.36, c = size / 2;
-  const row = 1 + size * 3;
-  const raw = new Uint8Array(row * size);
-  for (let y = 0; y < size; y++) {
+// An RGB PNG from a function giving each pixel's colour.
+async function encodePng(width: number, height: number, pixel: (x: number, y: number) => number[]): Promise<Uint8Array> {
+  const row = 1 + width * 3;
+  const raw = new Uint8Array(row * height);
+  for (let y = 0; y < height; y++) {
     raw[y * row] = 0; // no filter
-    for (let x = 0; x < size; x++) {
-      let px = (x - c) ** 2 + (y - c) ** 2 <= r * r ? disc : bg;
-      const fx = x - gx, fy = y - gy;
-      if (fx >= 0 && fy >= 0 && fx < gw && fy < gh && glyph[Math.floor(fy / scale) * 5 + Math.floor(fx / scale)] === '1') px = ink;
-      raw.set(px, y * row + 1 + x * 3);
-    }
+    for (let x = 0; x < width; x++) raw.set(pixel(x, y), y * row + 1 + x * 3);
   }
   const ihdr = new Uint8Array(13);
   const v = new DataView(ihdr.buffer);
-  v.setUint32(0, size); v.setUint32(4, size);
+  v.setUint32(0, width); v.setUint32(4, height);
   ihdr.set([8, 2, 0, 0, 0], 8); // 8-bit RGB
   const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', await zlib(raw)), chunk('IEND', new Uint8Array())];
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -94,3 +88,73 @@ export async function placeholderPng(hex: string, letter: string, size = 600): P
   for (const p of parts) { out.set(p, o); o += p.length; }
   return out;
 }
+
+// Is pixel (fx, fy) of a character drawn at this scale inked? Unknown characters are left blank.
+const inked = (ch: string, fx: number, fy: number, scale: number) => (FONT[ch] ?? FONT[' '])[Math.floor(fy / scale) * 5 + Math.floor(fx / scale)] === '1';
+
+// A square PNG: the colour, a lighter disc, and the letter in white.
+export function placeholderPng(hex: string, letter: string, size = 600): Promise<Uint8Array> {
+  const bg = rgb(hex), disc = mix(bg, [255, 255, 255], 0.14), ink = [255, 255, 255];
+  const ch = FONT[letter] ? letter : 'R';
+  const scale = Math.floor(size / 15), gw = 5 * scale, gh = 7 * scale;
+  const gx = Math.floor((size - gw) / 2), gy = Math.floor((size - gh) / 2);
+  const r = size * 0.36, c = size / 2;
+  return encodePng(size, size, (x, y) => {
+    const fx = x - gx, fy = y - gy;
+    if (fx >= 0 && fy >= 0 && fx < gw && fy < gh && inked(ch, fx, fy, scale)) return ink;
+    return (x - c) ** 2 + (y - c) ** 2 <= r * r ? disc : bg;
+  });
+}
+
+// Breaks text into lines of at most `max` characters, at spaces where possible.
+export function wrap(text: string, max: number) {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    for (let w = word; w; w = w.slice(max)) {
+      const part = w.slice(0, max);
+      if (!line) line = part;
+      else if (line.length + 1 + part.length <= max) line += ` ${part}`;
+      else { lines.push(line); line = part; }
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+export interface PosterLine { text: string; scale: number; gapAfter?: number; band?: boolean }
+
+// A poster (e.g. a WhatsApp Status image): centred lines of capital letters on the shop colour.
+// A line with band: true sits on a lighter strip.
+export function posterPng(hex: string, lines: PosterLine[], width = 540, height = 960): Promise<Uint8Array> {
+  const bg = rgb(hex), band = mix(bg, [255, 255, 255], 0.14), ink = [255, 255, 255];
+  const placed: { text: string; scale: number; x: number; y: number; band: boolean }[] = [];
+  const total = lines.reduce((h, l) => h + 7 * l.scale + (l.gapAfter ?? 2 * l.scale), 0);
+  let y = Math.max(16, Math.floor((height - total) / 2));
+  for (const l of lines) {
+    const text = l.text.toUpperCase().replace(/[^A-Z0-9 .,\-/&'+:!?]/g, '');
+    const w = text.length * 6 * l.scale - l.scale;
+    placed.push({ text, scale: l.scale, x: Math.floor((width - w) / 2), y, band: !!l.band });
+    y += 7 * l.scale + (l.gapAfter ?? 2 * l.scale);
+  }
+  return encodePng(width, height, (x, py) => {
+    for (const p of placed) {
+      const h = 7 * p.scale;
+      if (p.band && py >= p.y - p.scale * 3 && py < p.y + h + p.scale * 3) {
+        const fy = py - p.y, fx = x - p.x;
+        if (fy >= 0 && fy < h && fx >= 0) {
+          const i = Math.floor(fx / (6 * p.scale)), cx = fx - i * 6 * p.scale;
+          if (i < p.text.length && cx < 5 * p.scale && inked(p.text[i], cx, fy, p.scale)) return ink;
+        }
+        return band;
+      }
+      if (py < p.y || py >= p.y + h) continue;
+      const fx = x - p.x, fy = py - p.y;
+      if (fx < 0) continue;
+      const i = Math.floor(fx / (6 * p.scale)), cx = fx - i * 6 * p.scale;
+      if (i < p.text.length && cx < 5 * p.scale && inked(p.text[i], cx, fy, p.scale)) return ink;
+    }
+    return bg;
+  });
+}
+

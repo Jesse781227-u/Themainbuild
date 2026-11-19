@@ -7,6 +7,8 @@ import { findStuckEvents } from './inbound';
 import { releaseExpiredHolds } from './orders';
 import { findStuckOutbox } from './outbox';
 import { enqueue } from './queue';
+import { connectReminders, dayTwoNudges } from './nudges';
+import { getConfig } from '../config';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
 export const CRON_DAILY_SUMMARY = '0 19 * * *'; // 20:00 Africa/Lagos
@@ -16,14 +18,16 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const db = getDb(env);
   if (event.cron === CRON_DAILY_SUMMARY) {
     const ids = await queueDailySummaries(db, now);
-    await enqueue(env, ids.map(messageId => ({ kind: 'outbox' as const, messageId })));
-    log('info', 'daily_summaries_queued', { count: ids.length });
-    return { summaries: ids.length };
+    const nudges = await dayTwoNudges(db, now);
+    await enqueue(env, [...ids, ...nudges].map(messageId => ({ kind: 'outbox' as const, messageId })));
+    log('info', 'daily_summaries_queued', { count: ids.length, nudges: nudges.length });
+    return { summaries: ids.length, nudges: nudges.length };
   }
   const released = await releaseExpiredHolds(db, now);
   const events = await findStuckEvents(db, now);
   const outbox = await findStuckOutbox(db, now);
-  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...outbox.map(messageId => ({ kind: 'outbox' as const, messageId }))]);
+  const reminders = await connectReminders(db, getConfig(env), now);
+  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
   if (released || events.length || outbox.length) log('info', 'sweep', { released, requeuedEvents: events.length, requeuedOutbox: outbox.length });
   return { released, requeuedEvents: events.length, requeuedOutbox: outbox.length };
 }

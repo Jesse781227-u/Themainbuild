@@ -16,6 +16,8 @@ import { hmacSha256Hex } from '../lib/crypto';
 import { adminConversationId, customerConversationId } from '../services/conversations';
 import { getSignupSession } from '../services/signup';
 import { readOwner } from '../services/owners';
+import { goLive } from '../services/go-live';
+import { enqueue } from '../services/queue';
 import { saveWhatsAppConnection } from '../services/whatsapp';
 import { DEV_MEDIA_PREFIX, devMediaKey } from '../bots/common';
 
@@ -93,7 +95,8 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     await saveWhatsAppConnection(db, cfg, { businessId: session.businessId, wabaId: 'waba-dev', phoneNumberId, accessToken: 'local-log-mode-placeholder' });
     const at = new Date().toISOString();
     await db.update(db.doc(C.businesses, session.businessId), { status: 'active', whatsappDisplayNumber: '+234 800 000 0000', updatedAt: at });
-    await db.update(db.doc(C.signupSessions, token), { usedAt: at });
+    await db.update(db.doc(C.signupSessions, token), { usedAt: at, reminderDueAt: null });
+    await goLive(db, cfg, { businessId: session.businessId, enqueue: jobs => enqueue(c.env, jobs) });
     return c.json({ success: true });
   });
 

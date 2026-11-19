@@ -10,7 +10,7 @@ import { signupRoutes } from './routes/signup';
 import { devRoutes } from './routes/dev';
 import { payRoutes } from './routes/pay';
 import { receiptRoutes } from './routes/receipts';
-import { placeholderRoutes } from './routes/placeholder';
+import { goLiveRoutes, placeholderRoutes } from './routes/placeholder';
 import type { BachsAdapter } from './services/bachs';
 
 // Static files in public/ (Privacy, Terms, Data Deletion) are served by Workers Assets before the
@@ -39,6 +39,7 @@ export function createApp(deps: { bachs?: BachsAdapter; fetch?: typeof fetch } =
   app.route('/pay', payRoutes()); // simulated payment page; 404s unless PAYMENTS_MODE=simulated
   app.route('/receipts', receiptRoutes()); // PDF receipts for paid orders (private link)
   app.route('/ph', placeholderRoutes()); // pictures for products without a photo
+  app.route('/golive', goLiveRoutes()); // the shop's WhatsApp Status image
   app.route('/', signupRoutes(deps));
 
   app.notFound(c => c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }, 404));

@@ -8,10 +8,11 @@ import { randomId } from '../lib/crypto';
 import { saveWhatsAppConnection } from './whatsapp';
 
 const SESSION_HOURS = 24;
+export const REMINDER_MINUTES = 60; // one nudge if the link hasn't been used by then
 
 export async function createSignupSession(db: Firestore, cfg: Config, businessId: string, now = new Date()) {
   const token = randomId(18).replace(/[^A-Za-z0-9]/g, 'x');
-  await db.create(db.doc(C.signupSessions, token), { token, businessId, createdAt: now.toISOString(), expiresAt: new Date(now.getTime() + SESSION_HOURS * 3600_000).toISOString(), usedAt: null });
+  await db.create(db.doc(C.signupSessions, token), { token, businessId, createdAt: now.toISOString(), expiresAt: new Date(now.getTime() + SESSION_HOURS * 3600_000).toISOString(), usedAt: null, reminderDueAt: new Date(now.getTime() + REMINDER_MINUTES * 60_000).toISOString() });
   return `${cfg.API_BASE_URL}/connect/${token}`;
 }
 
@@ -56,6 +57,6 @@ export async function completeSignup(db: Firestore, cfg: Config, doFetch: typeof
   await saveWhatsAppConnection(db, cfg, { businessId: session.businessId, wabaId: input.wabaId, phoneNumberId: input.phoneNumberId, accessToken });
   const at = new Date().toISOString();
   await db.update(db.doc(C.businesses, session.businessId), { status: 'active', whatsappDisplayNumber: number.display_phone_number ?? null, updatedAt: at });
-  await db.update(db.doc(C.signupSessions, input.token), { usedAt: at });
+  await db.update(db.doc(C.signupSessions, input.token), { usedAt: at, reminderDueAt: null });
   return { businessId: session.businessId, displayNumber: number.display_phone_number ?? null };
 }

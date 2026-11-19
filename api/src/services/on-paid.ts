@@ -103,6 +103,15 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
 Relay fee (1%${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}): ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
   });
 
+  if (business?.ownerPhone && !business.firstSaleAt) {
+    tx.update(db.doc(C.businesses, business.id), { firstSaleAt: at });
+    queue({
+      id: `${business.id}_first_sale`, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,
+      conversationId: adminConversationId(business.ownerPhone), kind: 'first_sale',
+      text: `🎉 You just made your first sale on Relay: ${formatKobo(order.payAmountKobo - order.feeKobo)}! Your money is safe in your Relay wallet.\n\nTo withdraw it, you'll verify your account once. Reply *VERIFY* to start.`,
+    });
+  }
+
   return { applied: true, order: { ...order, status: 'paid', paidAt: at, paymentId: payment.paymentId, needsAttention }, late, outboxIds };
 }
 

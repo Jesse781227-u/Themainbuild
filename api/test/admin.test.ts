@@ -52,7 +52,7 @@ test('admin: embedded signup writes waNumbers', async () => {
   assert.equal(decrypt(conn.accessTokenEncrypted, getConfig(e)), 'merchant-business-token');
   assert.equal((await doc('businesses', fx.b.id)).status, 'active');
   assert.ok(calls.some(c => c.startsWith('POST') && c.endsWith('/2233445566/subscribed_apps')));
-  assert.ok(await doc('outbox', `${fx.b.id}_connected`), 'the owner is told it worked');
+  assert.match((await doc('outbox', `${fx.b.id}_golive`)).text, /is live!/, 'the owner is told it worked (the go-live kit)');
 
   // One-time link; and a number already used by another business can't be claimed.
   assert.equal((await api('POST', '/api/v1/signup/complete', { body, env: e, fetch: fakeMeta })).status, 400);

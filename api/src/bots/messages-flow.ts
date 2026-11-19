@@ -14,9 +14,9 @@ const isKey = (k: string): k is MessageKey => (MESSAGE_KEYS as readonly string[]
 const typeLabel = (b: Business) => BUSINESS_TYPES.find(t => t.id === b.category)?.label ?? 'small';
 const SAMPLE = { customer: 'Ada', order: 'RLY-7KQ2M', amount: '₦12,500' };
 
-async function saveMessages(f: FlowCtx, messages: ShopMessages) {
+async function saveMessages(f: FlowCtx, messages: ShopMessages, edited = true) {
   f.business.messages = { ...(f.business.messages ?? {}), ...messages };
-  await f.db.update(f.db.doc(C.businesses, f.business.id), { messages: f.business.messages, updatedAt: new Date().toISOString() });
+  await f.db.update(f.db.doc(C.businesses, f.business.id), { messages: f.business.messages, ...(edited ? { messagesEdited: true } : {}), updatedAt: new Date().toISOString() });
 }
 
 async function setAwaiting(f: FlowCtx, value: string | null) {
@@ -40,7 +40,7 @@ async function draft(f: FlowCtx, only?: MessageKey): Promise<ShopMessages> {
 
 // Drafts all five and saves them (signup). Returns nothing; review() shows them one at a time.
 export async function draftAllMessages(f: FlowCtx) {
-  await saveMessages(f, await draft(f));
+  await saveMessages(f, await draft(f), false);
 }
 
 export function review(f: FlowCtx, key: MessageKey, intro = ''): OutboundContent {

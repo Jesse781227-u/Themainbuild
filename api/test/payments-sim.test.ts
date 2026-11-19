@@ -61,7 +61,11 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
   assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
   assert.equal((await api('GET', '/receipts/notarealtokenatall123', {})).status, 404);
 
-  assert.equal((await doc('outbox', `${order.id}_owner_paid`)).document.filename, `Receipt-${order.ref}.pdf`, 'the owner alert carries the receipt too');
+  const ownerPaid = await doc('outbox', `${order.id}_owner_paid`);
+  assert.equal(ownerPaid.document.filename, `Receipt-${order.ref}.pdf`, 'the owner alert carries the receipt too');
+  assert.match(ownerPaid.text, /Relay fee \(1%, paid by the customer\): ₦10\. You receive ₦1,0/, 'the fee is never a surprise');
+  assert.match((await doc('outbox', `${fx.a.id}_first_sale`)).text, /🎉 You just made your first sale on Relay: ₦1,0[\d.,]*! Your money is safe in your Relay wallet[\s\S]*Reply \*VERIFY\*/);
+  assert.match((await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'verify' }))[0].text, /verification for withdrawals is opening very soon/);
   const again = await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: `receipt ${order.ref}` });
   assert.equal((again[0].content as { type: string }).type, 'document');
   assert.match(again[0].text, new RegExp(`Receipt for ${order.ref}`));

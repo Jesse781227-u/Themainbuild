@@ -54,6 +54,12 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
     return 'Saved ✅ Your shop assistant will use these from now on.';
   }
 
+  // Verification before the first withdrawal (KYC). TODO(jesse): the KYC flow (later phase).
+  if (/^(verify|verify me|verify account|kyc|withdraw|wallet|my wallet|payout|withdrawal)$/i.test(t)) {
+    await db.update(db.doc(C.businesses, business.id), { kycRequestedAt: new Date().toISOString() });
+    return 'Thanks! Account verification for withdrawals is opening very soon, and you\'ll be among the first we message. Your money stays safe in your Relay wallet until then. Questions? Reply *CALL*.';
+  }
+
   // Who pays Relay's fee.
   if (choiceId === 'fee:customer' || choiceId === 'fee:owner') {
     await save(db, business, { feePayer: choiceId === 'fee:owner' ? 'owner' : 'customer' });

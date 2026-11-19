@@ -58,7 +58,7 @@ test('payments: webhook matches by amount and marks order paid', async () => {
   assert.equal((await doc('orders', other.id)).status, 'awaiting_payment');
   assert.equal((await doc('payments', 'bachs_ref-1')).status, 'matched');
   assert.equal(await doc('amountClaims', `${fx.a.id}_${o.payAmountKobo}`), null, 'claim freed');
-  assert.deepEqual(env.EVENTS.sent.map(j => j.kind === 'outbox' && j.messageId).sort(), [`${o.id}_owner_paid`, `${o.id}_receipt`]);
+  assert.deepEqual(env.EVENTS.sent.map(j => j.kind === 'outbox' && j.messageId).sort(), [`${fx.a.id}_first_sale`, `${o.id}_owner_paid`, `${o.id}_receipt`].sort(), 'receipt, owner alert, and the first-sale message');
 });
 
 test('payments: same amount at another business does not match', async () => {

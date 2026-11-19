@@ -8,6 +8,7 @@ import { log } from '../lib/logger';
 import { adminConversationId } from '../services/conversations';
 import { completeSignup, getSignupSession, SignupError } from '../services/signup';
 import { enqueue } from '../services/queue';
+import { goLive } from '../services/go-live';
 import { deletionCode } from '../bots/deletion';
 import { isDevChat } from './dev';
 
@@ -54,13 +55,7 @@ document.getElementById('go').onclick=function(){FB.login(function(r){if(r.authR
     const cfg = getConfig(c.env);
     try {
       const done = await completeSignup(db, cfg, doFetch, parsed.data);
-      const business = await db.get(db.doc(C.businesses, done.businessId));
-      if (business?.ownerPhone) {
-        const id = `${done.businessId}_connected`;
-        const owner = String(business.ownerPhone);
-        if (await db.create(db.doc(C.outbox, id), { id, businessId: done.businessId, audience: 'owner', channel: 'whatsapp', to: owner, conversationId: adminConversationId(owner), kind: 'owner_connected', text: `✅ Your WhatsApp Business number${done.displayNumber ? ` ${done.displayNumber}` : ''} is connected. Customers who message it now get the Relay shop assistant. Send HELP any time.`, status: 'pending', attempts: 0, createdAt: new Date().toISOString() }))
-          await enqueue(c.env, [{ kind: 'outbox', messageId: id }]);
-      }
+      await goLive(db, cfg, { businessId: done.businessId, enqueue: jobs => enqueue(c.env, jobs), fetch: doFetch, images: c.env.PRODUCT_IMAGES });
       log('info', 'signup_completed', { businessId: done.businessId });
       return c.json({ success: true });
     } catch (e) {

@@ -36,7 +36,7 @@ test('dev chat: the customer tab finds the owner\'s shop once it is connected in
   // A customer message to that shop goes through the real signed webhook route.
   const sent = await api('POST', '/dev/send', { env: e, body: { botNumber: shop.botNumber, phone: '2348077770001', text: 'hi' } });
   assert.deepEqual(sent.body, { success: true, status: 200 });
-  assert.equal(e.EVENTS.sent.length, 1, 'queued for the Shop Bot');
+  assert.equal(e.EVENTS.sent.filter(j => j.kind === 'inbound').length, 1, 'queued for the Shop Bot');
   const messages = await api('GET', `/dev/messages?phone=2348077770001&bot=${shop.botNumber}`, { env: e });
   assert.deepEqual(messages.body.map((m: { direction: string; content: { text: string } }) => [m.direction, m.content.text]), [['in', 'hi']]);
   assert.equal((await api('POST', '/dev/clear', { env: e, body: { botNumber: shop.botNumber, phone: '2348077770001' } })).body.cleared, 1);
