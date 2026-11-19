@@ -121,7 +121,7 @@ test('status tips: on by default for live shops, once a day, never during signup
   assert.equal(await suggestStatus(db, deps, { ...b, status: 'onboarding' }, { kind: 'new', name: 'X' }, { productId: 'p' }), false, 'not during signup');
   assert.equal(await suggestStatus(db, deps, { ...b, status: 'active' }, { kind: 'restock', name: 'Black Ankle Boots' }, { productId: 'p' }), true);
   const tip = (await db.query('outbox', [['businessId', '==', fx.a.id], ['kind', '==', 'status_tip']]))[0];
-  assert.match(tip.text, /Black Ankle Boots\* is back in stock\. Make a Status\?/);
+  assert.match(String(tip.text), /Black Ankle Boots\* is back in stock\. Make a Status\?/);
   assert.equal(await suggestStatus(db, deps, (await doc('businesses', fx.a.id)) as unknown as Business, { kind: 'new', name: 'Y' }, { productId: 'p' }), false, 'once a day');
   assert.match((await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'status tips off' }))[0].text, /no more Status tips/);
   assert.equal((await doc('businesses', fx.a.id)).statusTips, false);
