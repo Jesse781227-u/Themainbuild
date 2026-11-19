@@ -21,6 +21,7 @@ import { handleCustomerChoice } from './customers';
 import { CALL, openTicket } from '../services/support';
 import { getOwner, switchShop } from '../services/owners';
 import { exitTest, runTest, startTest, TEST_EXIT, TEST_START } from './test-mode';
+import { handleSettings } from './settings';
 
 const CONFIRM_MINUTES = 10;
 
@@ -103,6 +104,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     for (const o of msg.out) await reply(o);
     return;
   }
+
+  // ── Settings: HOURS, AFTER HOURS, POLICIES, FEE ──
+  const setting = await handleSettings(db, cfg, business, text, choiceId);
+  if (setting) return reply(setting);
 
   // ── Several shops on one number: SWITCH, NEW SHOP ──
   const shops = await handleShops(ctx, business, choiceId, text, reply);

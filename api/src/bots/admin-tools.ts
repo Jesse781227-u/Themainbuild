@@ -86,6 +86,9 @@ export const HELP = [
   '• payment details GTBank 0123456789 Mama Kitchen',
   '• broadcast <message> (to customers who opted in; you see the cost first) · link (a wa.me link for your Status)',
   '• handback (let the bot answer customers again)',
+  "• hours · hours 8am–9pm · after hours · policies · fee (who pays Relay's 1%)",
+  '• test (try your shop as a customer) · switch / new shop (more than one shop or branch)',
+  '• call (a real person from Relay will help you)',
   '• connect (link your WhatsApp Business number)',
   'You can also send a voice note.',
 ].join('\n');

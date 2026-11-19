@@ -280,7 +280,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     case 'fee_local': {
       const fee = feeFrom(text);
       if (fee === null || choiceId) return c.reply(`How much is delivery within ${c.business!.area ?? 'your area'}? Send an amount, e.g. *1500*, or *0* if it's free.`);
-      await addZone(c, c.business!.area ?? 'Nearby', c.business!.area ?? '', fee);
+      await addZone(c, c.business!.area ?? 'Nearby', c.business!.area ?? '', fee, 2);
       await setOb(c, { step: 'fee_city' });
       return prompt(c);
     }
@@ -288,7 +288,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (choiceId === 'fc:no' || (!choiceId && SKIP.test(text.trim()))) { await setOb(c, { step: 'interstate' }); return prompt(c); }
       const fee = feeFrom(text);
       if (fee === null || choiceId) return prompt(c);
-      await addZone(c, c.business!.city ?? 'City', c.business!.city ?? '', fee);
+      await addZone(c, c.business!.city ?? 'City', c.business!.city ?? '', fee, 1);
       await setOb(c, { step: 'interstate' });
       return prompt(c);
     }
@@ -306,7 +306,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       const fee = feeFrom(text);
       if (fee === null || choiceId) return prompt(c);
       // An empty match covers any address; more specific zones (area, city) are tried first.
-      await addZone(c, 'Other states', '', fee);
+      await addZone(c, 'Other states', '', fee, 0);
       return toPolicies(c);
     }
     case 'policies': {
@@ -470,8 +470,8 @@ const feeFrom = (text: string) => {
   return k !== null && k >= 0 && k <= 100_000_000 ? k : null;
 };
 
-async function addZone(c: Ctx, name: string, match: string, feeKobo: number) {
-  await saveZone(c.ctx.db, { id: `${c.business!.id}_${randomId(6).replace(/[^A-Za-z0-9]/g, 'x')}`, businessId: c.business!.id, name: name.slice(0, 60), match: match.slice(0, 60), feeKobo, timeframe: '', active: true });
+async function addZone(c: Ctx, name: string, match: string, feeKobo: number, priority: number) {
+  await saveZone(c.ctx.db, { id: `${c.business!.id}_${randomId(6).replace(/[^A-Za-z0-9]/g, 'x')}`, businessId: c.business!.id, name: name.slice(0, 60), match: match.slice(0, 60), feeKobo, timeframe: '', active: true, priority });
 }
 
 async function toPolicies(c: Ctx) { await setOb(c, { step: 'policies' }); return prompt(c); }

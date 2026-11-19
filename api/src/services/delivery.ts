@@ -6,7 +6,11 @@ import type { Order, OrderDelivery } from '../domain/commerce';
 const iso = () => new Date().toISOString();
 
 export type DeliveryMethod = OrderDelivery['method'];
-export interface DeliveryZone { id: string; businessId: string; name: string; match: string; feeKobo: number; timeframe: string; active: boolean }
+// priority: which zone wins when an address matches several (signup sets area 2, city 1, other states 0).
+export interface DeliveryZone { id: string; businessId: string; name: string; match: string; feeKobo: number; timeframe: string; active: boolean; priority?: number }
+
+// Most specific first: higher priority, then the longer match; an empty match (any address) comes last.
+export const byPriority = (a: DeliveryZone, b: DeliveryZone) => (b.match ? 1 : 0) - (a.match ? 1 : 0) || (b.priority ?? 1) - (a.priority ?? 1) || b.match.length - a.match.length;
 export interface DeliveryBatch { id: string; businessId: string; zoneId: string; name: string; cutoffAt: string; dispatchAt: string; status: 'open' | 'closed' | 'dispatched' | 'complete'; createdAt: string }
 
 export async function listZones(db: Firestore, businessId: string) {
@@ -17,7 +21,8 @@ export async function saveZone(db: Firestore, zone: DeliveryZone) { await db.set
 
 export async function quoteDelivery(db: Firestore, businessId: string, location: string, method: DeliveryMethod): Promise<OrderDelivery | null> {
   if (method === 'pickup') return { method, feeKobo: 0, timeframe: 'Ready for pickup' };
-  const zone = (await listZones(db, businessId)).find(z => location.toLowerCase().includes(z.match.toLowerCase()));
+  const zones = (await listZones(db, businessId)).sort(byPriority);
+  const zone = zones.find(z => location.toLowerCase().includes(z.match.toLowerCase()));
   return zone ? { method, feeKobo: zone.feeKobo, zoneId: zone.id, timeframe: zone.timeframe, address: location } : null;
 }
 

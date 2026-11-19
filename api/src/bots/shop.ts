@@ -16,7 +16,9 @@ import { categoryCarousel, productCarousel, productDetails, suggestionMessage } 
 import { suggestFor } from '../services/suggestions';
 import { renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
-import { listZones, quoteDelivery } from '../services/delivery';
+import { byPriority, listZones, quoteDelivery } from '../services/delivery';
+import { describeHours, openNow } from '../services/hours';
+import { policyText, POLICY_QUESTION } from '../services/policies';
 import { checkout, customerFee, policyFor, recentOrders } from '../services/orders';
 import { testOrder, testPaid } from './test-mode';
 import { paymentInstructions } from '../services/bachs';
@@ -38,6 +40,7 @@ const SHOP_TOOLS: ToolSpec[] = [
   { name: 'viewCart', description: 'Show the cart.', params: {} },
   { name: 'checkout', description: 'Customer wants to pay / place the order.', params: {} },
   { name: 'orderStatus', description: 'Customer asks about an order they placed.', params: {} },
+  { name: 'shopInfo', description: 'Customer asks about opening hours, where the shop is, delivery areas, or the return/refund/exchange policy.', params: { topic: { type: 'string', description: 'What they ask about', enum: ['hours', 'location', 'delivery', 'policy'] } }, required: ['topic'] },
   { name: 'talkToHuman', description: 'Customer asks for a person, the owner, or has a complaint the bot cannot handle.', params: {} },
   { name: 'offTopic', description: 'Anything not about shopping at this business.', params: {} },
 ];
@@ -120,7 +123,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'clear') { await db.delete(db.doc(C.carts, conversationId)); return reply(buttons('Cart cleared.', [['menu', 'See the menu']]), { step: 'browse' }); }
     if (kind === 'checkout') return startCheckout(ctx, business, reply);
     if (kind === 'deliver') return reply('Please send your delivery address (area and street).', { step: 'await_address' });
-    if (kind === 'pickup') return confirmOrder(ctx, business, { method: 'pickup', feeKobo: 0, timeframe: 'Ready for pickup' }, reply);
+    if (kind === 'pickup') return confirmOrder(ctx, business, pickup(business), reply);
     if (kind === 'confirm' && state.step === 'confirm') return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
     if (kind === 'testpay' && ctx.test) return testPaid(ctx, business, id, reply);
     if (kind === 'delete_no') return reply('OK, nothing was deleted.', { step: 'browse' });
@@ -128,7 +131,8 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
 
   if (state.step === 'await_address' && text.length >= 3 && !/^(menu|cancel|cart)$/.test(lower)) {
     const quote = await quoteDelivery(db, businessId, text, 'self_arranged');
-    if (!quote) return reply(buttons(`Sorry, ${business.name} doesn't deliver to "${text.slice(0, 60)}" yet.`, [['pickup', 'Pickup instead'], ['menu', 'Back to menu']]), { step: 'browse' });
+    if (!quote && business.shipsInterstate && business.interstatePricing === 'quote') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: 0, address: text.slice(0, 200), timeframe: `delivery price to be confirmed by ${business.name}` }, reply);
+    if (!quote) return reply(buttons(`Sorry, ${business.name} doesn't deliver to "${text.slice(0, 60)}" yet.`, [...(business.fulfilment !== 'delivery' ? [['pickup', 'Pickup instead'] as [string, string]] : []), ['menu', 'Back to menu']]), { step: 'browse' });
     return confirmOrder(ctx, business, quote, reply);
   }
   if (state.step === 'confirm' && YES.test(lower)) return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
@@ -140,6 +144,11 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     case 'viewCart': return showCart(ctx, business, reply);
     case 'checkout': return startCheckout(ctx, business, reply);
     case 'orderStatus': return orderStatus(db, conversationId, reply);
+    case 'shopInfo': {
+      const info = await shopInfo(db, business, String(intent.args.topic ?? ''));
+      if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'View cart']]));
+      return handOver(ctx, deps, business, customer, reply);
+    }
     case 'talkToHuman': return handOver(ctx, deps, business, customer, reply);
     case 'offTopic': return reply(buttons(`I'm ${business.name}'s shop assistant, so I can only help with our products and your orders.`, [['menu', 'See the menu'], ['cart', 'View cart']]));
     case 'addToCart': {
@@ -162,6 +171,10 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   if (/^(cart|my cart|view cart|basket)$/.test(lower)) return { tool: 'viewCart', args: {} };
   if (/^(checkout|check out|pay|place order|order now)$/.test(lower)) return { tool: 'checkout', args: {} };
   if (/\b(where is my order|order status|my order|track)\b/.test(lower)) return { tool: 'orderStatus', args: {} };
+  if (POLICY_QUESTION.test(lower)) return { tool: 'shopInfo', args: { topic: 'policy' } };
+  if (/\b(what time|opening hours|are you open|open today|open now|when do you (open|close)|closing time|close today)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'hours' } };
+  if (/\b(where are you|where is (the )?(shop|store)|your (address|location)|located)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'location' } };
+  if (/\b(do you deliver|delivery (fee|price|cost)|how much (is|for) delivery)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'delivery' } };
   // "2 jollof rice" / "jollof rice x2" / "jollof rice"
   const m = /^(\d{1,2})\s*x?\s+(.+)$/.exec(lower) ?? /^(.+?)\s*x\s*(\d{1,2})$/.exec(lower);
   const [q, n] = m ? (/^\d/.test(m[1]) ? [m[2], Number(m[1])] : [m[1], Number(m[2])]) : [lower, 1];
@@ -182,7 +195,9 @@ async function greet(ctx: ShopContext, business: Business, customer: Customer | 
   const name = customer?.name?.split(' ')[0];
   // New customers get the shop's own welcome message (set during signup, MESSAGES to change).
   // Back to the menu mid-chat: no second welcome.
-  const hello = opts.again ? 'Here is everything we have.' : (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
+  let hello = opts.again ? 'Here is everything we have.' : (customer?.orderCount ?? 0) > 0 ? `Welcome back${name ? `, ${name}` : ''}! 👋` : renderMessage(business, 'welcome', { customer: name });
+  const closed = closedNote(business);
+  if (closed) hello = `${hello}\n\n${closed}`;
   const products = await visible(ctx.db, business.id);
   if (!products.length) return reply(`${hello} We're updating our menu right now. Please check back soon.`, { step: 'browse' });
   const cats = (await listCategories(ctx.db, business.id)).filter(c => products.some(p => p.categoryId === c.id));
@@ -276,8 +291,12 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
 async function startCheckout(ctx: ShopContext, business: Business, reply: Reply) {
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]));
+  const open = openNow(business.hours);
+  if (!open.open && business.afterHours === 'menu') return reply(buttons(`Sorry, we're closed right now${open.next ? ` and open again at ${open.next}` : ''}. Your cart is saved, so you can check out then.`, [['menu', 'See the menu']]));
+  if (business.fulfilment === 'pickup') return confirmOrder(ctx, business, pickup(business), reply);
+  if (business.fulfilment === 'delivery') return reply('Please send your delivery address (area and street).', { step: 'await_address' });
   const zones = await listZones(ctx.db, business.id);
-  if (!zones.length) return confirmOrder(ctx, business, { method: 'pickup', feeKobo: 0, timeframe: 'Ready for pickup' }, reply);
+  if (!zones.length && !business.shipsInterstate) return confirmOrder(ctx, business, pickup(business), reply);
   return reply(buttons('Delivery or pickup?', [['deliver', 'Delivery'], ['pickup', 'Pickup']]), { step: 'browse' });
 }
 
@@ -290,7 +309,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
   const body = [
     'Please confirm your order:', text,
     `Subtotal: ${formatKobo(subtotal)}`,
-    delivery.method === 'pickup' ? 'Pickup: free' : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
+    delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}` : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     `Total: about ${formatKobo(subtotal + delivery.feeKobo + fee)} (the exact amount comes next)`,
   ].join('\n');
@@ -336,4 +355,34 @@ async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, cus
   const who = customer?.name ? `${customer.name} (${where})` : ctx.event.source === 'whatsapp' ? ctx.event.from : 'An Instagram customer';
   log('info', 'handover_requested', { businessId: business.id, from: ctx.event.source === 'whatsapp' ? maskPhone(ctx.event.from) : 'instagram' });
   await notifyOwner(ctx.db, deps, business, 'handover', `${who} wants to talk to you. Reply to them in your WhatsApp Business app${ctx.event.source === 'instagram' ? ' or Instagram' : ''}. The bot stays quiet in that chat until you send HANDBACK here.`);
+}
+
+// Pickup, with the shop's preparation time when it has one (food).
+const pickup = (business: Business): OrderDelivery => ({ method: 'pickup', feeKobo: 0, timeframe: business.prepTime ? `Ready for pickup in about ${business.prepTime}` : 'Ready for pickup' });
+
+// When the shop is closed: what the greeting says (null when open or no hours are set).
+function closedNote(business: Business, now = new Date()) {
+  const open = openNow(business.hours, now);
+  if (open.open) return null;
+  const back = open.next ? ` We open again at ${open.next}.` : '';
+  return business.afterHours === 'menu' ? `🌙 We're closed right now.${back} Have a look at the menu meanwhile.` : `🌙 We're closed right now.${back} You can still order, and we'll get it ready when we open.`;
+}
+
+// Answers from the shop's own settings; null when there's nothing to say (a person answers instead).
+async function shopInfo(db: Firestore, business: Business, topic: string): Promise<string | null> {
+  if (topic === 'policy') { const p = policyText(business.policies); return p ? `Our policy at ${business.name}:\n${p}` : null; }
+  if (topic === 'hours') {
+    if (!business.hours) return `You can order from ${business.name} here any time.`;
+    const open = openNow(business.hours);
+    return `Our opening hours: ${describeHours(business.hours)}.${open.open ? " We're open now." : ` We're closed right now${open.next ? ` and open again at ${open.next}` : ''}.`}`;
+  }
+  if (topic === 'location') { const where = [business.area, business.city].filter(Boolean).join(', '); return where ? `${business.name} is in ${where}.` : null; }
+  if (topic === 'delivery') {
+    const zones = await listZones(db, business.id);
+    if (business.fulfilment === 'pickup' || (!zones.length && !business.shipsInterstate)) return `${business.name} does pickup only for now.`;
+    const lines = zones.sort(byPriority).map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}`);
+    if (business.shipsInterstate && business.interstatePricing === 'quote') lines.push('• Other states: price confirmed per order');
+    return `Delivery from ${business.name}:\n${lines.join('\n')}${business.fulfilment === 'both' ? '\nPickup is free.' : ''}`;
+  }
+  return null;
 }
