@@ -119,6 +119,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 .menu { position: absolute; top: 52px; right: 8px; background: var(--menu); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2); padding: 6px 0; z-index: 7; display: none; min-width: 230px; }
 .menu.open { display: block; }
 .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--ink); font: inherit; padding: 12px 20px; cursor: pointer; }
+.menu label.name { display: block; padding: 10px 20px; color: var(--meta); font-size: 13px; border-bottom: 1px solid var(--sep); }
+.menu label.name input { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--sep); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; box-sizing: border-box; }
 .menu .info { padding: 8px 20px 10px; color: var(--meta); font-size: 13px; border-bottom: 1px solid var(--sep); margin-bottom: 4px; }
 </style>
 </head>
@@ -134,6 +136,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   </header>
   <div class="menu" id="menu">
     <div class="info" id="me"></div>
+    <label class="name">Your WhatsApp profile name<input id="pname" maxlength="40" placeholder="e.g. your first name" autocomplete="off"></label>
     <button id="clear">Clear chat</button>
     <button id="fresh">${cfg.role === 'owner' ? 'Start as a new business owner' : 'Start as a new customer'}</button>
   </div>
@@ -166,6 +169,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 
   function read(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
   function store(v) { try { localStorage.setItem(KEY, v); } catch (e) { /* private mode: this tab only */ } }
+  var NAME_KEY = 'relay.chat.' + CFG.role + '.name';
+  function profile() { var v = read(NAME_KEY); return v ? v : undefined; }
   function newPhone() { var n = '23480'; for (var i = 0; i < 8; i++) n += Math.floor(Math.random() * 10); return n; }
   // The owner tab is always a new business owner until signup is done; the customer tab is a customer.
   var phone = read(KEY) || (CFG.role === 'owner' ? newPhone() : CFG.defaultPhone);
@@ -340,7 +345,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 
   function send(text, choice) {
     if ((!choice && !text) || !bot) return;
-    fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: bot, phone: phone, text: text, choice: choice }) })
+    fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: bot, phone: phone, text: text, choice: choice, name: profile() }) })
       .then(function () { poll(); })
       .catch(function () { alertNote('Could not reach the local server. Is npm run dev running?'); });
     typing(true);
@@ -384,7 +389,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       var data = String(reader.result).split(',')[1] || '';
       var caption = $('text').value.trim();
       $('text').value = ''; fab(); typing(true);
-      post('/dev/upload', { botNumber: bot, phone: phone, filename: file.name, mimeType: file.type || 'application/octet-stream', data: data, caption: caption })
+      post('/dev/upload', { botNumber: bot, phone: phone, name: profile(), filename: file.name, mimeType: file.type || 'application/octet-stream', data: data, caption: caption })
         .then(function (res) { if (!res.success) alertNote('Upload failed: ' + ((res.error && res.error.message) || res.status)); poll(); })
         .catch(function () { alertNote('Could not reach the local server.'); });
     };
@@ -403,6 +408,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   $('menuBtn').onclick = function (e) { e.stopPropagation(); $('menu').classList.toggle('open'); };
   document.addEventListener('click', function (e) { if (!$('menu').contains(e.target)) $('menu').classList.remove('open'); });
   $('clear').onclick = function () { $('menu').classList.remove('open'); if (!bot) return; post('/dev/clear', { botNumber: bot, phone: phone }).then(function () { state.count = -1; render([]); poll(); }); };
+  $('pname').value = read(NAME_KEY) || '';
+  $('pname').onchange = function () { try { localStorage.setItem(NAME_KEY, $('pname').value.trim()); } catch (e) { /* private mode */ } };
   $('fresh').onclick = function () { $('menu').classList.remove('open'); switchTo(newPhone()); };
 
   render([]);

@@ -32,7 +32,7 @@ export const isDevChat = (cfg: Pick<Config, 'RELAY_ENV' | 'META_SEND_MODE'>) => 
 
 type Upload = { mediaId: string; kind: 'image' | 'document'; mimeType: string; filename: string; caption: string };
 
-function payload(o: { botNumber: string; from: string; text: string; choice?: Choice; upload?: Upload }) {
+function payload(o: { botNumber: string; from: string; text: string; choice?: Choice; upload?: Upload; name?: string }) {
   const id = `wamid.dev.${crypto.randomUUID()}`;
   const timestamp = String(Math.floor(Date.now() / 1000));
   const u = o.upload;
@@ -43,9 +43,11 @@ function payload(o: { botNumber: string; from: string; text: string; choice?: Ch
     : o.choice
     ? { from: o.from, id, timestamp, type: 'interactive', interactive: o.choice.kind === 'list' ? { type: 'list_reply', list_reply: { id: o.choice.id, title: o.choice.title } } : { type: 'button_reply', button_reply: { id: o.choice.id, title: o.choice.title } } }
     : { from: o.from, id, timestamp, type: 'text', text: { body: o.text } };
-  return { object: 'whatsapp_business_account', entry: [{ id: 'waba-dev', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15550000000', phone_number_id: o.botNumber }, contacts: [{ wa_id: o.from, profile: { name: 'Ada' } }], messages: [message] } }] }] };
+  return { object: 'whatsapp_business_account', entry: [{ id: 'waba-dev', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15550000000', phone_number_id: o.botNumber }, contacts: [{ wa_id: o.from, profile: { name: o.name ?? '' } }], messages: [message] } }] }] };
 }
 
+// The profile name typed in the chat screen's menu (none by default: no made-up people).
+const profileName = (s: unknown) => (typeof s === 'string' && s.trim() ? s.trim().slice(0, 40) : undefined);
 const digits = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 
 export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: ExecutionContext) => Response | Promise<Response> }) {
@@ -98,7 +100,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
   // A message typed on a chat screen: record it, then deliver it exactly as Meta would.
   r.post('/send', async c => {
     const cfg = getConfig(c.env);
-    const body = await c.req.json<{ botNumber: string; phone: string; text?: string; choice?: Choice }>();
+    const body = await c.req.json<{ botNumber: string; phone: string; text?: string; choice?: Choice; name?: string }>();
     const from = digits(body.phone);
     if (!body.botNumber || from.length < 8) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'botNumber and phone are required.' } }, 400);
     const text = String(body.choice?.title ?? body.text ?? '').slice(0, 4000);
@@ -106,7 +108,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     const db = getDb(c.env);
     const at = new Date().toISOString();
     await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: 'text', text }, at });
-    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text, choice: body.choice }));
+    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text, choice: body.choice, name: profileName(body.name) }));
     const req = new Request(new URL('/api/v1/webhooks/meta', c.req.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${hmacSha256Hex(cfg.META_APP_SECRET ?? '', raw)}` }, body: raw });
     let ctx: ExecutionContext | undefined;
     try { ctx = c.executionCtx; } catch { ctx = undefined; }
@@ -118,7 +120,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
   // delivered as a WhatsApp image or document message with that media id.
   r.post('/upload', async c => {
     const cfg = getConfig(c.env);
-    const body = await c.req.json<{ botNumber: string; phone: string; filename?: string; mimeType?: string; data?: string; caption?: string }>();
+    const body = await c.req.json<{ botNumber: string; phone: string; filename?: string; mimeType?: string; data?: string; caption?: string; name?: string }>();
     const from = digits(body.phone);
     const mimeType = String(body.mimeType ?? 'application/octet-stream').slice(0, 100);
     const bytes = body.data ? Buffer.from(body.data, 'base64') : null;
@@ -131,7 +133,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     const db = getDb(c.env);
     const at = new Date().toISOString();
     await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: upload.kind === 'image' ? 'image' : 'document', link: `/dev/media/${mediaId}`, filename: upload.filename, caption: upload.caption }, at });
-    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text: '', upload }));
+    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text: '', upload, name: profileName(body.name) }));
     const req = new Request(new URL('/api/v1/webhooks/meta', c.req.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${hmacSha256Hex(cfg.META_APP_SECRET ?? '', raw)}` }, body: raw });
     let ctx: ExecutionContext | undefined;
     try { ctx = c.executionCtx; } catch { ctx = undefined; }

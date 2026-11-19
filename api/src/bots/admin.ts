@@ -11,7 +11,7 @@ import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, moveCategoryProducts } from '../services/catalog';
 import { HELP, prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
-import { buttons, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
+import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
 import { firstOnboarding, handleOnboarding, normalise } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
@@ -19,6 +19,7 @@ import { handleImport } from './catalog-import';
 import { handleMessageInput } from './messages-flow';
 import { handleCustomerChoice } from './customers';
 import { CALL, openTicket } from '../services/support';
+import { getOwner, switchShop } from '../services/owners';
 
 const CONFIRM_MINUTES = 10;
 
@@ -59,8 +60,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
 
   // ── Onboarding ──
   if (!business || ob) {
+    // The shop being set up isn't always the active one (NEW SHOP, before its name is given).
+    if (ob?.businessId && ob.businessId !== business?.id) business = (await db.get(db.doc(C.businesses, ob.businessId))) as Business | null;
+    else if (ob?.adding && !ob.businessId) business = null;
     if (business?.status === 'deleted') return;
-    return handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo, input);
+    const res = await handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo, input);
+    if (res !== 'pass' || !business) return;
   }
   business = business!;
   if (business.status === 'deleted') return;
@@ -86,6 +91,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     for (const o of msg.out) await reply(o);
     return;
   }
+
+  // ── Several shops on one number: SWITCH, NEW SHOP ──
+  const shops = await handleShops(ctx, business, choiceId, text, reply);
+  if (shops) return;
 
   // ── Taps on the customer list (CUSTOMERS) ──
   const custOut = await handleCustomerChoice(db, business, choiceId ?? null);
@@ -151,4 +160,41 @@ async function storeImage(ctx: AdminContext, deps: BotDeps, business: Business, 
 
 async function makeToolCtx(ctx: AdminContext, deps: BotDeps, business: Business, imageUrl: string | null): Promise<ToolCtx> {
   return { db: ctx.db, cfg: ctx.cfg, deps, business, ownerPhone: ctx.ownerPhone, imageUrl };
+}
+
+// SWITCH lists the owner's shops; NEW SHOP starts signup for another shop or branch (its own number,
+// products and wallet). Returns true when it handled the message.
+async function handleShops(ctx: AdminContext, business: Business, choiceId: string | null, text: string, reply: (c: OutboundContent | string) => Promise<unknown>) {
+  const { db } = ctx;
+  const t = text.trim().toLowerCase();
+  if (choiceId?.startsWith('shop:')) {
+    const id = choiceId.slice(5);
+    if (!(await switchShop(db, ctx.ownerPhone, id))) { await reply("That shop isn't on this number."); return true; }
+    const next = (await db.get(db.doc(C.businesses, id))) as Business | null;
+    await db.set(db.doc(C.conversations, ctx.conversationId), { businessId: id, productDraft: null, awaiting: null, editingProductId: null, importDraft: null, pendingAction: null }, { merge: true });
+    await reply(`Now managing *${next?.name ?? 'that shop'}* ✅ Everything you send now is for this shop. Send SWITCH to change again.`);
+    return true;
+  }
+  if (/^(switch|switch shops?|my shops|shops|branches|my branches)$/.test(t)) {
+    const owner = await getOwner(db, ctx.ownerPhone);
+    const all = ((await db.getAll((owner?.businessIds ?? [business.id]).map(id => db.doc(C.businesses, id)))) as (Business | null)[]).filter((b): b is Business => !!b && b.status !== 'deleted');
+    if (all.length < 2) {
+      await reply(buttons(`You have one shop on this number: *${business.name}*. Want to add another shop or branch?`, [['newshop:yes', 'Add a shop'], ['newshop:no', 'No thanks']]));
+      return true;
+    }
+    await reply(list(`You're managing *${business.name}*. Which shop do you want to manage?`, 'Choose shop', all.slice(0, 10).map(b => ({ id: `shop:${b.id}`, title: b.name, description: [b.area, b.status === 'active' ? 'live' : 'setting up'].filter(Boolean).join(' · ') })), 'Your shops'));
+    return true;
+  }
+  if (/^(new shop|add (a |another )?shop|new branch|add (a |another )?branch|another shop|open (a |another )?(shop|branch))$/.test(t)) {
+    await reply(buttons('Add another shop or branch? It gets its own WhatsApp number, products and wallet, and you manage it from this chat (send SWITCH to move between shops).', [['newshop:yes', 'Yes, add one'], ['newshop:no', 'Cancel']]));
+    return true;
+  }
+  if (choiceId === 'newshop:no') { await reply('OK.'); return true; }
+  if (choiceId === 'newshop:yes') {
+    const ob = firstOnboarding({ adding: true });
+    await db.set(db.doc(C.conversations, ctx.conversationId), { onboarding: { ...ob, lastSeenAt: new Date().toISOString() }, productDraft: null, awaiting: null, editingProductId: null, importDraft: null }, { merge: true });
+    await reply("*Step 1 of 6* · What's the new shop or branch called?");
+    return true;
+  }
+  return false;
 }

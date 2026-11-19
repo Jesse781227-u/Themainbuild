@@ -25,6 +25,21 @@ export interface Business {
   feeBps?: number | null;             // per-business override of Relay's fee rate
   holdMinutes?: number | null;        // per-business override of the unpaid-order stock hold
   bachsAccountId?: string | null;     // the merchant's Bachs account (payments are split at source)
+  // Signup (onboarding v2).
+  termsAcceptedAt?: string | null; termsVersion?: string | null;
+  businessTypeInferred?: boolean;     // category guessed from the products, not chosen
+  hours?: import('../services/hours').Hours | null; // Africa/Lagos; null = open any time
+  afterHours?: 'orders' | 'menu';     // when closed: take orders for later (default) or menu only
+  prepTime?: string | null;           // food: how long an order takes, e.g. "30–60 min"
+  fulfilment?: 'pickup' | 'delivery' | 'both' | null;
+  shipsInterstate?: boolean; interstatePricing?: 'flat' | 'quote' | null;
+  policies?: import('../services/policies').Policies | null;
+  feePayer?: 'customer' | 'owner';    // who pays Relay's 1% (capped); the customer unless the owner chose to
+  acquisitionSource?: string | null;  // "How did you hear about Relay?"
+  importContacts?: boolean | null;    // owner agreed to add the number's synced contacts to CUSTOMERS
+  whatsappDisplayNumber?: string | null;
+  messagesEdited?: boolean;           // owner changed a drafted customer message (day-2 nudge)
+  firstSaleAt?: string | null; nudgedAt?: string | null;
   createdAt: string; updatedAt: string;
 }
 

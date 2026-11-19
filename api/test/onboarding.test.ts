@@ -1,4 +1,5 @@
-import { Bot, clearFirestore, db, doc, passBranding, seed } from './helpers';
+import { Bot, clearFirestore, db, doc, seed, signUp } from './helpers';
+import { normalise, profileName } from '../src/bots/onboarding';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseProduct, stripVariantWords } from '../src/bots/products-flow';
@@ -38,107 +39,215 @@ test('category guess: own name first, related words second, ambiguity asks', () 
   assert.equal(ruleGuess('Mystery box', cats), null);
 });
 
-test('onboarding: basics → categories → products → connect, by chat', async () => {
+const MENU = `MEALS
+Jollof rice & chicken 3500
+Fried rice & turkey 4000
+SNACKS
+Puff puff 500
+Meat pie 800
+DRINKS
+Zobo 700
+Chapman 1500`;
+
+test('onboarding v2: hi → shop name → menu → preview → location → hours → delivery → policies → ready → connect link', async () => {
   const bot = new Bot();
-  assert.match((await bot.send('admin', { from: OWNER, text: 'Hi' }))[0].text, /about 10 minutes[\s\S]*what's your name/);
-  assert.match((await bot.send('admin', { from: OWNER, text: 'Ada Obi' }))[0].text, /Nice to meet you, Ada! What's your business called/);
-  assert.match((await bot.send('admin', { from: OWNER, text: 'add Jollof rice, 2500, 10' }))[0].text, /looks like a product or a command/);
-  const type = await bot.send('admin', { from: OWNER, text: 'Ada Kicks' });
-  assert.match(type[0].text, /What kind of business is Ada Kicks/);
-  assert.ok(opts(type).includes('btype:fashion_retail') && opts(type).includes('btype:electronics') && opts(type).includes('btype:photography_events'));
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'btype:fashion_retail', text: 'Fashion' }))[0].text, /Which city and area/);
-  assert.match((await bot.send('admin', { from: OWNER, text: 'Lagos' }))[0].text, /which area in Lagos/i);
-  const photo = await bot.send('admin', { from: OWNER, text: 'Yaba' });
-  assert.match(photo[0].text, /profile picture for Ada Kicks\. Send your logo/);
-  assert.deepEqual(opts(photo), ['photo:skip']);
+  const say = (text: string, choice?: string) => bot.send('admin', { from: OWNER, text, choice, name: 'Ada Obi 🌸' });
+  const hi = await say('Hi');
+  assert.match(hi[0].text, /^Welcome to Relay, Ada 👋[\s\S]*about 5 minutes[\s\S]*agree to Relay's Terms: https?:\/\/\S+\/terms\nStuck\? Reply \*CALL\* anytime[\s\S]*\*Step 1 of 6\* · What's your shop called\?$/);
+  assert.match((await say('add Jollof rice, 2500, 10'))[0].text, /looks like a product/);
 
+  const products = await say("Mama Ada's Kitchen");
+  assert.match(products[0].text, /^\*Step 2 of 6\* · Send your menu, price list or product photos/);
   const owner = await doc('ownerPhones', `+${OWNER}`);
-  const biz = await doc('businesses', owner.businessId);
-  assert.deepEqual([biz.name, biz.category, biz.ownerName, biz.city, biz.area, biz.status], ['Ada Kicks', 'fashion_retail', 'Ada Obi', 'Lagos', 'Yaba', 'onboarding']);
-  assert.equal(owner.onboardingStage, 'branding');
+  const bizId = owner.activeBusinessId;
+  let biz = await doc('businesses', bizId);
+  assert.deepEqual([biz.name, biz.ownerName, biz.status, biz.termsVersion, biz.feePayer], ["Mama Ada's Kitchen", 'Ada Obi', 'onboarding', '2026-11-19', 'customer'], 'owner name from the WhatsApp profile, not asked');
+  assert.ok(biz.termsAcceptedAt);
+  assert.deepEqual(owner.businessIds, [bizId]);
 
-  // Branding: drafted messages (the defaults here, no AI), reviewed one by one.
-  const welcome = await bot.send('admin', { from: OWNER, choice: 'photo:skip', text: 'Skip for now' });
-  assert.match(welcome[0].text, /messages your customers get/);
-  assert.match(welcome[1].text, /\*Welcome message\* \(sent when a new customer says hi\):\n\nHi \{customer\}, welcome to \{shop\} 👋\n\nHow a customer sees it:\nHi Ada, welcome to Ada Kicks 👋/);
-  assert.deepEqual(opts([welcome[1]]), ['msgok:welcome', 'msgedit:welcome', 'msgnew:welcome']);
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'msgedit:welcome', text: 'Edit' }))[0].text, /Type your welcome message\. You can use \{customer\}, \{shop\}/);
-  const mine = await bot.send('admin', { from: OWNER, text: 'Hey {customer}! Welcome to {shop}, home of clean kicks {oops}' });
-  assert.match(mine[0].text, /Saved ✅[\s\S]*Hey Ada! Welcome to Ada Kicks, home of clean kicks$/m, 'unknown blanks are dropped');
-  const thanks = await bot.send('admin', { from: OWNER, choice: 'msgok:welcome', text: 'Use this' });
-  assert.match(thanks[0].text, /\*Payment thank-you message\*[\s\S]*Payment received for order RLY-7KQ2M: ₦12,500\. Thank you, Ada!/);
-  const cats = await bot.send('admin', { from: OWNER, choice: 'msgok:paymentThanks', text: 'Use this' });
-  assert.match(cats[0].text, /also written messages for when an order is ready, out for delivery and delivered/);
-  assert.match(cats[1].text, /Clothing · Shoes · Bags · Accessories/);
-  assert.deepEqual(opts([cats[1]]), ['cat:use', 'cat:own']);
-  const saved = (await doc('businesses', owner.businessId)).messages;
-  assert.equal(saved.welcome, 'Hey {customer}! Welcome to {shop}, home of clean kicks');
-  assert.ok(saved.orderReady && saved.outForDelivery && saved.delivered, 'all five are saved');
-  assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'categories');
+  const summary = await say(MENU);
+  assert.match(summary[0].text, /I found \*6 products\* in 3 categories/);
+  const added = await say('Add all 6', 'imp:all');
+  assert.match(added[0].text, /Added 6 products in 3 categories/);
+  assert.match(added[1].text, /^✅ 6 products in 3 categories: Meals · Snacks · Drinks\. Here's what your customers will see 👇$/);
+  assert.equal((added[2].content as any).interactive.type, 'carousel', 'the real carousel');
+  assert.match(added[2].text, /Hi, welcome to Mama Ada's Kitchen 👋/);
+  assert.deepEqual(added[3].options, ['ok:yes', 'ok:fix', 'prod:more']);
+  biz = await doc('businesses', bizId);
+  assert.deepEqual([biz.category, biz.businessTypeInferred], ['food_beverage', true], 'the menu tells us it is food: no type question');
+  assert.ok(biz.messages?.welcome && biz.messages?.paymentThanks, 'customer messages drafted quietly');
 
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'cat:use', text: 'Use these' }))[0].text, /Created ✅ Clothing · Shoes · Bags · Accessories/);
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'cat:edit', text: 'Edit' }))[0].text, /separated by commas/);
-  const typed = await bot.send('admin', { from: OWNER, text: 'sneakers, slides and bags' });
-  assert.match(typed[0].text, /Created ✅ Sneakers · Slides · Bags/);
-  assert.deepEqual((await listCategories(db, biz.id)).map(c => c.name), ['Sneakers', 'Slides', 'Bags'], 'the starter list was replaced');
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'cat:ok', text: 'Looks good' }))[0].text, /send a \*photo\*/i);
-  assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'products');
+  assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product again with the new price/);
+  assert.match((await say('Zobo 800'))[0].text, /Updated Zobo: price ₦700 → ₦800/);
+  const photos = await say('Looks right', 'ok:yes');
+  assert.match(photos[0].text, /6 products have no photo yet[\s\S]*up to 5/);
+  assert.deepEqual(photos[0].options, ['ph:skip']);
 
-  // 1: clear category, stock counted.
-  const bag = await bot.send('admin', { from: OWNER, text: 'Leather bag 15k 4' });
-  assert.match(bag[0].text, /\*Leather bag\*\n₦15,000 · Bags\nStock: 4 in stock/);
-  assert.ok(opts(bag)[0].startsWith('pok:') && opts(bag)[1].startsWith('pedit:'));
-  // 2: ambiguous, so the owner picks; no stock given, so it isn't tracked.
-  const ask = await bot.send('admin', { from: OWNER, text: 'Black AF1 25k sizes 40-44' });
-  assert.match(ask[0].text, /Which category is \*Black AF1\* in\?/);
-  assert.ok(opts(ask).includes('pcat:new'));
-  const sneakers = (await listCategories(db, biz.id)).find(c => c.name === 'Sneakers')!;
-  assert.match((await bot.send('admin', { from: OWNER, choice: `pcat:${sneakers.id}`, text: 'Sneakers' }))[0].text, /\*Black AF1\*\n₦25,000 · Sneakers\nStock: not tracked/);
-  // 3: a brand-new category, then the preview of what customers see.
-  await bot.send('admin', { from: OWNER, text: 'Silver watch 40k' });
-  assert.match((await bot.send('admin', { from: OWNER, choice: 'pcat:new', text: 'New category' }))[0].text, /new category be called/);
-  const third = await bot.send('admin', { from: OWNER, text: 'watches' });
-  assert.match(third[0].text, /\*Silver watch\*\n₦40,000 · Watches/);
-  assert.match(third[1].text, /what your customers will see/);
-  assert.match(third[2].text, /Your products at Ada Kicks[\s\S]*Black AF1[\s\S]*Leather bag[\s\S]*Silver watch/);
-  assert.deepEqual(opts([third[3]]), ['prod:more', 'prod:done']);
+  assert.match((await say('Skip for now', 'ph:skip'))[0].text, /^\*Step 3 of 6\* · Where is Mama Ada's Kitchen\?/);
+  assert.match((await say('Lagos, Yaba'))[0].text, /^\*Step 4 of 6\* · What time do you open and close/);
+  const same = await say('8am - 9pm');
+  assert.match(same[0].text, /8am–9pm\. Same every day\?/);
+  assert.deepEqual(same[0].options, ['hrs:same', 'hrs:perday', 'hrs:closed']);
+  assert.match((await say('Closed some days', 'hrs:closed'))[0].text, /Which days are you closed/);
+  const prep = await say('Sunday');
+  assert.match(prep[0].text, /✅ Mon–Sat 8am–9pm · Sun closed\.\nWhen you're closed, customers can still order/);
+  assert.match(prep[1].text, /How long does an order usually take to prepare/, 'food shops get the prep-time question');
+  const delivery = await say('30–60 min', 'prep:1');
+  assert.match(delivery[0].text, /^\*Step 5 of 6\* · How do customers get their orders\?/);
+  assert.match((await say('Both', 'dl:both'))[0].text, /delivery within Yaba/);
+  assert.match((await say('1,500'))[0].text, /elsewhere in Lagos/);
+  assert.match((await say('3k'))[0].text, /other states/);
+  assert.deepEqual((await say('Yes', 'is:yes'))[0].options, ['is:flat', 'is:quote']);
+  const policies = await say('I quote per order', 'is:quote');
+  assert.match(policies[0].text, /what most food shops use:\n\n• No returns on food\./);
+  const ready = await say('Use these', 'pol:use');
+  assert.match(ready[0].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉[\s\S]*TEST/);
+  assert.deepEqual(ready[0].options, ['test:start', 'ob:connect']);
 
-  // Edit: a corrected price replaces the old one.
-  const af1 = (await db.query('products', [['businessId', '==', biz.id]])).find(p => p.name === 'Black AF1')!;
-  assert.equal(af1.stock, null);
-  assert.match((await bot.send('admin', { from: OWNER, choice: `pedit:${af1._id}`, text: 'Edit' }))[0].text, /Editing \*Black AF1\*/);
-  assert.match((await bot.send('admin', { from: OWNER, text: 'Black AF1 27k' }))[0].text, /₦27,000 · Sneakers/);
-  assert.equal((await listCategories(db, biz.id)).find(c => c.name === 'Sneakers')!.productCount, 1);
+  biz = await doc('businesses', bizId);
+  assert.deepEqual([biz.city, biz.area, biz.prepTime, biz.fulfilment, biz.shipsInterstate, biz.interstatePricing], ['Lagos', 'Yaba', '30–60 min', 'both', true, 'quote']);
+  assert.deepEqual([biz.hours.mon, biz.hours.sun], [{ open: '08:00', close: '21:00' }, null]);
+  assert.match(biz.policies.returns, /No returns on food/);
+  const zones = await db.query('deliveryZones', [['businessId', '==', bizId]]);
+  assert.deepEqual(zones.map(z => [z.match, z.feeKobo]).sort(), [['Lagos', 300_000], ['Yaba', 150_000]]);
 
-  const end = await bot.send('admin', { from: OWNER, choice: 'prod:done', text: "I'm done" });
-  assert.match(end[0].text, /Your shop is set up[\s\S]*\/connect\/[A-Za-z0-9]+/);
+  const fee = await say('Connect now', 'ob:connect');
+  assert.match(fee[0].text, /Relay's fee is \*1% of each paid order\*, at most ₦2,000/);
+  assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
+  assert.match((await say("I'll pay it", 'fee:owner'))[0].text, /WhatsApp Business/);
+  assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
+  assert.match((await say('Not sure', 'wa:unsure'))[0].text, /Switching is free and keeps your chats/);
+  assert.match((await say('Done', 'wa:done'))[0].text, /log into Facebook/);
+  assert.match((await say('No', 'fb:no'))[0].text, /create a free account/);
+  const link = await say('I have one now', 'fb:now');
+  assert.match(link[0].text, /open this link[\s\S]*\/connect\/[A-Za-z0-9]+/);
+  assert.equal((await conv(OWNER)).onboarding, null, 'the everyday Admin Bot from here');
   assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'connect');
-  assert.equal((await conv(OWNER)).onboarding, null);
-  assert.match((await bot.send('admin', { from: OWNER, text: 'products' }))[0].text, /\*Sneakers\*\n• Black AF1: ₦27,000, no stock count[\s\S]*\*Bags\*\n• Leather bag: ₦15,000, 4 in stock[\s\S]*\*Watches\*\n• Silver watch/);
+  assert.match((await say('products'))[0].text, /\*Meals\*[\s\S]*Jollof rice & chicken/);
+
+  const events = await db.query('onboardingEvents', [['ownerPhone', '==', `+${OWNER}`]]);
+  const seen = new Set(events.map(e => `${e.step}:${e.event}`));
+  for (const s of ['basics:entered', 'shop_name:completed', 'products:entered', 'preview:completed', 'location:entered', 'hours:entered', 'delivery:entered', 'connect:entered', 'connect_link:entered']) assert.ok(seen.has(s), `analytics: ${s}`);
 });
 
-test('onboarding: coming back after a break offers Continue or Start over', async () => {
+test('onboarding v2: a menu as the very first message is read straight away; the name is asked meanwhile', async () => {
+  const bot = new Bot();
+  const from = '2348035554444';
+  const first = await bot.send('admin', { from, text: 'Suya 3000\nAsun 4500\nChapman 1500', name: '' });
+  assert.match(first[0].text, /I found \*3 products\*/);
+  assert.deepEqual(first[0].options, ['imp:all', 'imp:cancel']);
+  assert.match(first[1].text, /^Welcome to Relay 👋[\s\S]*While you check that list: what's your shop called\?$/);
+  const added = await bot.send('admin', { from, choice: 'imp:all', text: 'Add all 3', name: '' });
+  assert.match(added[0].text, /Added 3 products/);
+  assert.match(added[1].text, /\*Step 1 of 6\* · Now, what's your shop called\?/);
+  assert.match((await bot.send('admin', { from, text: 'Suya Spot', name: '' }))[0].text, /what's \*your\* name\?/, 'no WhatsApp profile name: asked once');
+  const preview = await bot.send('admin', { from, text: 'Musa', name: '' });
+  assert.match(preview[0].text, /✅ 3 products/);
+  const biz = await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId);
+  assert.deepEqual([biz.name, biz.ownerName], ['Suya Spot', 'Musa']);
+  assert.ok(biz.termsAcceptedAt, 'terms accepted when they replied');
+});
+
+test('onboarding v2: unclear products ask the business type; typed products work without a menu', async () => {
+  const bot = new Bot();
+  const from = '2348035556666';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Bisi' });
+  await say('hello');
+  await say('Bisi Gifts');
+  const card = await say('Mystery box 5000');
+  assert.match(card[0].text, /\*Mystery box\*\n₦5,000 · Products/);
+  assert.deepEqual(card[1].options, ['prod:done']);
+  await say('Gift hamper 12k');
+  const preview = await say("That's all", 'prod:done');
+  assert.match(preview[0].text, /✅ 2 products\./);
+  const type = await say('Looks right', 'ok:yes');
+  assert.match(type[0].text, /What kind of business is Bisi Gifts/);
+  assert.ok(type[0].options.includes('btype:general_services'));
+  assert.match((await say('Other', 'btype:other'))[0].text, /2 products have no photo yet/);
+});
+
+test('onboarding v2: coming back after a break offers Continue or Start over; start over clears drafts', async () => {
   const bot = new Bot();
   const from = '2348035552222';
-  for (const text of ['hi', 'Bola', 'Bola Bakes']) await bot.send('admin', { from, text });
-  await bot.send('admin', { from, choice: 'btype:food_beverage', text: 'Food' });
-  await bot.send('admin', { from, text: 'Ibadan, Bodija' });
-  await passBranding(bot, from);
-  const businessId = (await doc('ownerPhones', `+${from}`)).businessId;
-  const c = await conv(from);
-  await db.set(db.doc('conversations', `admin_${from}`), { onboarding: { ...c.onboarding, lastSeenAt: new Date(Date.now() - 2 * 3600_000).toISOString() } }, { merge: true });
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Bola' });
+  await say('hi');
+  await say('Bola Bakes');
+  await say('Cupcakes 500\nBirthday cake 15000');
+  await say('Add all 2', 'imp:all');
+  await say('Looks right', 'ok:yes');
+  const businessId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
+  const stale = async () => db.set(db.doc('conversations', `admin_${from}`), { onboarding: { ...(await conv(from)).onboarding, lastSeenAt: new Date(Date.now() - 2 * 3600_000).toISOString() } }, { merge: true });
 
-  const back = await bot.send('admin', { from, text: 'hello' });
-  assert.match(back[0].text, /Welcome back, Bola\. You were on \*your categories\*\. Continue\?/);
-  assert.deepEqual(opts(back), ['ob:continue', 'ob:restart']);
-  assert.match((await bot.send('admin', { from, choice: 'ob:continue', text: 'Yes' }))[0].text, /Many Food shops start with/);
+  await stale();
+  const back = await say('hello');
+  assert.match(back[0].text, /Welcome back, Bola\. You were on \*your products\*\. Continue\?/);
+  assert.deepEqual(back[0].options, ['ob:continue', 'ob:restart']);
+  assert.match((await say('Yes', 'ob:continue'))[0].text, /no photo yet/);
+  await say('Skip', 'ph:skip');
+  await stale();
+  assert.match((await say('hi'))[0].text, /You were on \*your location\*/);
 
-  await db.set(db.doc('conversations', `admin_${from}`), { onboarding: { ...(await conv(from)).onboarding, lastSeenAt: new Date(Date.now() - 2 * 3600_000).toISOString() } }, { merge: true });
-  await bot.send('admin', { from, text: 'hello' });
-  assert.match((await bot.send('admin', { from, choice: 'ob:restart', text: 'Start over' }))[0].text, /what's your name/);
+  const restart = await say('Start over', 'ob:restart');
+  assert.match(restart[0].text, /starting again[\s\S]*What's your shop called/);
   assert.equal(await doc('ownerPhones', `+${from}`), null, 'the half-made shop is gone');
   assert.equal(await doc('businesses', businessId), null);
+  assert.equal((await db.query('products', [['businessId', '==', businessId]])).length, 0);
+  assert.match((await say('Bola Bakes 2'))[0].text, /Step 2 of 6/);
 });
+
+test('onboarding v2: old conversations map onto the new steps', () => {
+  assert.deepEqual(normalise({ step: 'owner_name' }), { stage: 'basics', step: 'shop_name', lastSeenAt: undefined });
+  assert.equal(normalise({ stage: 'categories', step: 'categories' })!.step, 'products');
+  assert.equal(normalise({ stage: 'branding', step: 'messages' })!.stage, 'products');
+  assert.equal(normalise({ stage: 'connect', step: 'connect' })!.step, 'ready');
+  assert.equal(normalise({ stage: 'hours', step: 'prep' })!.step, 'prep');
+  assert.equal(profileName('🔥🔥'), null);
+  assert.equal(profileName('Chioma 💕 Okafor'), 'Chioma Okafor');
+});
+
+test('shops: a second shop on the same number, SWITCH between them, data kept apart', async () => {
+  const bot = new Bot();
+  const from = '2348035557777';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Kunle' });
+  const { businessId: first } = await signUp(bot, from, { shop: 'Kunle Kicks', product: 'White sneakers 30k', name: 'Kunle', until: 'linked' });
+  assert.match((await say('new shop'))[0].text, /Add another shop or branch\?/);
+  assert.match((await say('Yes, add one', 'newshop:yes'))[0].text, /Step 1 of 6\* · What's the new shop or branch called/);
+  assert.match((await say('Kunle Kicks Ikeja'))[0].text, /Step 2 of 6/);
+  const owner = await doc('ownerPhones', `+${from}`);
+  const second = owner.activeBusinessId;
+  assert.notEqual(second, first);
+  assert.deepEqual(owner.businessIds, [first, second]);
+  await say('Black slides 8000');
+  assert.deepEqual((await db.query('products', [['businessId', '==', second]])).map(p => p.name), ['Black slides']);
+  assert.deepEqual((await db.query('products', [['businessId', '==', first]])).map(p => p.name), ['White sneakers'], 'the first shop is untouched');
+
+  // Finish the second shop's signup, then switch.
+  await signUpRest(bot, from);
+  const sw = await say('switch');
+  assert.match(sw[0].text, /You're managing \*Kunle Kicks Ikeja\*/);
+  assert.deepEqual(sw[0].options, [`shop:${first}`, `shop:${second}`]);
+  assert.match((await say('Kunle Kicks', `shop:${first}`))[0].text, /Now managing \*Kunle Kicks\*/);
+  assert.match((await say('products'))[0].text, /White sneakers/);
+  assert.doesNotMatch((await say('products'))[0].text, /Black slides/);
+  assert.match((await say('x', 'shop:not-mine'))[0].text, /isn't on this number/);
+});
+
+// The rest of signup from the product step (for a shop whose name and first product are in).
+async function signUpRest(bot: Bot, from: string) {
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Kunle' });
+  await say("That's all", 'prod:done');
+  let last = await say('Looks right', 'ok:yes');
+  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
+  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
+  await say('Lagos, Ikeja');
+  await say('Mon-Sat 9am-7pm, Sun closed');
+  await say('Pickup', 'dl:pickup');
+  await say('Skip', 'pol:skip');
+  await say('Connect now', 'ob:connect');
+  await say('My customers', 'fee:customer');
+  await say('Yes', 'wa:yes');
+  await say('Yes', 'fb:yes');
+}
 
 test('admin: an owner who is already set up gets a greeting, not "didn\'t understand"', async () => {
   const bot = new Bot();

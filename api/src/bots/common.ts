@@ -109,12 +109,12 @@ export async function findProducts(db: Firestore, businessId: string, query: str
 
 // Messages to the owner go through the outbox, so a closed 24-hour window or a Meta hiccup can't
 // lose them or break the customer's flow.
-export async function notifyOwner(db: Firestore, deps: BotDeps, business: Pick<Business, 'id' | 'ownerPhone'>, kind: string, text: string, dedupeKey?: string) {
+export async function notifyOwner(db: Firestore, deps: BotDeps, business: Pick<Business, 'id' | 'ownerPhone'>, kind: string, text: string, dedupeKey?: string, content?: import('../services/channel').OutboundContent) {
   if (!business.ownerPhone) return;
   const id = `${business.id}_${kind}_${dedupeKey ?? randomId(8)}`.replace(/[^A-Za-z0-9_-]/g, '_');
   const created = await db.create(db.doc(C.outbox, id), {
     id, businessId: business.id, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,
-    conversationId: adminConversationId(business.ownerPhone), kind, text, status: 'pending', attempts: 0, createdAt: new Date().toISOString(),
+    conversationId: adminConversationId(business.ownerPhone), kind, text, ...(content ? { content } : {}), status: 'pending', attempts: 0, createdAt: new Date().toISOString(),
   });
   if (created) await deps.enqueue([{ kind: 'outbox', messageId: id }]);
 }

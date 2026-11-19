@@ -23,6 +23,8 @@ export interface OutboxMessage {
   // Sent instead of the text when the 24-hour window is closed. Body parameters fill the template's
   // {{1}}, {{2}}, … in order. Messages without one are not sent outside the window.
   template?: { key: TemplateKey; params: string[] } | null;
+  // A full message (buttons, a list, an image) instead of plain text; text stays as a summary.
+  content?: import('./channel').OutboundContent | null;
   // Sent as a document with the text as its caption (e.g. the PDF receipt). path is under API_BASE_URL.
   document?: { path: string; filename: string } | null;
 }

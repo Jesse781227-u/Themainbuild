@@ -130,10 +130,30 @@ export async function seedCart(id: string, businessId: string, customerId: strin
   await db.set(db.doc('carts', id), { id, businessId, customerId, channel: 'whatsapp', items, expiresAt, updatedAt: now() });
 }
 
-// Signup's branding step for tests that don't care about it: skip the photo, keep the drafted messages.
-// Returns the replies to the last tap (which end with the categories question).
-export async function passBranding(bot: Bot, from: string) {
-  await bot.send('admin', { from, choice: 'photo:skip', text: 'Skip for now' });
-  await bot.send('admin', { from, choice: 'msgok:welcome', text: 'Use this' });
-  return bot.send('admin', { from, choice: 'msgok:paymentThanks', text: 'Use this' });
+// Signup for tests that only need a shop: name → one typed product → preview → (type) → no photos →
+// location → hours → pickup → default policies. Stops at "ready" (Test my shop / Connect now), or
+// with until: 'linked', after the connect link. Returns the business id and the last replies.
+export async function signUp(bot: Bot, from: string, o: { shop?: string; product?: string; type?: string; name?: string; until?: 'ready' | 'linked' } = {}) {
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: o.name ?? 'Tayo' });
+  await say('hi');
+  await say(o.shop ?? 'Test Shop');
+  await say(o.product ?? 'Gift box 5000');
+  let last = await say("That's all", 'prod:done');
+  last = await say('Looks right', 'ok:yes');
+  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', `btype:${o.type ?? 'other'}`);
+  if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
+  await say('Lagos, Ikeja');
+  last = await say('8am-9pm');
+  last = await say('Yes, every day', 'hrs:same');
+  if (last.some(m => m.options.some(id => id.startsWith('prep:')))) last = await say('30–60 min', 'prep:1');
+  await say('Pickup', 'dl:pickup');
+  last = await say('Use these', 'pol:use');
+  if (o.until === 'linked') {
+    await say('Connect now', 'ob:connect');
+    await say('My customers', 'fee:customer');
+    await say('Yes', 'wa:yes');
+    last = await say('Yes', 'fb:yes');
+  }
+  const businessId = (await doc('ownerPhones', `+${from}`)).activeBusinessId as string;
+  return { businessId, last };
 }

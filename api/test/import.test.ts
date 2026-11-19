@@ -1,4 +1,4 @@
-import { Bot, clearFirestore, db, doc, env, fakeLLM, seed, passBranding } from './helpers';
+import { Bot, clearFirestore, db, doc, env, fakeLLM, seed } from './helpers';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanItems, handleImport, parsePastedMenu } from '../src/bots/catalog-import';
@@ -111,20 +111,3 @@ test('import: a PDF menu is read by the AI and set up during signup', async () =
   assert.equal(await handleImport(f, { ...input, document: null, imageId: 'img1' }, 'Black AF1 25k', 'token', async () => {}), null);
 });
 
-test('import: pasting a menu at the categories step of signup sets everything up', async () => {
-  const bot = new Bot();
-  const from = '2348035553333';
-  for (const text of ['hi', 'Kemi', 'Kemi Kitchen']) await bot.send('admin', { from, text });
-  await bot.send('admin', { from, choice: 'btype:food_beverage', text: 'Food' });
-  await bot.send('admin', { from, text: 'Lagos, Ikeja' });
-  const cat = await passBranding(bot, from);
-  assert.match(cat[cat.length - 1].text, /Have a menu or price list\? Send it now/);
-  assert.match((await bot.send('admin', { from, text: MENU }))[0].text, /I found \*4 products\*/);
-  const done = await bot.send('admin', { from, choice: 'imp:all', text: 'Add all 4' });
-  assert.match(done[0].text, /Added 4 products in 2 categories/);
-  assert.match(done[1].text, /Your menu is in 🎉/);
-  assert.deepEqual(opts([done[1]]), ['prod:more', 'prod:done']);
-  const owner = await doc('ownerPhones', `+${from}`);
-  assert.equal(owner.onboardingStage, 'products');
-  assert.match((await bot.send('admin', { from, choice: 'prod:done', text: "I'm done" }))[0].text, /Your shop is set up/);
-});

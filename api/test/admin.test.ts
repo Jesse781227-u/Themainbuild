@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { api, Bot, clearFirestore, db, doc, env, seed, testEnv, passBranding } from './helpers';
+import { api, Bot, clearFirestore, db, doc, env, seed, testEnv, signUp } from './helpers';
 import { getConfig } from '../src/config';
 import { decrypt } from '../src/lib/crypto';
 import { before, test } from 'node:test';
@@ -80,15 +80,7 @@ test('admin: owner commands manage stock, orders and payment details', async () 
 test('admin: delete my data removes the owner account after confirmation', async () => {
   const bot = new Bot();
   const o = '2348035559999';
-  for (const text of ['hi', 'Tayo', 'Shop To Delete']) await bot.send('admin', { from: o, text });
-  await bot.send('admin', { from: o, choice: 'btype:other', text: 'Other' });
-  await bot.send('admin', { from: o, text: 'Lagos, Ikeja' });
-  await passBranding(bot, o);
-  const { businessId } = await doc('ownerPhones', `+${o}`);
-  await bot.send('admin', { from: o, choice: 'cat:use', text: 'Use these' });
-  await bot.send('admin', { from: o, choice: 'cat:ok', text: 'Looks good' });
-  await bot.send('admin', { from: o, text: 'Gift box 5000' });
-  await bot.send('admin', { from: o, text: 'done' });
+  const { businessId } = await signUp(bot, o, { shop: 'Shop To Delete', until: 'linked' });
   await db.set(db.doc('channelAccounts', 'whatsapp_555'), { businessId, channel: 'whatsapp', accountId: '555' });
   assert.match((await bot.send('admin', { from: o, text: 'delete my data' }))[0].text, /Delete your Relay account\?/);
   const done = await bot.send('admin', { from: o, text: 'YES' });

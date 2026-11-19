@@ -31,7 +31,7 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
     let messageId: string;
     let viaTemplate = false;
     try {
-      const content: OutboundContent = claimed.document
+      const content: OutboundContent = claimed.content ? claimed.content : claimed.document
         ? { type: 'document', link: `${cfg.API_BASE_URL}${claimed.document.path}`, filename: claimed.document.filename, caption: claimed.text.slice(0, 1024) }
         : { type: 'text', text: claimed.text };
       ({ messageId } = await send(db, cfg, transport, { ...base, content }));
