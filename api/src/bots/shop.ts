@@ -358,7 +358,10 @@ async function buy(ctx: ShopContext, run: Run, business: Business, productId: st
 
 // Free-text search across product names and their categories: "black sneakers", "zobo".
 async function search(db: Firestore, businessId: string, query: string) {
-  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w)).map(w => w.replace(/(es|s)$/, ''));
+  // Plurals to their singular: "boots" → boot, "watches" → watch, "shoes" → shoe (not "sho", which
+  // would find "Shoulder bag").
+  const singular = (w: string) => (/(sh|ch|x|ss|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
+  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w) && !/^(see|show|the|and|for|you|have|any|some|your)$/.test(w)).map(singular);
   if (!words.length) return [];
   const [products, cats] = await Promise.all([visible(db, businessId), listCategories(db, businessId)]);
   const catName = new Map(cats.map(c => [c.id, c.name.toLowerCase()]));

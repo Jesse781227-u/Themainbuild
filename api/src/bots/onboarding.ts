@@ -268,13 +268,25 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       const plain = tidyPlace(text.replace(/^(it'?s|it is|in|at)\s+/i, ''));
       if (c.ob.step === 'area' && !got.area && !got.street && !got.city) loc.area = plain;
       if (c.ob.step === 'city' && loc.area && !got.city && !got.area && !got.street && !got.landmark) loc.city = knownCity(plain) ?? plain;
-      if (c.ob.step === 'street' && !got.street) loc.street = got.landmark && !got.area ? loc.street : tidyPlace(text.replace(LANDMARK_RE, '').replace(/^(it'?s|it is|we'?re at|at|on)\s+/i, ''));
-      await setOb(c, { draft: { ...c.ob.draft, loc, ...(c.ob.step === 'street' ? { streetAsked: true } : {}) } });
+      // "Which street?": a plain answer is the street. If they sent the area/city again ("it's in
+      // Lagos, Yaba, near Tejuosho market") that's kept, and the street is asked once more.
+      const placeOnly = !got.street && (got.area || got.city || got.landmark);
+      if (c.ob.step === 'street' && !got.street && !placeOnly) loc.street = tidyPlace(text.replace(LANDMARK_RE, '').replace(/^(it'?s|it is|we'?re at|at|on)\s+/i, ''));
+      const asked = c.ob.step === 'street' && !placeOnly;
+      await setOb(c, { draft: { ...c.ob.draft, loc, ...(asked ? { streetAsked: true } : {}) } });
       return nextLocation(c);
     }
     case 'location_confirm': {
       if (choiceId === 'loc:fix' || (!choiceId && /^(no|fix|wrong|change)/i.test(text.trim()))) { await setOb(c, { step: 'city', draft: { ...c.ob.draft, loc: undefined, streetAsked: false } }); return c.reply('No problem. Send the full address again, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.'); }
       if (choiceId === 'loc:ok' || (!choiceId && /^(yes|correct|right|ok(ay)?|that'?s right)\b/i.test(text.trim()))) return saveLocation(c);
+      // A correction typed instead ("12 Herbert Macaulay Way", "near the market"): merged, read back again.
+      if (!choiceId && text.trim().length >= 3) {
+        const got = parseLocation(text);
+        const loc: Location = { city: null, area: null, street: null, landmark: null, ...c.ob.draft?.loc };
+        for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k]) loc[k] = got[k];
+        if (!got.street && !got.area && !got.city && !got.landmark) loc.street = tidyPlace(text);
+        await setOb(c, { draft: { ...c.ob.draft, loc } });
+      }
       return prompt(c);
     }
 

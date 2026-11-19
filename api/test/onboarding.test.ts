@@ -424,3 +424,23 @@ test('file check: "Yes, it\'s my stock" sets the type; "Send another file" drops
   await other.send('admin', { from: vague, text: "Tee's Place", name: 'Tee' });
   assert.match((await other.send('admin', { from: vague, text: THRIFT, name: 'Tee' }))[0].text, /^I found \*6 products\*/);
 });
+
+test('location: "yaba", then the area again with a landmark, then the street; a typed fix at the read-back', async () => {
+  const bot = new Bot();
+  const from = '2348035550002';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Teniola' });
+  await say('hi');
+  await say("Tee's Thrift");
+  await say('Plaid Flannel Shirt 6500');
+  await say("That's all", 'prod:done');
+  let last = await say('Looks right', 'ok:yes');
+  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
+  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
+  assert.match((await say('yaba'))[0].text, /What's the street or building in Yaba\?/);
+  assert.match((await say("it's in Lagos, Yaba, near Tejuosho market"))[0].text, /What's the street or building in Yaba\?/, 'not taken as the street');
+  const back = await say('12 Herbert Macaulay Way');
+  assert.match(back[0].text, /📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?/);
+  const fixed = await say('15 Herbert Macaulay Way');
+  assert.match(fixed[0].text, /📍 15 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?/);
+  assert.match((await say('Yes', 'loc:ok'))[0].text, /Step 4 of 6/);
+});
