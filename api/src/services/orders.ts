@@ -9,10 +9,15 @@ import type { Business } from '../domain/business';
 import type { Cart, CartLine, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
 import { hasStock, tracksStock } from '../domain/commerce';
 
-export interface OrderPolicy extends FeePolicy { holdMinutes: number }
+// feePayer: who pays Relay's fee. 'owner' means customers pay the shop's prices and the fee comes out
+// of what the shop receives.
+export interface OrderPolicy extends FeePolicy { holdMinutes: number; feePayer?: 'customer' | 'owner' }
 
-export function policyFor(business: Pick<Business, 'feeBps' | 'holdMinutes'> | null, cfg: Pick<Config, 'FEE_BPS' | 'FEE_CAP_KOBO' | 'HOLD_MINUTES'>): OrderPolicy {
-  return { bps: business?.feeBps ?? cfg.FEE_BPS, capKobo: cfg.FEE_CAP_KOBO, holdMinutes: business?.holdMinutes ?? cfg.HOLD_MINUTES };
+// What the customer is charged on top of the goods for Relay's fee (nothing when the owner pays it).
+export const customerFee = (fee: number, policy: Pick<OrderPolicy, 'feePayer'>) => (policy.feePayer === 'owner' ? 0 : fee);
+
+export function policyFor(business: Pick<Business, 'feeBps' | 'holdMinutes' | 'feePayer'> | null, cfg: Pick<Config, 'FEE_BPS' | 'FEE_CAP_KOBO' | 'HOLD_MINUTES'>): OrderPolicy {
+  return { bps: business?.feeBps ?? cfg.FEE_BPS, capKobo: cfg.FEE_CAP_KOBO, holdMinutes: business?.holdMinutes ?? cfg.HOLD_MINUTES, feePayer: business?.feePayer ?? 'customer' };
 }
 
 // After a hold expires its amount stays claimed for this long, so a late transfer for the old order
@@ -72,7 +77,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
     const delivery = args.delivery ?? null;
     const deliveryFeeKobo = delivery?.feeKobo ?? 0;
     const fee = feeKobo(subtotalKobo, args.policy);
-    const baseKobo = subtotalKobo + deliveryFeeKobo + fee;
+    const baseKobo = subtotalKobo + deliveryFeeKobo + customerFee(fee, args.policy);
     const uniqueKobo = await claimUniqueAmount(tx, db, cart.businessId, baseKobo, now);
     const payAmountKobo = baseKobo + uniqueKobo;
 
@@ -80,7 +85,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
     const holdExpiresAt = addMinutes(now, args.policy.holdMinutes).toISOString();
     const order: Order = {
       id: randomId(12), ref: orderRef(), businessId: cart.businessId, customerId: cart.customerId, channel: cart.channel,
-      items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, uniqueKobo, payAmountKobo,
+      items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, feePaidBy: args.policy.feePayer ?? 'customer', uniqueKobo, payAmountKobo,
       status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt,
       paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
     };

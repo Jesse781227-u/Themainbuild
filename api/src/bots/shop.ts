@@ -17,7 +17,8 @@ import { suggestFor } from '../services/suggestions';
 import { renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { listZones, quoteDelivery } from '../services/delivery';
-import { checkout, policyFor, recentOrders } from '../services/orders';
+import { checkout, customerFee, policyFor, recentOrders } from '../services/orders';
+import { testOrder, testPaid } from './test-mode';
 import { paymentInstructions } from '../services/bachs';
 import type { ShopContext } from '../services/router';
 import type { LLMProvider, ToolChoice, ToolSpec } from '../services/ai';
@@ -45,12 +46,13 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   const { db, cfg, businessId, conversationId } = ctx;
   const [conv, business, customer] = (await db.getAll([db.doc(C.conversations, conversationId), db.doc(C.businesses, businessId), db.doc(C.customers, conversationId)])) as [ShopConversation | null, Business | null, Customer | null];
   if (!conv || !business || business.status === 'deleted') return;
+  const sender = ctx.test ? { adminBot: true as const } : { businessId };
   // Marketing opt-out is honoured even while the owner has taken over the chat.
   const optText = (ctx.event.text ?? '').trim().toLowerCase();
   if (/^(stop|unsubscribe|stop all)$/.test(optText)) {
     await db.set(db.doc(C.customers, conversationId), { marketingOptIn: false, marketingOptOutAt: new Date().toISOString() }, { merge: true });
     if (conv.mode === 'owner') return;
-    await send(db, cfg, deps.transport, { from: { businessId }, conversationId, to: ctx.event.from, content: { type: 'text', text: `You won't get updates from ${business.name} any more. You can still order here any time; send SUBSCRIBE to get updates again.` } });
+    await send(db, cfg, deps.transport, { from: sender, conversationId, to: ctx.event.from, content: { type: 'text', text: `You won't get updates from ${business.name} any more. You can still order here any time; send SUBSCRIBE to get updates again.` } });
     return;
   }
   if (conv.mode === 'owner') return; // the owner is handling this chat until they hand back
@@ -60,7 +62,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   const setState = (s: ShopState | null) => db.set(db.doc(C.conversations, conversationId), { shop: s }, { merge: true });
   const reply = async (content: OutboundContent | string, next?: ShopState) => {
     const c: OutboundContent = typeof content === 'string' ? { type: 'text', text: content } : content;
-    await send(db, cfg, deps.transport, { from: { businessId }, conversationId, to, content: c });
+    await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: c });
     const options = optionIds(c);
     if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, options });
   };
@@ -83,7 +85,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (choice === 'delete_yes' || YES.test(lower)) {
       // Reply first: the confirmation needs the conversation (24-hour window) that is about to go.
       const ref = deletionCode();
-      await send(db, cfg, deps.transport, { from: { businessId }, conversationId, to, content: { type: 'text', text: `Done. ${business.name} no longer has your details on Relay. Reference: ${ref}` } });
+      await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: { type: 'text', text: `Done. ${business.name} no longer has your details on Relay. Reference: ${ref}` } });
       await deleteShopperData(db, { businessId, conversationId, customerKey: to }, ref);
       log('info', 'shopper_data_deleted', { businessId, ref });
       return;
@@ -120,6 +122,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'deliver') return reply('Please send your delivery address (area and street).', { step: 'await_address' });
     if (kind === 'pickup') return confirmOrder(ctx, business, { method: 'pickup', feeKobo: 0, timeframe: 'Ready for pickup' }, reply);
     if (kind === 'confirm' && state.step === 'confirm') return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
+    if (kind === 'testpay' && ctx.test) return testPaid(ctx, business, id, reply);
     if (kind === 'delete_no') return reply('OK, nothing was deleted.', { step: 'browse' });
   }
 
@@ -282,12 +285,13 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
   const { text, subtotal } = await cartLines(ctx.db, cart);
-  const fee = feeKobo(subtotal, policyFor(business, ctx.cfg));
+  const policy = policyFor(business, ctx.cfg);
+  const fee = customerFee(feeKobo(subtotal, policy), policy);
   const body = [
     'Please confirm your order:', text,
     `Subtotal: ${formatKobo(subtotal)}`,
     delivery.method === 'pickup' ? 'Pickup: free' : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
-    `Service fee: ${formatKobo(fee)}`,
+    ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     `Total: about ${formatKobo(subtotal + delivery.feeKobo + fee)} (the exact amount comes next)`,
   ].join('\n');
   return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Not yet']]), { step: 'confirm', delivery });
@@ -296,6 +300,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
 async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, delivery: OrderDelivery | null, reply: Reply) {
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
+  if (ctx.test) return testOrder(ctx, business, cart, delivery, reply);
   let order: Order;
   try {
     order = await checkout(ctx.db, { cartId: cart.id, businessId: business.id, policy: policyFor(business, ctx.cfg), delivery });
@@ -323,6 +328,7 @@ async function orderStatus(db: Firestore, customerId: string, reply: Reply) {
 }
 
 async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, customer: Customer | null, reply: Reply) {
+  if (ctx.test) return reply(`🧪 In your real shop, this tells the customer you'll reply, alerts you here, and the assistant goes quiet in that chat until you send HANDBACK. (Test mode: nothing was sent.)`);
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { mode: 'owner', takeoverAt: new Date().toISOString(), takeoverReason: 'customer_request' }, { merge: true });
   await reply(`I've let ${business.name} know. They'll reply to you here shortly.`);
   // The owner sees the full number (it's their customer); logs never do.

@@ -53,7 +53,8 @@ export interface Order {
   items: OrderLine[];
   subtotalKobo: number;   // goods only
   deliveryFeeKobo: number;
-  feeKobo: number;        // Relay's fee, on goods only, paid by the customer
+  feeKobo: number;        // Relay's fee, on goods only
+  feePaidBy?: 'customer' | 'owner'; // customer: added to payAmountKobo; owner: taken from what the shop receives
   uniqueKobo: number;     // small offset that makes payAmountKobo unique among this business's open orders
   payAmountKobo: number;  // exactly what the customer must transfer
   status: OrderStatus;    // the one payment/lifecycle status

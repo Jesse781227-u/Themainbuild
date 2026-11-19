@@ -99,7 +99,7 @@ export async function receiptPdf(input: {
   const total = (label: string, kobo: number) => { text(label, priceX, 10, { color: MUTED, right: true }); text(ngn(kobo), R, 10, { right: true }); y -= 15; };
   total('Subtotal', order.subtotalKobo);
   if (order.deliveryFeeKobo) total('Delivery', order.deliveryFeeKobo);
-  if (order.feeKobo) total('Service fee', order.feeKobo);
+  if (order.feeKobo && order.feePaidBy !== 'owner') total('Service fee', order.feeKobo); // the owner's own fee isn't on the customer's receipt
   y -= 10;
   page.drawRectangle({ x: R - 190, y: y - 8, width: 190, height: 26, color: rgb(0.93, 0.98, 0.96) });
   y += 1;

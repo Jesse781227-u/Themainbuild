@@ -20,6 +20,7 @@ import { handleMessageInput } from './messages-flow';
 import { handleCustomerChoice } from './customers';
 import { CALL, openTicket } from '../services/support';
 import { getOwner, switchShop } from '../services/owners';
+import { exitTest, runTest, startTest, TEST_EXIT, TEST_START } from './test-mode';
 
 const CONFIRM_MINUTES = 10;
 
@@ -56,6 +57,17 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     const stage = ob ? `${ob.stage}/${ob.step}` : business ? business.status : 'new';
     await openTicket(db, cfg, deps, { ownerPhone: ctx.ownerPhone, businessId: business?.id ?? null, businessName: business?.name ?? null, stage, message: text });
     return reply("Got it 👍 A real person from Relay will call or WhatsApp you shortly on this number. You can keep going here in the meantime.");
+  }
+
+  // ── TEST: the owner shops in their own shop (any time) ──
+  const testing = (conv as { testMode?: { businessId: string } | null }).testMode;
+  if (testing) {
+    if (choiceId === 'test:exit' || (!choiceId && TEST_EXIT.test(text.trim()))) return exitTest(ctx, ob?.step === 'ready', reply);
+    return runTest(ctx, deps, testing.businessId);
+  }
+  if (choiceId === 'test:start' || (!choiceId && !input.imageId && !input.document && TEST_START.test(text.trim()))) {
+    const shop = ob?.businessId ? ((await db.get(db.doc(C.businesses, ob.businessId))) as Business | null) : business;
+    return startTest(ctx, deps, shop, reply);
   }
 
   // ── Onboarding ──

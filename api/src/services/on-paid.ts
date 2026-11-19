@@ -99,7 +99,8 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   if (business?.ownerPhone) queue({
     id: `${order.id}_owner_paid`, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,
     conversationId: adminConversationId(business.ownerPhone), kind: 'owner_order_paid', document: receipt,
-    text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
+    text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${order.feeKobo ? `
+Relay fee (1%${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}): ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
   });
 
   return { applied: true, order: { ...order, status: 'paid', paidAt: at, paymentId: payment.paymentId, needsAttention }, late, outboxIds };
