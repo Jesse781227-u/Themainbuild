@@ -10,11 +10,13 @@ import { formatKobo } from '../lib/money';
 import type { OutboundContent } from '../services/channel';
 import { CAROUSEL, carousel, clip, type CarouselCard } from '../services/carousel';
 import { buttons } from './common';
+import { placeholderPath } from '../services/placeholder';
 
 export const PLACEHOLDER_IMAGE = '/product-placeholder.png';
 const PER_PAGE = CAROUSEL.maxCards - 1; // the 10th card is "See more"
 
-export const imageFor = (cfg: Pick<Config, 'API_BASE_URL'>, p: Pick<Product, 'images'>) => p.images[0] ?? `${cfg.API_BASE_URL}${PLACEHOLDER_IMAGE}`;
+// No photo yet: the shop's colour with the product's first letter (services/placeholder.ts).
+export const imageFor = (cfg: Pick<Config, 'API_BASE_URL'>, p: Pick<Product, 'images' | 'name' | 'businessId'>) => p.images[0] ?? `${cfg.API_BASE_URL}${placeholderPath(p.businessId, p.name)}`;
 
 // In-stock first, then sold out; alphabetical within each.
 export const browseOrder = (ps: Product[]) => [...ps].sort((a, b) => Number(!hasStock(a)) - Number(!hasStock(b)) || a.name.localeCompare(b.name));

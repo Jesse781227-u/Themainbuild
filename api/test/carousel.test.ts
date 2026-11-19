@@ -5,7 +5,7 @@ import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { carousel, CAROUSEL, clip, type CarouselShape } from '../src/services/carousel';
 import { optionIds, toText } from '../src/services/channel';
-import { cardFor, categoryCarousel, productCarousel, PLACEHOLDER_IMAGE } from '../src/bots/product-cards';
+import { cardFor, categoryCarousel, productCarousel } from '../src/bots/product-cards';
 import { createCategories, createProduct } from '../src/services/catalog';
 import type { Category, Product } from '../src/domain/commerce';
 
@@ -35,7 +35,7 @@ test('carousel: cards show photo or stand-in, price, sold out, Buy and Details',
   assert.equal(withPhoto.body, '*Item 01*\n₦1,000.01\nClean pair, size 42');
   assert.deepEqual(withPhoto.buttons, [['buy:p1', 'Buy'], ['det:p1', 'Details']]);
   const soldOut = cardFor(cfg, product(2, { stock: 0 }));
-  assert.equal(soldOut.imageUrl, `https://relay.test${PLACEHOLDER_IMAGE}`);
+  assert.match(soldOut.imageUrl, /^https:\/\/relay\.test\/ph\/[0-9a-f]{6}\/I\.png$/, 'no photo: the shop colour and the first letter');
   assert.match(soldOut.body, /· Sold out$/);
   assert.deepEqual(soldOut.buttons, [['buy:p2', 'Sold out'], ['det:p2', 'Details']], 'same two buttons, so every card matches');
 });
@@ -105,4 +105,18 @@ test('carousel: categories page at 10 cards, with cover photos from their produc
   assert.equal(cards[9].action!.buttons![0].quick_reply!.id, 'cats:1');
   const p1 = (ia(categoryCarousel(cfg, cats, prods, { intro: 'Hi!', page: 1 })) as CarouselShape).action!.cards!;
   assert.deepEqual(p1.map(c => c.action!.buttons![0].quick_reply!.id), ['cat:c9', 'cat:c10', 'cat:c11']);
+});
+
+test('placeholder: products without a photo get a PNG in the shop colour', async () => {
+  const { api } = await import('./helpers');
+  const { placeholderPath, shopColour } = await import('../src/services/placeholder');
+  assert.equal(placeholderPath('biz-a', 'jollof rice'), `/ph/${shopColour('biz-a')}/J.png`);
+  assert.equal(placeholderPath('biz-a', '🔥 Ëgusi'), `/ph/${shopColour('biz-a')}/E.png`);
+  const { createApp } = await import('../src/app');
+  const { env } = await import('./helpers');
+  const res = await createApp().request(placeholderPath('biz-a', 'Zobo'), {}, env);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/png');
+  assert.deepEqual([...new Uint8Array(await res.arrayBuffer()).subarray(0, 4)], [137, 80, 78, 71]);
+  assert.equal((await api('GET', '/ph/ffffff/A.png')).status, 404, 'only our colours');
 });
