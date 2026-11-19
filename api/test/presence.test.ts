@@ -42,7 +42,7 @@ test('slow jobs: ⏳ while working, ✅ when done, one "still working" message p
 test('menu reading: ⏳ then ✅ on the owner\'s file', async () => {
   const reactions: string[] = [];
   const llm = { ...fakeLLM(() => null), async readCatalog() { return [{ name: 'Suya', price: 3000, category: 'Grills' }]; } };
-  const business = (await db.get(db.doc('businesses', fx.b.id))) as Business;
+  const business = (await db.get(db.doc('businesses', fx.b.id))) as unknown as Business;
   const f: FlowCtx = { db, cfg: getConfig(env), deps: { transport: new Bot().transport, llm, transcriber: null, fetch: (async () => new Response(new Uint8Array([37, 80, 68, 70]), { headers: { 'content-type': 'application/pdf' } })) as unknown as typeof fetch, enqueue: async () => {} }, business, convRef: db.doc('conversations', 'admin_presence'), state: {} };
   // Meta's media lookup, then the file itself.
   let call = 0;
