@@ -24,7 +24,8 @@ import { addShop, removeShop } from '../services/owners';
 import { trackStep } from '../services/onboarding-events';
 import { inferBusinessType } from '../services/business-type';
 import { example, exampleType } from '../services/shop-type';
-import { closeDays, describeHours, parseHours, parseWeek, sameEveryDay, validHours, type Hours } from '../services/hours';
+import { closeDays, DAYS, describeHours, sameEveryDay, validHours, type Hours } from '../services/hours';
+import { answerHours, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
 import { defaultPolicies, policyText } from '../services/policies';
 import { listZones, saveZone } from '../services/delivery';
 import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
@@ -43,7 +44,7 @@ export type Step =
   | 'shop_name' | 'owner_name'
   | 'products' | 'preview' | 'type' | 'photos'
   | 'city' | 'area' | 'street' | 'location_confirm'
-  | 'hours' | 'hours_same' | 'hours_perday' | 'hours_closed' | 'prep' | 'prep_custom'
+  | 'hours' | 'hours_same' | 'hours_perday' | 'hours_closed' | 'hours_review' | 'prep' | 'prep_custom'
   | 'delivery' | 'fee_local' | 'fee_city' | 'interstate' | 'interstate_pricing' | 'interstate_fee' | 'policies' | 'policies_edit'
   | 'ready' | 'fee_payer' | 'check_wa' | 'check_fb'
   | 'live_photo' | 'live_contacts' | 'live_source'
@@ -54,7 +55,7 @@ export interface Onboarding {
   businessId?: string | null;          // the shop being set up (an owner can add more shops later)
   adding?: boolean;                    // NEW SHOP: this owner already has a shop
   welcomed?: boolean; nameSet?: boolean; typeConfident?: boolean;
-  draft?: { city?: string; hours?: Hours; loc?: Location; streetAsked?: boolean };
+  draft?: { city?: string; hours?: Hours; hoursReview?: HoursDraft | null; loc?: Location; streetAsked?: boolean };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number; photosAdded?: number;
   photosId?: string | null;            // photos from the uploaded file, being matched in the background
   msgIndex?: number;                   // which of SIGNUP_MESSAGES the owner is choosing wording for
@@ -290,12 +291,15 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
 
-    case 'hours': {
-      const parsed = choiceId ? null : parseHours(text);
-      if (!parsed) return c.reply('I couldn\'t read that. Send your opening and closing times like *8am – 9pm*, or by day like *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
-      if (parsed.perDay) return saveHours(c, parsed.hours);
-      await setOb(c, { step: 'hours_same', draft: { ...c.ob.draft, hours: parsed.hours } });
-      return prompt(c);
+    // Hours: read by position (services/hours.ts), then checked with the owner (hours-review.ts):
+    // doubtful times and days not mentioned are asked about, and nothing is saved unconfirmed.
+    case 'hours': case 'hours_perday': {
+      const draft = choiceId ? null : await readHoursText(text, c.deps.llm);
+      if (!draft) return c.reply('I couldn\'t read that. Try *8am – 9pm*, or *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
+      // One time for every day: "Same every day?" is the check.
+      const allSame = !draft.missing.length && !draft.doubts.length && DAYS.every(d => JSON.stringify(draft.week[d]) === JSON.stringify(draft.week.mon)) && !!draft.week.mon && c.ob.step === 'hours';
+      if (allSame) { await setOb(c, { step: 'hours_same', draft: { ...c.ob.draft, hours: sameEveryDay(draft.week.mon!) } }); return prompt(c); }
+      return review(c, draft);
     }
     case 'hours_same': {
       const hours = validHours(c.ob.draft?.hours);
@@ -303,20 +307,24 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (choiceId === 'hrs:same' || /^(yes|same|every ?day)\b/i.test(text.trim())) return saveHours(c, hours);
       if (choiceId === 'hrs:perday') { await setOb(c, { step: 'hours_perday' }); return c.reply('Send your hours by day, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.'); }
       if (choiceId === 'hrs:closed') { await setOb(c, { step: 'hours_closed' }); return c.reply('Which days are you closed? e.g. *Sunday*, or *Sat and Sun*.'); }
-      const week = parseWeek(text);
-      if (week) return saveHours(c, week);
+      const draft = choiceId ? null : await readHoursText(text, c.deps.llm);
+      if (draft) return review(c, draft);
       return prompt(c);
-    }
-    case 'hours_perday': {
-      const week = choiceId ? null : parseWeek(text);
-      if (!week) return c.reply('I couldn\'t read that. Try like this: *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
-      return saveHours(c, week);
     }
     case 'hours_closed': {
       const hours = validHours(c.ob.draft?.hours) ?? sameEveryDay(null);
       const closed = choiceId ? null : closeDays(hours, text);
       if (!closed) return c.reply('Which days are you closed? Send the day names, e.g. *Sunday*.');
-      return saveHours(c, closed);
+      return review(c, { week: closed, doubts: [], missing: [], orphan: null, asking: null });
+    }
+    case 'hours_review': {
+      const draft = c.ob.draft?.hoursReview;
+      if (!draft) { await setOb(c, { step: 'hours' }); return prompt(c); }
+      const r = answerHours(draft, choiceId, text);
+      if (!r) return c.reply(hoursQuestion(draft));
+      if ('restart' in r) { await setOb(c, { step: 'hours', draft: { ...c.ob.draft, hoursReview: null } }); return c.reply('OK, send your hours again, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.'); }
+      if ('done' in r) { await setOb(c, { draft: { ...c.ob.draft, hoursReview: null } }); return saveHours(c, r.done); }
+      return review(c, r.draft);
     }
     case 'prep': {
       const pick = choiceId?.startsWith('prep:') ? choiceId.slice(5) : null;
@@ -576,6 +584,11 @@ async function saveLocation(c: Ctx) {
   return prompt(c);
 }
 
+async function review(c: Ctx, draft: HoursDraft) {
+  await setOb(c, { step: 'hours_review', draft: { ...c.ob.draft, hoursReview: draft } });
+  return c.reply(withLabel(hoursQuestion(draft), stepLabel('hours')));
+}
+
 async function saveHours(c: Ctx, hours: Hours) {
   await patchBusiness(c, { hours, afterHours: c.business!.afterHours ?? 'orders' });
   await c.reply(`✅ ${describeHours(hours)}. When you're closed, customers can still order for later (*AFTER HOURS* to change).`);
@@ -718,6 +731,7 @@ async function prompt(c: Ctx): Promise<unknown> {
     }
     case 'hours_perday': return ask('Send your hours by day, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
     case 'hours_closed': return ask('Which days are you closed? e.g. *Sunday*.');
+    case 'hours_review': return c.ob.draft?.hoursReview ? ask(hoursQuestion(c.ob.draft.hoursReview)) : ask('What time do you open and close? e.g. *8am – 9pm*');
     case 'prep': return ask(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
     case 'prep_custom': return ask('How long does an order usually take? e.g. *45 minutes*');
     case 'delivery': return ask(buttons(`How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));

@@ -27,10 +27,8 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   }
   if ((m = /^(?:hours|opening hours|set hours)\s*:?\s+(.+)$/i.exec(t))) {
     if (/^(none|off|always open|24\/?7|any ?time)$/i.test(m[1].trim())) { await save(db, business, { hours: null }); return 'Done ✅ No opening hours: customers can order any time.'; }
-    const parsed = parseHours(m[1]);
-    if (!parsed) return 'I couldn\'t read those hours. Try *hours 8am–9pm*, or *hours Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.';
-    await save(db, business, { hours: parsed.hours });
-    return `Saved ✅ ${describeHours(parsed.hours)}.`;
+    // Times are read and checked with the owner in admin.ts (hours-review.ts) before saving.
+    return null;
   }
 
   // Outside opening hours: take orders for later, or menu only.

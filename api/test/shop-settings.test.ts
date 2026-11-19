@@ -69,7 +69,8 @@ test('admin: HOURS, AFTER HOURS, POLICIES and FEE change the settings any time',
   const bot = new Bot();
   const o = fx.a.ownerPhone.slice(1);
   const say = (text: string, choice?: string) => bot.send('admin', { from: o, text, choice });
-  assert.match((await say('hours Mon-Sat 8am-9pm, Sun closed'))[0].text, /Saved ✅ Mon–Sat 8am–9pm · Sun closed/);
+  assert.match((await say('hours Mon-Sat 8am-9pm, Sun closed'))[0].text, /^Mon–Sat 8am–9pm · Sun closed\. Correct\?/, 'checked before saving');
+  assert.match((await say('Yes', 'hrv:ok'))[0].text, /Saved ✅ Mon–Sat 8am–9pm · Sun closed/);
   assert.match((await say('hours'))[0].text, /Your opening hours: Mon–Sat 8am–9pm · Sun closed/);
   assert.match((await say('hours whenever'))[0].text, /couldn't read those hours/);
   const ah = await say('after hours');

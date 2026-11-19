@@ -16,6 +16,8 @@ import type { Product } from '../domain/commerce';
 import { readFlowReply } from '../services/flows';
 import { handleFlowAnswer } from './flow-answers';
 import { handleWalletInput } from './wallet-flow';
+import { answerHours, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
+import { describeHours } from '../services/hours';
 import { example } from '../services/shop-type';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
@@ -183,6 +185,28 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     for (const o of msg.out) await reply(o);
     if (msg.done) return reply(buttons('Want to change another message?', [['msgmenu', 'Change another'], ['act:menu', 'Menu']]));
     return;
+  }
+
+  // ── HOURS with times ("hours Mon–Fri 8am–6pm, Sat 10–4"): read, checked with the owner, then saved ──
+  const hoursText = !choiceId ? /^(?:hours|opening hours|set hours)\s*:?\s+(.+)$/i.exec(text.trim()) : null;
+  if (hoursText && !/^(none|off|always open|24\/?7|any ?time)$/i.test(hoursText[1].trim())) {
+    const d = await readHoursText(hoursText[1], deps.llm);
+    if (!d) return reply("I couldn't read those hours. Try *hours 8am–9pm*, or *hours Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.");
+    await db.set(convRef, { hoursDraft: d }, { merge: true });
+    return reply(hoursQuestion(d));
+  }
+  const hoursDraft = (conv as { hoursDraft?: HoursDraft | null }).hoursDraft;
+  if (hoursDraft && (choiceId?.startsWith('hrv:') || (!choiceId && text.trim() && !matchAction(text)))) {
+    const r = answerHours(hoursDraft, choiceId, text);
+    if (r && 'done' in r) {
+      await db.update(db.doc(C.businesses, business.id), { hours: r.done, updatedAt: new Date().toISOString() });
+      await db.set(convRef, { hoursDraft: null }, { merge: true });
+      return reply(withFollowUps(`Saved ✅ ${describeHours(r.done)}.`, [['delivery', 'Delivery']]));
+    }
+    if (r && 'restart' in r) { await db.set(convRef, { hoursDraft: null }, { merge: true }); return reply('OK. Send them again, e.g. *hours Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.'); }
+    if (r) { await db.set(convRef, { hoursDraft: r.draft }, { merge: true }); return reply(hoursQuestion(r.draft)); }
+    if (choiceId) return reply(hoursQuestion(hoursDraft));
+    await db.set(convRef, { hoursDraft: null }, { merge: true }); // they've moved on to something else
   }
 
   // ── Owner actions by name: "/sales", "sales", "how much did I make today", "hi" (the MENU) ──

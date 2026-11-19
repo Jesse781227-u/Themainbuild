@@ -123,7 +123,10 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.match(same[0].text, /8am–9pm\. Same every day\?/);
   assert.deepEqual(same[0].options, ['hrs:same', 'hrs:perday', 'hrs:closed']);
   assert.match((await say('Closed some days', 'hrs:closed'))[0].text, /Which days are you closed/);
-  const prep = await say('Sunday');
+  const check = await say('Sunday');
+  assert.match(check[0].text, /^\*Step 4 of 6\* · Mon–Sat 8am–9pm · Sun closed\. Correct\?/, 'confirmed before saving');
+  assert.deepEqual(check[0].options, ['hrv:ok', 'hrv:change']);
+  const prep = await say('Yes', 'hrv:ok');
   assert.match(prep[0].text, /✅ Mon–Sat 8am–9pm · Sun closed\. When you're closed, customers can still order for later/);
   assert.match(prep[1].text, /How long does an order usually take to prepare/, 'food shops get the prep-time question');
   const delivery = await say('30–60 min', 'prep:1');
@@ -315,6 +318,7 @@ async function signUpRest(bot: Bot, from: string) {
   await say('No pickup address', 'loc:nostreet');
   await say('Yes', 'loc:ok');
   await say('Mon-Sat 9am-7pm, Sun closed');
+  await say('Yes', 'hrv:ok');
   await say('Pickup', 'dl:pickup');
   await say('Skip', 'pol:skip');
   await say('Use defaults', 'msgs:default');
@@ -447,4 +451,31 @@ test('location: "yaba", then the area again with a landmark, then the street; a 
   const fixed = await say('15 Herbert Macaulay Way');
   assert.match(fixed[0].text, /📍 15 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?/);
   assert.match((await say('Yes', 'loc:ok'))[0].text, /Step 4 of 6/);
+});
+
+test('hours at signup: the reported message is checked, not saved as "Every day 8am–7am"', async () => {
+  const bot = new Bot();
+  const from = '2348035550003';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'May' });
+  await say('hi');
+  await say('Mayschills');
+  await say('Plaid shirt 6500');
+  await say("That's all", 'prod:done');
+  let last = await say('Looks right', 'ok:yes');
+  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
+  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
+  await say('Lagos, Yaba');
+  await say('No pickup address', 'loc:nostreet');
+  await say('Yes', 'loc:ok');
+  const q1 = await say('8AM to 7AM on weekdays and 10am to 7am on saturdays');
+  assert.match(q1[0].text, /^\*Step 4 of 6\* · Mon–Fri: 8am to 7pm, or open overnight until 7am\?/);
+  await say('8am–7pm', 'hrv:alt');
+  const sunday = await say('10am–7pm', 'hrv:alt');
+  assert.match(sunday[0].text, /And Sunday\?/);
+  const check = await say('Closed', 'hrv:closed');
+  assert.match(check[0].text, /Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\. Correct\?/);
+  const bizId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
+  assert.equal((await doc('businesses', bizId)).hours ?? null, null, 'nothing saved before Yes');
+  assert.match((await say('Yes', 'hrv:ok'))[0].text, /✅ Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\./);
+  assert.deepEqual((await doc('businesses', bizId)).hours.sun, null);
 });
