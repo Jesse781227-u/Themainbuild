@@ -51,5 +51,8 @@ export const C = {
   onboardingEvents: 'onboardingEvents', // step entered/completed, for drop-off analytics
   testReceipts: 'testReceipts',
   importPhotos: 'importPhotos',         // photos from an uploaded PDF, matched to products in the background         // TEST mode: pretend orders, never real ones
-  statusPosts: 'statusPosts',           // Status posts Relay prepared for an owner: picture, caption, who to mention, results
+  statusPosts: 'statusPosts',
+  wallets: 'wallets',                   // each shop's balance (Relay holds it until withdrawn)
+  payouts: 'payouts',                   // withdrawals to the owner's bank account
+  kyc: 'kyc',                           // bank details + BVN (encrypted), verified once before the first withdrawal           // Status posts Relay prepared for an owner: picture, caption, who to mention, results
 } as const;

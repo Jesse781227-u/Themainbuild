@@ -15,6 +15,7 @@ import { actionById, actionForTool, followUps, handleActionTap, matchAction, run
 import type { Product } from '../domain/commerce';
 import { readFlowReply } from '../services/flows';
 import { handleFlowAnswer } from './flow-answers';
+import { handleWalletInput } from './wallet-flow';
 import { example } from '../services/shop-type';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
 import { chooseAdminTool } from './intent';
@@ -136,6 +137,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   // ── Menu rows and follow-up buttons (act:…, menu:…), and the old greeting buttons ──
   const tap = choiceId ? ({ 'g:products': 'act:products', 'g:orders': 'act:orders', 'g:help': 'act:menu' } as Record<string, string>)[choiceId] ?? choiceId : null;
   if (tap && (await handleActionTap(tap, actionCtx))) return;
+
+  // ── Wallet: verify (KYC) answers, withdraw amounts and confirmations ──
+  const walletOut = await handleWalletInput({ ...actionCtx, arg: null }, choiceId, text);
+  if (walletOut) return reply(walletOut);
 
   // ── Waiting for the next message after Add product / Send a campaign / Add photo ──
   if (state.awaiting === 'add' && !choiceId) {

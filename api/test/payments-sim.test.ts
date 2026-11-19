@@ -70,7 +70,7 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
   assert.ok(alert, 'the owner gets the receipt on top of the buttons');
   assert.equal((alert!.content as any).interactive.header.document.filename, `Receipt-${order.ref}.pdf`);
   assert.match((await doc('outbox', `${fx.a.id}_first_sale`)).text, /🎉 You just made your first sale on Relay: ₦1,0[\d.,]*! Your money is safe in your Relay wallet[\s\S]*Reply \*VERIFY\*/);
-  assert.match((await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'verify' }))[0].text, /verification for withdrawals is opening very soon/);
+  assert.match((await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: 'verify' }))[0].text, /Let's verify your account so you can withdraw[\s\S]*1 of 4/);
   const again = await bot.send('admin', { from: fx.a.ownerPhone.slice(1), text: `receipt ${order.ref}` });
   assert.equal((again[0].content as { type: string }).type, 'document');
   assert.match(again[0].text, new RegExp(`Receipt for ${order.ref}`));

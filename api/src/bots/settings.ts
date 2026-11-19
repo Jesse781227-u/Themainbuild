@@ -55,7 +55,7 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   }
 
   // Verification before the first withdrawal (KYC). TODO(jesse): the KYC flow (later phase).
-  if (/^(verify|verify me|verify account|kyc|withdraw|wallet|my wallet|payout|withdrawal)$/i.test(t)) {
+  if (false) { // wallet, verify and withdraw now live in bots/wallet-flow.ts
     await db.update(db.doc(C.businesses, business.id), { kycRequestedAt: new Date().toISOString() });
     return 'Thanks! Account verification for withdrawals is opening very soon, and you\'ll be among the first we message. Your money stays safe in your Relay wallet until then. Questions? Reply *CALL*.';
   }

@@ -26,6 +26,7 @@ import { listCategories } from '../services/catalog';
 import { helpFor, runTool, type AdminToolName, type ToolCtx } from './admin-tools';
 import { buttons, findProducts, list, sectionList } from './common';
 import { messagesMenu } from './messages-flow';
+import { payoutHistory, startVerify, startWithdraw, walletView } from './wallet-flow';
 import { handleShops } from './shops';
 import { startTest } from './test-mode';
 import type { AdminContext } from '../services/router';
@@ -259,6 +260,10 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'receipt', command: 'receipt', hint: 'Send the PDF receipt of a paid order again', menu: { section: 'Orders', title: 'Resend a receipt' }, aliases: ['receipt', 'receipts', 'resend receipt'], next: [['orders', "Today's orders"], ['menu', 'Menu']], run: receipt },
   // Money
   { id: 'sales', command: 'sales', hint: 'Sales today, this week and this month', menu: { section: 'Money', title: 'Sales report' }, aliases: ['sales', 'sales today', 'sales report', 'report', 'today', 'how much did i make', 'how much did i make today', 'how much have i made', 'how much did i sell today', 'how much have i sold today', 'how much i make today'], tool: { name: 'salesToday' }, next: [['owing', 'Who owes me'], ['orders', "Today's orders"], ['menu', 'Menu']], run: salesReport },
+  { id: 'wallet', command: 'wallet', hint: 'Your Relay wallet: balance, withdrawals and where payouts go', menu: { section: 'Money', title: 'Wallet' }, aliases: ['wallet', 'my wallet', 'balance', 'my balance'], run: walletView },
+  { id: 'withdraw', command: 'withdraw', hint: 'Send money from your wallet to your bank account, no fee', aliases: ['withdraw', 'withdrawal', 'payout', 'cash out'], run: startWithdraw },
+  { id: 'verify', hint: 'Verify your account once to withdraw', aliases: ['verify', 'verify me', 'verify account', 'kyc'], run: startVerify },
+  { id: 'payouts', hint: 'Your last withdrawals', aliases: ['payouts', 'payout history', 'withdrawals'], next: [['wallet', 'My wallet'], ['menu', 'Menu']], run: payoutHistory },
   { id: 'owing', command: 'owing', hint: 'Orders still waiting for payment', menu: { section: 'Money', title: 'Who owes me' }, aliases: ['owing', 'who owes me', 'unpaid', 'unpaid orders', 'awaiting payment', 'debtors'], tool: { name: 'listOrders', args: { filter: 'unpaid' } }, next: [['sales', 'Sales report'], ['orders', "Today's orders"], ['menu', 'Menu']], run: tool('listOrders', { filter: 'unpaid' }) },
   // Customers
   { id: 'customers', command: 'customers', hint: 'Your top customers: who buys most and what they like', menu: { section: 'Customers', title: 'Top customers' }, aliases: ['customers', 'my customers', 'top customers', 'customer list'], tool: { name: 'listCustomers', args: { sort: 'top' } }, next: [['campaign', 'Send a campaign'], ['menu', 'Menu']], run: tool('listCustomers', { sort: 'top' }) },

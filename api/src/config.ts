@@ -20,6 +20,8 @@ const schema = z.object({
   ADMIN_BOT_ACCESS_TOKEN: optionalString,
   // WhatsApp Flows (forms) for Add product, Hours and Delivery: off unless "true" and published in Meta.
   FLOWS_ENABLED: optionalString,
+  // The internal payout/KYC endpoints (routes/internal.ts) are off unless this is set (24+ characters).
+  OPS_API_KEY: z.string().min(24).optional().or(z.literal('').transform(() => undefined)),
   FLOW_ID_ADD_PRODUCT: optionalString,
   FLOW_ID_HOURS: optionalString,
   FLOW_ID_DELIVERY: optionalString,

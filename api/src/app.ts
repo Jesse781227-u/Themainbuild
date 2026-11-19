@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { internalRoutes } from './routes/internal';
 import { ZodError } from 'zod';
 import type { Env } from './env';
 import { log } from './lib/logger';
@@ -35,6 +36,7 @@ export function createApp(deps: { bachs?: BachsAdapter; fetch?: typeof fetch } =
   app.route('/health', health);
   app.route('/media', media);
   app.route('/api/v1/webhooks', webhooks(deps));
+  app.route('/api/v1/internal', internalRoutes()); // payouts and KYC checks by Relay's team; 404s unless OPS_API_KEY is set
   app.route('/dev', devRoutes(() => app)); // 404s unless RELAY_ENV=development with META_SEND_MODE=log
   app.route('/pay', payRoutes()); // simulated payment page; 404s unless PAYMENTS_MODE=simulated
   app.route('/receipts', receiptRoutes()); // PDF receipts for paid orders (private link)

@@ -78,6 +78,10 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     relayFeeKobo: order.feeKobo, merchantNetKobo: order.payAmountKobo - order.feeKobo,
   });
 
+  // The shop's wallet: available as soon as it's paid.
+  const net = order.payAmountKobo - order.feeKobo;
+  tx.set(db.doc(C.wallets, order.businessId), { businessId: order.businessId, availableKobo: increment(net), lifetimeInKobo: increment(net), updatedAt: at }, { merge: true });
+
   const date = lagosDate(new Date(at));
   tx.set(db.doc(C.dailyStats, `${order.businessId}_${date}`), {
     businessId: order.businessId, date, ordersPaid: increment(1), salesKobo: increment(order.subtotalKobo),

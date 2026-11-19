@@ -17,20 +17,19 @@ const rows = (m: { content: unknown }) => ((m.content as { interactive: { action
 
 test('commands: the registry makes a valid WhatsApp command list, and a bad entry stops the sync', () => {
   const p = commandsPayload();
-  assert.deepEqual(p.commands.map(c => c.command_name), ['menu', 'add', 'products', 'soldout', 'orders', 'receipt', 'sales', 'owing', 'customers', 'status', 'campaign', 'hours', 'delivery', 'messages', 'close', 'switch', 'test', 'call']);
+  assert.deepEqual(p.commands.map(c => c.command_name), ['menu', 'add', 'products', 'soldout', 'orders', 'receipt', 'sales', 'wallet', 'withdraw', 'owing', 'customers', 'status', 'campaign', 'hours', 'delivery', 'messages', 'close', 'switch', 'test', 'call']);
   assert.ok(p.commands.length <= 30);
   for (const c of p.commands) { assert.match(c.command_name, /^[a-z0-9_]{1,32}$/); assert.ok(c.command_description.length <= 256); assert.doesNotMatch(c.command_description, /\p{Extended_Pictographic}/u); }
   assert.ok(p.prompts.length <= 4 && p.prompts.every(x => x.length <= 80));
-  assert.ok(!p.commands.some(c => c.command_name === 'wallet'), 'no wallet until there is one');
-  // Breaking a limit fails loudly.
+    // Breaking a limit fails loudly.
   for (const bad of [{ command: 'Sales-Report', hint: 'x' }, { command: 'promo', hint: 'Big sale 🎉' }, { command: 'long', hint: 'x'.repeat(257) }]) {
     ACTIONS.push({ id: 'bad', ...bad, run: async () => null });
     assert.throws(() => commandsPayload(), /COMMANDS_INVALID/);
     ACTIONS.pop();
   }
-  for (let i = 0; i < 13; i++) ACTIONS.push({ id: `x${i}`, command: `x${i}`, hint: 'x', run: async () => null });
+  for (let i = 0; i < 11; i++) ACTIONS.push({ id: `x${i}`, command: `x${i}`, hint: 'x', run: async () => null });
   assert.throws(() => commandsPayload(), /31 commands \(WhatsApp allows 30\)/);
-  ACTIONS.splice(ACTIONS.length - 13, 13);
+  ACTIONS.splice(ACTIONS.length - 11, 11);
 });
 
 test('commands: /sales, sales, "how much did I make today?", the menu row and the AI all give the same report', async () => {
@@ -124,7 +123,7 @@ test('sync: the command list goes to the Admin Bot number; Meta errors are repor
   const { syncCommands } = await import('../src/services/automation');
   const calls: { url: string; body: any; auth: string }[] = [];
   const ok = (async (url: string, init: RequestInit) => { calls.push({ url, body: JSON.parse(String(init.body)), auth: String((init.headers as Record<string, string>).authorization) }); return Response.json({ success: true }); }) as unknown as typeof fetch;
-  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 18, prompts: 4 });
+  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 20, prompts: 4 });
   assert.equal(calls[0].url, 'https://graph.facebook.com/v21.0/123/conversational_automation');
   assert.equal(calls[0].body.commands[0].command_name, 'menu');
   assert.deepEqual(calls[0].body.prompts, ['Set up my shop', 'See how Relay works', 'Talk to a person', 'Open my menu']);
