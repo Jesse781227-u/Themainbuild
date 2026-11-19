@@ -7,6 +7,7 @@ import type { Config } from '../config';
 import type { Firestore } from '../lib/firestore';
 import { log } from '../lib/logger';
 import type { InboundEvent } from './inbound';
+import { readOwner } from './owners';
 import { customerConversationId, recordAdminInbound, recordCustomerInbound } from './conversations';
 
 export interface AdminContext { db: Firestore; cfg: Config; event: InboundEvent; ownerPhone: string; businessId: string | null; conversationId: string }
@@ -23,7 +24,7 @@ export async function routeEvent(db: Firestore, cfg: Config, event: InboundEvent
   if (event.source === 'whatsapp' && cfg.ADMIN_BOT_PHONE_NUMBER_ID && event.accountId === cfg.ADMIN_BOT_PHONE_NUMBER_ID) {
     if (event.kind !== 'message') return 'ignored';
     const owner = await db.get(db.doc(C.ownerPhones, event.from));
-    const businessId = (owner?.businessId as string | undefined) ?? null;
+    const businessId = readOwner(owner)?.activeBusinessId ?? null;
     const conversationId = await recordAdminInbound(db, { ownerPhone: event.from, businessId, at: event.sentAt });
     await handlers.admin({ db, cfg, event, ownerPhone: event.from, businessId, conversationId });
     return 'admin';

@@ -18,6 +18,7 @@ import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Produc
 import { handleImport } from './catalog-import';
 import { handleMessageInput } from './messages-flow';
 import { handleCustomerChoice } from './customers';
+import { CALL, openTicket } from '../services/support';
 
 const CONFIRM_MINUTES = 10;
 
@@ -48,8 +49,15 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     return imageUrl;
   };
 
-  // ── Onboarding ──
+  // ── CALL: a real person, at any point ──
   const ob = normalise(conv.onboarding);
+  if (!choiceId && CALL.test(text.trim())) {
+    const stage = ob ? `${ob.stage}/${ob.step}` : business ? business.status : 'new';
+    await openTicket(db, cfg, deps, { ownerPhone: ctx.ownerPhone, businessId: business?.id ?? null, businessName: business?.name ?? null, stage, message: text });
+    return reply("Got it 👍 A real person from Relay will call or WhatsApp you shortly on this number. You can keep going here in the meantime.");
+  }
+
+  // ── Onboarding ──
   if (!business || ob) {
     if (business?.status === 'deleted') return;
     return handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo, input);

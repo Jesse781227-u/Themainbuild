@@ -15,6 +15,7 @@ import type { Env } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { adminConversationId, customerConversationId } from '../services/conversations';
 import { getSignupSession } from '../services/signup';
+import { readOwner } from '../services/owners';
 import { saveWhatsAppConnection } from '../services/whatsapp';
 import { DEV_MEDIA_PREFIX, devMediaKey } from '../bots/common';
 
@@ -68,7 +69,8 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
   r.get('/shop', async c => {
     const db = getDb(c.env);
     const owner = await db.get(db.doc(C.ownerPhones, `+${digits(c.req.query('owner'))}`));
-    const business = owner ? await db.get(db.doc(C.businesses, String(owner.businessId))) : null;
+    const active = readOwner(owner)?.activeBusinessId;
+    const business = active ? await db.get(db.doc(C.businesses, active)) : null;
     const conn = business ? await db.get(db.doc(C.whatsappConnections, String(business.id))) : null;
     if (business && conn?.status === 'connected') return c.json({ shop: { botNumber: String(conn.phoneNumberId), name: String(business.name), photoUrl: business.profilePhotoUrl ?? null } });
     const latest = (await db.query(C.whatsappConnections, [['status', '==', 'connected']])).sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];

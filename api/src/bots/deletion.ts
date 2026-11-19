@@ -5,6 +5,7 @@
 import { C } from '../db';
 import type { Firestore } from '../lib/firestore';
 import { randomId } from '../lib/crypto';
+import { removeShop } from '../services/owners';
 
 export const deletionCode = () => 'DEL-' + randomId(6).toUpperCase().replace(/[^A-Z0-9]/g, 'X');
 
@@ -33,11 +34,11 @@ export async function deleteOwnerData(db: Firestore, businessId: string, ownerPh
   for (const a of accounts) batch.delete(db.doc(C.channelAccounts, a._id));
   batch.delete(db.doc(C.whatsappConnections, businessId));
   batch.delete(db.doc(C.instagramConnections, businessId));
-  batch.delete(db.doc(C.ownerPhones, ownerPhone));
   // The admin conversation itself is deleted by the Admin Bot after it sends the confirmation.
   batch.update(db.doc(C.businesses, businessId), { status: 'deleted', ownerPhone: null, paymentDetails: null, deletedAt: new Date().toISOString() });
   batch.set(db.doc(C.deletionRequests, ref), { id: ref, kind: 'owner', businessId, status: 'done', at: new Date().toISOString() });
   await batch.commit();
+  await removeShop(db, ownerPhone, businessId); // other shops (branches) on this number stay
   await scrubInboundEvents(db, ownerPhone);
   return ref;
 }

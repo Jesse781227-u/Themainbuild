@@ -23,7 +23,7 @@ export function getDb(env: Record<string, unknown>): Firestore {
 // Collection names in one place. All collections are flat and every document carries businessId.
 export const C = {
   businesses: 'businesses',
-  ownerPhones: 'ownerPhones',           // id: owner E.164 → { businessId }
+  ownerPhones: 'ownerPhones',           // id: owner E.164 → { businessIds[], activeBusinessId, businessId (= active) }
   channelAccounts: 'channelAccounts',   // id: `${channel}_${accountId}` → which business a number/IG account belongs to
   whatsappConnections: 'whatsappConnections',
   instagramConnections: 'instagramConnections',
@@ -47,4 +47,7 @@ export const C = {
   inboundEvents: 'inboundEvents',
   deliveryZones: 'deliveryZones',
   deliveryBatches: 'deliveryBatches',
+  supportTickets: 'supportTickets',     // CALL from an owner
+  onboardingEvents: 'onboardingEvents', // step entered/completed, for drop-off analytics
+  testReceipts: 'testReceipts',         // TEST mode: pretend orders, never real ones
 } as const;

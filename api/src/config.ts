@@ -48,6 +48,10 @@ const schema = z.object({
   FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
   FEE_CAP_KOBO: z.coerce.number().int().min(0).default(200_000),
   HOLD_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(30),
+  // Relay's own support line: CALL from an owner alerts this number on the Admin Bot.
+  SUPPORT_PHONE: z.string().regex(/^\+\d{8,15}$/).default('+2349013406288'),
+  // The Terms version owners accept at signup (bump when /terms changes).
+  TERMS_VERSION: z.string().default('2026-11-19'),
   // How customers pay. "simulated": a test payment page (no real money) until Bachs is wired in;
   // "transfer": bank details in the chat. Never "simulated" in production.
   PAYMENTS_MODE: z.enum(['simulated', 'transfer']).optional(), // default: simulated, except transfer in production
