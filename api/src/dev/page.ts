@@ -71,6 +71,8 @@ header button { background: none; border: 0; color: inherit; padding: 8px; borde
 .first.me .bubble::before { right: -8px; background: linear-gradient(to bottom left, var(--out) 50%, transparent 50%); }
 .first.them .bubble::before { left: -8px; background: linear-gradient(to bottom right, var(--in) 50%, transparent 50%); }
 .bubble a { color: var(--link); }
+.bubble .react { position: absolute; right: 6px; bottom: -14px; background: var(--sheet, #fff); border-radius: 12px; padding: 1px 5px; font-size: 14px; line-height: 18px; box-shadow: var(--shadow); }
+.group.reacted { margin-bottom: 14px; }
 .bubble img { display: block; max-width: 100%; border-radius: 6px; margin: -2px -4px 4px; }
 .meta { float: right; margin: 6px 0 -4px 10px; font-size: 11px; color: var(--meta); display: inline-flex; align-items: center; gap: 3px; position: relative; top: 4px; }
 .meta svg { color: var(--tick); }
@@ -300,17 +302,33 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       if (!bot && CFG.role === 'customer') { log.appendChild(el('p', 'empty', state.noShop || 'Looking for your shop…')); return; }
       log.appendChild(el('p', 'empty', 'Say "hi" to ' + title + '.')); return;
     }
+    var reactions = {}, lastTyping = null, lastOut = null, shown = [];
+    list.forEach(function (m) {
+      var t = m.content && m.content.type;
+      if (t === 'reaction') reactions[m.content.messageId] = m.content.emoji;
+      else if (t === 'typing') lastTyping = m;
+      else { shown.push(m); if (m.direction === 'out') lastOut = m; }
+    });
     var prev = null;
-    list.forEach(function (m) { log.appendChild(bubble(m, !prev || prev.direction !== m.direction)); prev = m; });
+    shown.forEach(function (m) {
+      var g = bubble(m, !prev || prev.direction !== m.direction);
+      var emoji = m.messageId && reactions[m.messageId];
+      if (emoji) { var b = g.querySelector('.bubble'); if (b) { b.appendChild(el('span', 'react', emoji)); g.classList.add('reacted'); } }
+      log.appendChild(g); prev = m;
+    });
     log.scrollTop = log.scrollHeight;
+    // "typing…" from the server: after the latest reply, for up to 25 seconds (as on WhatsApp).
+    var since = lastTyping ? Date.now() - new Date(lastTyping.at).getTime() : Infinity;
+    if (lastTyping && (!lastOut || lastTyping.at > lastOut.at) && since < 25000) typing(true, 25000 - since);
+    else if (lastOut && (!lastTyping || lastOut.at >= lastTyping.at)) typing(false);
   }
 
-  function typing(on) {
+  function typing(on, ms) {
     state.waiting = on;
     clearTimeout(state.waitTimer);
     $('sub').textContent = on ? 'typing…' : CFG.subtitle;
     $('sub').className = on ? 'typing' : '';
-    if (on) state.waitTimer = setTimeout(function () { typing(false); }, 8000);
+    if (on) state.waitTimer = setTimeout(function () { typing(false); }, ms || 25000);
   }
 
   // Customer tab: the shop belongs to whoever is signing up in the owner tab (same browser).
@@ -338,7 +356,6 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       if (list.length !== state.count) {
         var grew = list.length > state.count && state.count >= 0;
         state.count = list.length; render(list);
-        if (grew && list[list.length - 1].direction === 'out') typing(false);
       }
     }).catch(function () {});
   }
@@ -348,7 +365,6 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: bot, phone: phone, text: text, choice: choice, name: profile() }) })
       .then(function () { poll(); })
       .catch(function () { alertNote('Could not reach the local server. Is npm run dev running?'); });
-    typing(true);
     $('text').value = ''; fab();
   }
 
@@ -388,7 +404,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     reader.onload = function () {
       var data = String(reader.result).split(',')[1] || '';
       var caption = $('text').value.trim();
-      $('text').value = ''; fab(); typing(true);
+      $('text').value = ''; fab();
       post('/dev/upload', { botNumber: bot, phone: phone, name: profile(), filename: file.name, mimeType: file.type || 'application/octet-stream', data: data, caption: caption })
         .then(function (res) { if (!res.success) alertNote('Upload failed: ' + ((res.error && res.error.message) || res.status)); poll(); })
         .catch(function () { alertNote('Could not reach the local server.'); });

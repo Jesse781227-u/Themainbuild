@@ -73,6 +73,8 @@ export class FakeTransport implements Transport {
   sent: { phoneNumberId: string; to: string; content: OutboundContent; channel: 'whatsapp' | 'instagram' }[] = [];
   async sendWhatsApp(sender: { phoneNumberId: string }, to: string, content: OutboundContent) { this.sent.push({ phoneNumberId: sender.phoneNumberId, to, content, channel: 'whatsapp' }); return { messageId: `wamid.${this.sent.length}` }; }
   async sendInstagram(sender: { igAccountId: string }, to: string, text: string) { this.sent.push({ phoneNumberId: sender.igAccountId, to, content: { type: 'text', text }, channel: 'instagram' }); return { messageId: `ig.${this.sent.length}` }; }
+  typing: string[] = [];
+  async markTyping(_sender: { phoneNumberId: string }, messageId: string) { this.typing.push(messageId); }
 }
 
 // Drives the real bots end to end: a signed Meta webhook (built by the simulator script) goes
@@ -85,7 +87,7 @@ export class Bot {
     const res = await postMeta(buildPayload(kind, { from: o.from, to: o.to ?? ADMIN_PNID, text: o.text ?? '', choice: o.choice, name: o.name }));
     if (res.status !== 200) throw new Error(`webhook returned ${res.status}`);
     await this.drain();
-    return this.transport.sent.slice(before).map(m => ({ ...m, text: toText(m.content), options: optionIds(m.content) }));
+    return this.transport.sent.slice(before).filter(m => m.content.type !== 'reaction').map(m => ({ ...m, text: toText(m.content), options: optionIds(m.content) }));
   }
   async drain() {
     for (let i = 0; i < 10 && env.EVENTS.sent.length; i++) {

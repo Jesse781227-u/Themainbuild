@@ -16,7 +16,8 @@ export type OutboundContent =
   | { type: 'image'; link: string; caption?: string }
   | { type: 'document'; link: string; filename: string; caption?: string }
   | { type: 'interactive'; interactive: Record<string, unknown> }
-  | { type: 'template'; name: string; language: string; components?: unknown[] };
+  | { type: 'template'; name: string; language: string; components?: unknown[] }
+  | { type: 'reaction'; messageId: string; emoji: string }; // an emoji on the person's message ('' removes it)
 
 export function windowOpen(lastInboundAt: string | null | undefined, now = new Date()) {
   if (!lastInboundAt) return false;
@@ -33,6 +34,8 @@ export interface InstagramSender { igAccountId: string; accessToken: string }
 export interface Transport {
   sendWhatsApp(sender: Sender, toE164: string, content: OutboundContent): Promise<{ messageId: string }>;
   sendInstagram(sender: InstagramSender, recipientId: string, text: string): Promise<{ messageId: string }>;
+  // Marks their message read and shows "typing…" until we reply (up to 25 seconds).
+  markTyping(sender: Sender, messageId: string): Promise<void>;
 }
 
 // Interactive messages as plain text, for Instagram (and logs). Options are numbered in the same
@@ -52,6 +55,7 @@ export function toText(content: OutboundContent): string {
   if (content.type === 'image') return [content.caption, content.link].filter(Boolean).join(NEWLINE);
   if (content.type === 'document') return [content.caption, `${content.filename}: ${content.link}`].filter(Boolean).join(NEWLINE);
   if (content.type === 'template') return `[template ${content.name}]`;
+  if (content.type === 'reaction') return content.emoji ? `[reacted ${content.emoji}]` : '[reaction removed]';
   // A link button (e.g. "Pay ₦3,030"): text plus the link, for Instagram and logs.
   if (content.type === 'interactive' && (content.interactive as { type?: string }).type === 'cta_url') {
     const i = content.interactive as { body?: { text?: string }; action?: { parameters?: { display_text?: string; url?: string } } };
@@ -77,6 +81,7 @@ export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION' | 'INSTAGR
         ? { name: (rest as { name: string }).name, language: { code: (rest as { language: string }).language }, ...((rest as { components?: unknown[] }).components ? { components: (rest as { components?: unknown[] }).components } : {}) }
         : type === 'text' ? { body: (rest as { text: string }).text, preview_url: false }
         : type === 'image' || type === 'document' ? rest
+        : type === 'reaction' ? { message_id: (rest as { messageId: string }).messageId, emoji: (rest as { emoji: string }).emoji }
         : (rest as { interactive: unknown }).interactive;
       const res = await doFetch(`https://graph.facebook.com/${cfg.META_GRAPH_VERSION}/${sender.phoneNumberId}/messages`, {
         method: 'POST',
@@ -86,6 +91,14 @@ export function graphTransport(cfg: Pick<Config, 'META_GRAPH_VERSION' | 'INSTAGR
       const json = (await res.json().catch(() => ({}))) as { messages?: { id: string }[]; error?: { code?: number; message?: string } };
       if (!res.ok || !json.messages?.[0]?.id) throw new Error(`META_SEND_FAILED: ${res.status} ${json.error?.code ?? ''}`.trim());
       return { messageId: json.messages[0].id };
+    },
+    async markTyping(sender, messageId) {
+      const res = await doFetch(`https://graph.facebook.com/${cfg.META_GRAPH_VERSION}/${sender.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${sender.accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: messageId, typing_indicator: { type: 'text' } }),
+      });
+      if (!res.ok) throw new Error(`META_TYPING_FAILED: ${res.status}`);
     },
     // TODO(jesse): verify against the approved Instagram messaging setup (see INSTAGRAM_GRAPH_HOST).
     async sendInstagram(sender, recipientId, text) {
@@ -107,6 +120,7 @@ export function logTransport(): Transport {
   return {
     async sendWhatsApp(sender, to, content) { console.log(`[send:log] whatsapp ${sender.phoneNumberId} → ${maskPhone(to)}\n${toText(content)}`); return { messageId: `log.${++n}` }; },
     async sendInstagram(sender, to, text) { console.log(`[send:log] instagram ${sender.igAccountId} → ${to}\n${text}`); return { messageId: `log.${++n}` }; },
+    async markTyping() { /* shown in the /dev chat via devMessages */ },
   };
 }
 

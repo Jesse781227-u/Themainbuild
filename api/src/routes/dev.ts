@@ -34,8 +34,8 @@ export const isDevChat = (cfg: Pick<Config, 'RELAY_ENV' | 'META_SEND_MODE'>) => 
 
 type Upload = { mediaId: string; kind: 'image' | 'document'; mimeType: string; filename: string; caption: string };
 
-function payload(o: { botNumber: string; from: string; text: string; choice?: Choice; upload?: Upload; name?: string }) {
-  const id = `wamid.dev.${crypto.randomUUID()}`;
+function payload(o: { botNumber: string; from: string; text: string; choice?: Choice; upload?: Upload; name?: string; id: string }) {
+  const id = o.id;
   const timestamp = String(Math.floor(Date.now() / 1000));
   const u = o.upload;
   const message = u
@@ -110,8 +110,9 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     if (!text) return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Type a message.' } }, 400);
     const db = getDb(c.env);
     const at = new Date().toISOString();
-    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: 'text', text }, at });
-    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text, choice: body.choice, name: profileName(body.name) }));
+    const wamid = `wamid.dev.${crypto.randomUUID()}`;
+    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: 'text', text }, messageId: wamid, at });
+    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text, choice: body.choice, name: profileName(body.name), id: wamid }));
     const req = new Request(new URL('/api/v1/webhooks/meta', c.req.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${hmacSha256Hex(cfg.META_APP_SECRET ?? '', raw)}` }, body: raw });
     let ctx: ExecutionContext | undefined;
     try { ctx = c.executionCtx; } catch { ctx = undefined; }
@@ -135,8 +136,9 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     const upload: Upload = { mediaId, kind: /^image\/(jpeg|png|webp)$/.test(mimeType) ? 'image' : 'document', mimeType, filename: String(body.filename ?? 'file').slice(0, 120), caption: String(body.caption ?? '').slice(0, 1000) };
     const db = getDb(c.env);
     const at = new Date().toISOString();
-    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: upload.kind === 'image' ? 'image' : 'document', link: `/dev/media/${mediaId}`, filename: upload.filename, caption: upload.caption }, at });
-    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text: '', upload, name: profileName(body.name) }));
+    const wamid = `wamid.dev.${crypto.randomUUID()}`;
+    await db.set(db.doc(C.devMessages, `${at}_${crypto.randomUUID()}`), { phone: `+${from}`, botNumber: body.botNumber, direction: 'in', content: { type: upload.kind === 'image' ? 'image' : 'document', link: `/dev/media/${mediaId}`, filename: upload.filename, caption: upload.caption }, messageId: wamid, at });
+    const raw = JSON.stringify(payload({ botNumber: body.botNumber, from, text: '', upload, name: profileName(body.name), id: wamid }));
     const req = new Request(new URL('/api/v1/webhooks/meta', c.req.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': `sha256=${hmacSha256Hex(cfg.META_APP_SECRET ?? '', raw)}` }, body: raw });
     let ctx: ExecutionContext | undefined;
     try { ctx = c.executionCtx; } catch { ctx = undefined; }
@@ -160,7 +162,7 @@ export function devRoutes(getApp: () => { fetch: (req: Request, env: Env, ctx?: 
     const db = getDb(c.env);
     const rows = (await db.query(C.devMessages, [['phone', '==', phone]])).filter(m => m.botNumber === botNumber);
     rows.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    return c.json(rows.map(m => ({ direction: m.direction, content: m.content, at: m.at })));
+    return c.json(rows.map(m => ({ direction: m.direction, content: m.content, at: m.at, messageId: m.messageId ?? null })));
   });
 
   // "Clear chat": forget the messages and the bot's memory of this chat (cart, signup step).

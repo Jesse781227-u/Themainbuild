@@ -26,6 +26,7 @@ import type { ShopContext } from '../services/router';
 import type { LLMProvider, ToolChoice, ToolSpec } from '../services/ai';
 import { buttons, findProducts, list, notifyOwner, NO, readInput, transcribeVoice, YES, type BotDeps } from './common';
 import { deleteShopperData, deletionCode } from './deletion';
+import { react, showTyping, slowJob } from '../services/presence';
 
 const CART_HOURS = 24;
 
@@ -61,6 +62,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (conv.mode === 'owner') return; // the owner is handling this chat until they hand back
 
   const to = ctx.event.from;
+  if (!ctx.test && ctx.event.source === 'whatsapp') await showTyping(db, cfg, deps.transport, sender, to, ctx.event.messageId);
   const state: ShopState = conv.shop ?? { step: 'browse' };
   const setState = (s: ShopState | null) => db.set(db.doc(C.conversations, conversationId), { shop: s }, { merge: true });
   const reply = async (content: OutboundContent | string, next?: ShopState) => {
@@ -75,7 +77,8 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   let text = input.text;
   if (input.audioId) {
     const token = ctx.event.source === 'whatsapp' ? await resolveSender(db, cfg, { businessId }).then(s => s.accessToken).catch(() => null) : null;
-    const heard = token ? await transcribeVoice(cfg, deps, token, input.audioId) : null;
+    const reactTo = (emoji: string) => react(db, cfg, deps.transport, { from: sender, conversationId, to, messageId: ctx.event.messageId, emoji });
+    const heard = token ? await slowJob(() => transcribeVoice(cfg, deps, token, input.audioId!), { react: reactTo, ok: r => !!r }) : null;
     if (!heard) return reply("Sorry, I couldn't play that voice note. Please type your message.");
     text = heard;
   }

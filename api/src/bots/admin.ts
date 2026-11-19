@@ -19,6 +19,7 @@ import { handleImport } from './catalog-import';
 import { handleMessageInput } from './messages-flow';
 import { handleCustomerChoice } from './customers';
 import { CALL, openTicket } from '../services/support';
+import { react, showTyping, slowJob } from '../services/presence';
 import { getOwner, switchShop } from '../services/owners';
 import { exitTest, runTest, startTest, TEST_EXIT, TEST_START } from './test-mode';
 import { handleSettings } from './settings';
@@ -42,11 +43,13 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const reply = (content: OutboundContent | string) => send(db, cfg, deps.transport, { from: { adminBot: true }, conversationId: ctx.conversationId, to: ctx.ownerPhone, content: typeof content === 'string' ? { type: 'text', text: content } : content });
   const convRef = db.doc(C.conversations, ctx.conversationId);
   const conv = ((await db.get(convRef)) ?? {}) as AdminConversation;
+  await showTyping(db, cfg, deps.transport, { adminBot: true }, ctx.ownerPhone, ctx.event.messageId);
+  const reactTo = (emoji: string) => react(db, cfg, deps.transport, { from: { adminBot: true }, conversationId: ctx.conversationId, to: ctx.ownerPhone, messageId: ctx.event.messageId, emoji });
 
   const input = readInput(ctx.event);
   let text = input.text;
   if (input.audioId) {
-    const heard = cfg.ADMIN_BOT_ACCESS_TOKEN ? await transcribeVoice(cfg, deps, cfg.ADMIN_BOT_ACCESS_TOKEN, input.audioId) : null;
+    const heard = cfg.ADMIN_BOT_ACCESS_TOKEN ? await slowJob(() => transcribeVoice(cfg, deps, cfg.ADMIN_BOT_ACCESS_TOKEN!, input.audioId!), { react: reactTo, ok: r => !!r }) : null;
     if (!heard) return reply("Sorry, I couldn't listen to that voice note. Please type it instead.");
     text = heard;
   }
@@ -87,7 +90,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     if (ob?.businessId && ob.businessId !== business?.id) business = (await db.get(db.doc(C.businesses, ob.businessId))) as Business | null;
     else if (ob?.adding && !ob.businessId) business = null;
     if (business?.status === 'deleted') return;
-    const res = await handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply }, text, choiceId, photo, input);
+    const res = await handleOnboarding({ ctx, deps, business, ob: ob ?? firstOnboarding(), state, reply, react: reactTo }, text, choiceId, photo, input);
     if (res !== 'pass' || !business) return;
   }
   business = business!;
@@ -95,7 +98,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
 
   // ── A whole menu / price list (PDF, photo or pasted list), and its Add all / Cancel ──
-  const imported = await handleImport(flow, input, text, cfg.ADMIN_BOT_ACCESS_TOKEN, reply);
+  const imported = await handleImport(flow, input, text, cfg.ADMIN_BOT_ACCESS_TOKEN, reply, reactTo);
   if (imported) { for (const o of imported.out) await reply(o); return; }
 
   // ── Product follow-ups (category picker, Correct/Edit, new category name) ──

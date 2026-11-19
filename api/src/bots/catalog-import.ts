@@ -14,6 +14,7 @@ import { formatKobo, nairaToKobo } from '../lib/money';
 import { CATALOG_MIME, MAX_CATALOG_BYTES, type CatalogItem } from '../services/ai';
 import { createCategories, createProduct, findCategory, listCategories, listProducts, tidyCategoryName } from '../services/catalog';
 import { buttons, fetchMedia, type Input } from './common';
+import { slowJob } from '../services/presence';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
@@ -167,7 +168,7 @@ export interface ImportResult { out: Out[]; created: number }
 
 // Handles anything that looks like a whole menu, plus the Add all / Cancel taps. Returns null when the
 // message isn't a bulk upload, so the caller carries on as usual.
-export async function handleImport(f: FlowCtx, input: Input, text: string, accessToken: string | undefined, notify: (o: Out) => Promise<unknown>): Promise<ImportResult | null> {
+export async function handleImport(f: FlowCtx, input: Input, text: string, accessToken: string | undefined, notify: (o: Out) => Promise<unknown>, react?: (emoji: string) => Promise<unknown>): Promise<ImportResult | null> {
   if (input.choiceId === 'imp:all') return apply(f);
   if (input.choiceId === 'imp:cancel') { await saveDraft(f, null); return { out: ['Cancelled. Nothing was added.'], created: 0 }; }
   if (input.choiceId) return null;
@@ -212,7 +213,12 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     const photos = mimeType === 'application/pdf' ? await extractPdfImages(media.bytes, MAX_PHOTOS).catch(() => []) : [];
     const photoUrls = await storePhotos(f, photos);
     // The products first (fast); the photos are matched to them in the background (slow).
-    const raw = await f.deps.llm.readCatalog({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats });
+    const llm = f.deps.llm;
+    const raw = await slowJob(() => llm.readCatalog!({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats }), {
+      react,
+      ok: r => r.length > 0,
+      stillWorking: () => notify(`Still reading your ${input.document ? 'file' : 'photo'}… ${input.document ? 'it\'s a big one, ' : ''}almost there.`),
+    });
     const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f));
     if (!items.length) {
       return { out: [input.imageId && !input.document

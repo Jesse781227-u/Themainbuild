@@ -88,7 +88,7 @@ export function normalise(raw: unknown): Onboarding | null {
 
 export const firstOnboarding = (opts: { adding?: boolean } = {}): Onboarding => ({ stage: 'basics', step: 'shop_name', ...(opts.adding ? { adding: true, welcomed: true } : {}) });
 
-interface Ctx { ctx: AdminContext; deps: BotDeps; business: Business | null; ob: Onboarding; state: ProductFlowState; reply: (c: Out) => Promise<unknown> }
+interface Ctx { ctx: AdminContext; deps: BotDeps; business: Business | null; ob: Onboarding; state: ProductFlowState; reply: (c: Out) => Promise<unknown>; react?: (emoji: string) => Promise<unknown> }
 
 // Returns 'pass' when the message isn't for onboarding (after go-live), so the Admin Bot handles it.
 export async function handleOnboarding(c: Ctx, text: string, choiceId: string | null, imageUrl: () => Promise<string | null>, input?: Input): Promise<unknown> {
@@ -118,7 +118,7 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     if (!c.business && menuish) await createShop(c, null);
     if (c.business) {
       const photosId = c.state.importDraft?.photosId ?? null;
-      const imported = await handleImport(flowFor(c), input!, text, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, c.reply);
+      const imported = await handleImport(flowFor(c), input!, text, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, c.reply, c.react);
       if (imported?.created && photosId) await setOb(c, { photosId });
       if (imported) {
         await sendAll(c, imported.out);
