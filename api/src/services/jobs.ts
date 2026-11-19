@@ -9,6 +9,7 @@ import { findStuckOutbox } from './outbox';
 import { enqueue } from './queue';
 import { connectReminders, dayTwoNudges } from './nudges';
 import { getConfig } from '../config';
+import { dueStatusReports } from './status-posts';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
 export const CRON_DAILY_SUMMARY = '0 19 * * *'; // 20:00 Africa/Lagos
@@ -27,7 +28,8 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const events = await findStuckEvents(db, now);
   const outbox = await findStuckOutbox(db, now);
   const reminders = await connectReminders(db, getConfig(env), now);
-  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
+  const statusReports = await dueStatusReports(db, now);
+  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders, ...statusReports].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
   if (released || events.length || outbox.length) log('info', 'sweep', { released, requeuedEvents: events.length, requeuedOutbox: outbox.length });
   return { released, requeuedEvents: events.length, requeuedOutbox: outbox.length };
 }

@@ -14,6 +14,7 @@ import { send, optionIds, resolveSender, type OutboundContent } from '../service
 import { listCategories, listProducts } from '../services/catalog';
 import { categoryCarousel, productCarousel, productDetails, suggestionMessage } from './product-cards';
 import { suggestFor } from '../services/suggestions';
+import { noteInterest } from '../services/status-posts';
 import { DEFAULT_MESSAGES, fill, renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { byPriority, listZones, quoteDelivery } from '../services/delivery';
@@ -185,6 +186,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
       const available = found.filter(p => p.available);
       if (available.length === 1) return addToCart(ctx, run, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
       const matches = available.length > 1 ? available : await search(db, businessId, asked);
+      if (matches.length) { await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`)); }
       if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
       return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
     }
@@ -255,6 +257,7 @@ async function firstMessage(ctx: ShopContext, run: Run, business: Business, cust
     const exact = (await findProducts(ctx.db, business.id, wanted)).filter(p => p.available);
     const matches = exact.length ? exact : await search(ctx.db, business.id, wanted);
     if (matches.length) {
+      await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`));
       await sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `"${wanted.slice(0, 30)}"`, key: 'all', intro: welcome }));
       return true;
     }
@@ -334,6 +337,7 @@ async function greet(ctx: ShopContext, business: Business, customer: Customer | 
 }
 
 async function showCategory(ctx: ShopContext, business: Business, key: string, reply: Reply, page = 0) {
+  if (key !== 'all' && !page) await interest(ctx, [`c_${key}`]);
   const products = await visible(ctx.db, business.id);
   const cat = key === 'all' ? null : (await listCategories(ctx.db, business.id)).find(c => c.id === key);
   if (key !== 'all' && !cat) return reply(buttons('That section is no longer available.', [['menu', 'Back to menu']]));
@@ -343,6 +347,7 @@ async function showCategory(ctx: ShopContext, business: Business, key: string, r
 }
 
 async function showProduct(ctx: ShopContext, business: Business, productId: string, reply: Reply) {
+  await interest(ctx, [`p_${productId}`]);
   const p = (await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
   return sendAll(reply, productDetails(ctx.cfg, p));
@@ -383,7 +388,11 @@ async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {
   return cart && cart.expiresAt > new Date().toISOString() && cart.businessId === ctx.businessId ? cart : null;
 }
 
+// What this customer looked at or asked about, for Status mentions (ids only; never in TEST mode).
+const interest = (ctx: ShopContext, keys: string[]) => (ctx.test ? Promise.resolve() : noteInterest(ctx.db, ctx.conversationId, ctx.businessId, keys).catch(e => log('warn', 'interest_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 80) })));
+
 async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply) {
+  await interest(ctx, [`p_${productId}`]);
   const { db } = ctx;
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));

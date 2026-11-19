@@ -15,6 +15,7 @@ export const BUSINESS_TYPES: { id: BusinessCategory; label: string; starters: st
 export interface Business {
   id: string; name: string; category: BusinessCategory;
   ownerName?: string | null; city?: string | null; area?: string | null;
+  statusTips?: boolean; lastStatusTipDate?: string | null; // "Make a Status?" tips (on unless false), at most one a day
   pausedUntil?: string | null;                       // PAUSE: no orders until then (ISO), or 'open' until they reopen
   address?: string | null; landmark?: string | null; // street/building and a landmark: where pickup customers go
   profilePhotoUrl?: string | null;    // the shop's logo/photo (R2); pushed to the WhatsApp profile once connected

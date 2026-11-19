@@ -15,6 +15,7 @@ import { buttons, list, type BotDeps } from './common';
 import { parseProductLine } from './intent';
 import { productCarousel } from './product-cards';
 import { matchProduct, titleCase } from '../services/match';
+import { suggestStatus } from '../services/status-tips';
 
 export interface ProductDraft { name: string; priceKobo: number; stock: number | null; imageUrl: string | null }
 export interface ProductFlowState {
@@ -63,6 +64,7 @@ async function ensureCategories(f: FlowCtx) {
 async function create(f: FlowCtx, d: ProductDraft, cat: Category, opts: { sayNew?: boolean } = {}): Promise<Out[]> {
   const p = await createProduct(f.db, { businessId: f.business.id, name: titleCase(d.name), priceKobo: d.priceKobo, stock: d.stock, categoryId: cat.id, images: d.imageUrl ? [d.imageUrl] : [] });
   await save(f, { productDraft: null, awaiting: null, matchIds: null });
+  await suggestStatus(f.db, f.deps, f.business, { kind: 'new', name: p.name }, { productId: p.id }).catch(() => false);
   return [card(p, cat.name, opts.sayNew ? `Added new product *${p.name}* ${formatKobo(p.priceKobo)} in ${cat.name}.` : undefined)];
 }
 

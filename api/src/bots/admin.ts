@@ -144,9 +144,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     if (!matchAction(text)) return reply(withFollowUps(`Send the name and price together, e.g. *${example(business, await listProducts(db, business.id))}*.`, undefined));
     await setAwaiting(null);
   }
-  if (state.awaiting === 'campaign' && !choiceId && text.trim() && !matchAction(text)) {
+  if (state.awaiting?.startsWith('campaign') && !choiceId && text.trim() && !matchAction(text)) {
+    const statusPost = state.awaiting.startsWith('campaign:status:') ? state.awaiting.slice(16) : undefined;
     await setAwaiting(null);
-    return askOrRun('broadcast', { message: text.trim() });
+    return askOrRun('broadcast', { message: text.trim(), ...(statusPost ? { statusPost } : {}) });
   }
   if (state.awaiting?.startsWith('photo:') && input.imageId) {
     const id = state.awaiting.slice(6);

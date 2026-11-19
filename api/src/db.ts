@@ -51,4 +51,5 @@ export const C = {
   onboardingEvents: 'onboardingEvents', // step entered/completed, for drop-off analytics
   testReceipts: 'testReceipts',
   importPhotos: 'importPhotos',         // photos from an uploaded PDF, matched to products in the background         // TEST mode: pretend orders, never real ones
+  statusPosts: 'statusPosts',           // Status posts Relay prepared for an owner: picture, caption, who to mention, results
 } as const;

@@ -26,6 +26,7 @@ import { buttons, findProducts, list, type BotDeps } from './common';
 import { productCarousel } from './product-cards';
 import { matchProduct, nameScore } from '../services/match';
 import { example } from '../services/shop-type';
+import { suggestStatus } from '../services/status-tips';
 import { messagesMenu } from './messages-flow';
 import { customerList, findCustomer } from './customers';
 import { receiptFilename, receiptPath } from '../services/receipt';
@@ -53,6 +54,14 @@ const qty = z.coerce.number().int();
 const ref = z.string().trim().regex(/^RLY-[A-Z0-9]{5}$/i).transform(s => s.toUpperCase());
 
 class ToolError extends Error {}
+
+// The rest of a Status post's audience (the ones not mentioned), for a campaign to just them.
+async function statusAudience(ctx: ToolCtx, postId: string | undefined) {
+  if (!postId) return null;
+  const post = await ctx.db.get(ctx.db.doc(C.statusPosts, postId));
+  if (!post || post.businessId !== ctx.business.id) throw new ToolError("That Status post isn't there any more.");
+  return (post.wider as string[] | undefined) ?? [];
+}
 
 // Keeps each tool's argument types inferred from its own schema.
 const def = <S extends z.ZodTypeAny>(t: AdminTool<S>) => t;
@@ -128,6 +137,7 @@ export const adminTools = {
     async run(a, ctx) {
       const p = await oneProduct(ctx, a.product);
       await ctx.db.update(ctx.db.doc(C.products, p.id), { priceKobo: a.price, updatedAt: new Date().toISOString() });
+      if (a.price < p.priceKobo) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'price', name: p.name, fromKobo: p.priceKobo, toKobo: a.price }, { productId: p.id }).catch(() => false);
       return `${p.name} is now ${formatKobo(a.price)} (was ${formatKobo(p.priceKobo)}). Orders already placed keep their price.`;
     },
   }),
@@ -137,6 +147,7 @@ export const adminTools = {
     async run(a, ctx) {
       const p = await oneProduct(ctx, a.product);
       const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.quantity, 'restock', 'owner');
+      if (p.stock === 0 && n > 0) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'restock', name: p.name }, { productId: p.id }).catch(() => false);
       return `${p.name}: +${a.quantity}, now ${n} in stock.`;
     },
   }),
@@ -449,15 +460,16 @@ export const adminTools = {
   }),
   broadcast: def({
     spec: { name: 'broadcast', description: 'Send a promotional update to customers who opted in.', params: { message: { type: 'string', description: 'The message to send, in the owner\'s words' } }, required: ['message'] },
-    schema: z.object({ message: z.string().trim().min(5).max(700) }),
+    // statusPost: only the customers that Status post was aimed at (set by the Admin Bot, never the AI).
+    schema: z.object({ message: z.string().trim().min(5).max(700), statusPost: z.string().regex(/^[A-Za-z0-9]{6,20}$/).optional() }),
     async confirm(a, ctx) {
-      const q = await quoteBroadcast(ctx.db, ctx.cfg, ctx.business.id);
+      const q = await quoteBroadcast(ctx.db, ctx.cfg, ctx.business.id, await statusAudience(ctx, a.statusPost));
       if (!q) throw new ToolError('Broadcasts are not switched on yet. Send LINK to get a link you can share in your Status instead.');
       if (!q.audience) throw new ToolError("No customers have opted in to updates yet. Customers opt in by sending SUBSCRIBE to your number. Send LINK to get a link you can share in your Status.");
       return quoteText(q, a.message);
     },
     async run(a, ctx) {
-      const { outboxIds } = await createBroadcast(ctx.db, ctx.cfg, ctx.business, a.message);
+      const { outboxIds } = await createBroadcast(ctx.db, ctx.cfg, ctx.business, a.message, new Date(), await statusAudience(ctx, a.statusPost));
       await ctx.deps.enqueue(outboxIds.map(messageId => ({ kind: 'outbox' as const, messageId })));
       return `Sending to ${outboxIds.length} customer${outboxIds.length === 1 ? '' : 's'}. They can reply STOP to opt out.`;
     },

@@ -11,17 +11,19 @@ import type { Business } from '../domain/business';
 import type { Customer } from '../domain/commerce';
 import { customerConversationId } from './conversations';
 
-export async function broadcastAudience(db: Firestore, businessId: string) {
+// only: limit to these customers (e.g. the ones a Status post was aimed at); still opted-in only.
+export async function broadcastAudience(db: Firestore, businessId: string, only?: string[] | null) {
   const rows = (await db.query(C.customers, [['businessId', '==', businessId], ['marketingOptIn', '==', true]], { limit: 5000 })) as unknown as (Customer & { channel?: string })[];
   // WhatsApp only: Instagram has no marketing templates.
-  return rows.filter(c => c.phone && (c.channel ?? 'whatsapp') === 'whatsapp');
+  const keep = only ? new Set(only) : null;
+  return rows.filter(c => c.phone && (c.channel ?? 'whatsapp') === 'whatsapp' && (!keep || keep.has(c.id)));
 }
 
 export interface BroadcastQuote { audience: number; capped: boolean; costKobo: number; perMessageKobo: number }
 
-export async function quoteBroadcast(db: Firestore, cfg: Config, businessId: string): Promise<BroadcastQuote | null> {
+export async function quoteBroadcast(db: Firestore, cfg: Config, businessId: string, only?: string[] | null): Promise<BroadcastQuote | null> {
   if (!cfg.MARKETING_MESSAGE_COST_KOBO) return null;
-  const all = await broadcastAudience(db, businessId);
+  const all = await broadcastAudience(db, businessId, only);
   const audience = Math.min(all.length, cfg.BROADCAST_MAX_RECIPIENTS);
   // Upper bound: customers inside their 24-hour window may cost nothing, but we quote the maximum.
   return { audience, capped: all.length > audience, costKobo: audience * cfg.MARKETING_MESSAGE_COST_KOBO, perMessageKobo: cfg.MARKETING_MESSAGE_COST_KOBO };
@@ -30,8 +32,8 @@ export async function quoteBroadcast(db: Firestore, cfg: Config, businessId: str
 export const quoteText = (q: BroadcastQuote, message: string) =>
   `Send this to ${q.audience} customer${q.audience === 1 ? '' : 's'} who opted in${q.capped ? ' (the limit per broadcast)' : ''}?\n\n"${message}"\n\nEstimated Meta cost: up to ${formatKobo(q.costKobo)} (${formatKobo(q.perMessageKobo)} per message).`;
 
-export async function createBroadcast(db: Firestore, cfg: Config, business: Pick<Business, 'id' | 'name'>, message: string, now = new Date()) {
-  const recipients = (await broadcastAudience(db, business.id)).slice(0, cfg.BROADCAST_MAX_RECIPIENTS);
+export async function createBroadcast(db: Firestore, cfg: Config, business: Pick<Business, 'id' | 'name'>, message: string, now = new Date(), only?: string[] | null) {
+  const recipients = (await broadcastAudience(db, business.id, only)).slice(0, cfg.BROADCAST_MAX_RECIPIENTS);
   const id = randomId(9).replace(/[^A-Za-z0-9]/g, 'x');
   const at = now.toISOString();
   const text = `${message}\n\n${business.name}. Reply STOP to stop these messages.`;

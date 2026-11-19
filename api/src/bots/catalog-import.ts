@@ -17,6 +17,7 @@ import { createCategories, createProduct, findCategory, listCategories, listProd
 import { buttons, fetchMedia, type Input } from './common';
 import { slowJob } from '../services/presence';
 import { attachMatched, type ImportPhotos } from '../services/import-photos';
+import { suggestStatus } from '../services/status-tips';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
@@ -185,6 +186,9 @@ async function applyDraft(f: FlowCtx, draft: ImportDraft): Promise<{ out: Out[];
   const groups = new Map<string, ImportItem[]>();
   for (const it of draft.items) { const k = (findCategory(cats, it.category) ?? cats[0]).id; groups.set(k, [...(groups.get(k) ?? []), it]); }
   await Promise.all([...groups.values()].map(async items => { for (const it of items) await one(it); }));
+  // A Status tip for what's new (live shops, once a day).
+  const firstNew = draft.items.find(it => !byName.has(it.name.toLowerCase()));
+  if (created && firstNew) await suggestStatus(f.db, f.deps, f.business, { kind: 'new', name: firstNew.name, count: created }, { categoryId: (findCategory(cats, firstNew.category) ?? cats[0]).id }).catch(() => false);
   // The photos finished matching while these were being added: put them on now.
   if (photosRef && photoJob?.status === 'pending') {
     const now = (await f.db.get(photosRef)) as ImportPhotos | null;

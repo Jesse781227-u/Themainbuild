@@ -20,6 +20,7 @@ import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
+import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
 import { flowId, flowMessage } from '../services/flows';
 import { listCategories } from '../services/catalog';
 import { helpFor, runTool, type AdminToolName, type ToolCtx } from './admin-tools';
@@ -195,6 +196,52 @@ async function delivery(c: ActionCtx): Promise<Out> {
   return `${how}\n\nTo add or change one send e.g. *delivery zone Lekki, 1500, same day*.`;
 }
 
+// ── Status posts (services/status-posts.ts) ──
+async function makeStatus(c: ActionCtx): Promise<Out | Out[] | null> {
+  if (!c.arg) {
+    // What should it be about: the newest products, then the sections.
+    const products = (await listProducts(c.db, c.business.id)).filter(p => p.available && hasStock(p)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (!products.length) return 'Add a product first, then I can make a Status for it.';
+    const cats = (await listCategories(c.db, c.business.id)).filter(x => products.some(p => p.categoryId === x.id));
+    const rows = [
+      ...products.slice(0, cats.length > 1 ? 6 : 10).map(p => ({ id: `act:status:p:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })),
+      ...(cats.length > 1 ? cats.slice(0, 4).map(x => ({ id: `act:status:c:${x.id}`, title: `All of ${x.name}`, description: 'A Status for the whole section' })) : []),
+    ];
+    return list('What should the Status be about? I\'ll make the picture and pick the customers to mention.', 'Pick one', rows, 'Make a Status');
+  }
+  const [kind, id] = c.arg.split(':');
+  if (!id || !['p', 'c'].includes(kind)) return 'Send */status* to pick a product.';
+  const post = await prepareStatus(c.db, c.cfg, c.deps.images, c.business, kind === 'p' ? { productIds: [id], categoryId: null } : { productIds: [], categoryId: id });
+  if (!post) return 'That product or section isn\'t there any more. Send */status* to pick another.';
+  await c.reply({ type: 'image', link: post.imageUrl, caption: post.caption });
+  return [statusSteps(post), ...(post.wider.length ? [buttons(`${post.wider.length} more customer${post.wider.length === 1 ? '' : 's'} might like this. Send them a personal message instead? (Only those who opted in to updates; you'll see the cost first.)`, [[`act:stothers:${post.id}`, 'Yes, write it'], ['act:menu', 'No thanks']])] : [])];
+}
+
+function statusSteps(post: StatusPost): Out {
+  const n = post.suggestedMentions.length;
+  if (!n) return buttons('Here\'s your Status ☝️ Save the picture and post it to your Status with the caption.\n\nNo customers to mention for this yet. As people buy and browse, I\'ll suggest who to tag.', [[`act:stposted:${post.id}`, "I've posted it"], [`act:stskip:${post.id}`, 'Skip']]);
+  const names = post.suggestedMentions.map((m, i) => `${i + 1}. ${m.name} (…${m.phone.replace(/\D/g, '').slice(-4)})`).join('\n');
+  return buttons(`Here's your Status ☝️\n1. Save the picture.\n2. Post it to your Status with the caption.\n3. Before you post, tap *@* and add these ${n}:\n${names}\n\nOnly they get a notification, in their chat with you.`, [[`act:stposted:${post.id}`, "I've posted it"], [`act:stpeople:${post.id}`, 'Change people'], [`act:stskip:${post.id}`, 'Skip']]);
+}
+
+async function statusPost(c: ActionCtx, what: 'posted' | 'people' | 'skip' | 'others'): Promise<Out> {
+  const post = await loadPost(c.db, c.business.id, c.arg);
+  if (!post) return 'That Status isn\'t there any more. Send */status* to make a new one.';
+  if (what === 'posted') {
+    const first = await confirmPosted(c.db, post);
+    return first ? `🎉 Nice! I'll tell you tomorrow if any of the people you mentioned message or order.` : 'You already told me that one is posted 👍';
+  }
+  if (what === 'people') return post.ranking.length > MENTIONS ? statusSteps(await nextMentions(c.db, post)) : 'These are the only customers I can suggest for this right now.';
+  if (what === 'skip') { await c.db.update(c.db.doc(C.statusPosts, post.id), { status: 'skipped' }); return 'OK, skipped.'; }
+  await c.setAwaiting(`campaign:status:${post.id}`);
+  return `Type the message for those ${post.wider.length} customers, e.g. "${post.title} is here! Reply to order." You'll see how many opted in and the cost before anything is sent.`;
+}
+
+async function tips(c: ActionCtx, on: boolean): Promise<Out> {
+  await c.db.update(c.db.doc(C.businesses, c.business.id), { statusTips: on, updatedAt: new Date().toISOString() });
+  return on ? '✅ I\'ll suggest a Status when you add products, restock, or drop a price (at most once a day).' : '🔕 OK, no more Status tips. Send */status* any time to make one, or *status tips on* to get tips again.';
+}
+
 export const ACTIONS: OwnerAction[] = [
   { id: 'menu', command: 'menu', hint: 'Everything Relay can do for your shop, to tap', aliases: ['menu', 'main menu', 'options', 'home', 'start', 'open my menu', 'set up my shop'], run: c => menu(c) },
   { id: 'help', hint: 'Every command, with what it does', aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
@@ -215,6 +262,7 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'owing', command: 'owing', hint: 'Orders still waiting for payment', menu: { section: 'Money', title: 'Who owes me' }, aliases: ['owing', 'who owes me', 'unpaid', 'unpaid orders', 'awaiting payment', 'debtors'], tool: { name: 'listOrders', args: { filter: 'unpaid' } }, next: [['sales', 'Sales report'], ['orders', "Today's orders"], ['menu', 'Menu']], run: tool('listOrders', { filter: 'unpaid' }) },
   // Customers
   { id: 'customers', command: 'customers', hint: 'Your top customers: who buys most and what they like', menu: { section: 'Customers', title: 'Top customers' }, aliases: ['customers', 'my customers', 'top customers', 'customer list'], tool: { name: 'listCustomers', args: { sort: 'top' } }, next: [['campaign', 'Send a campaign'], ['menu', 'Menu']], run: tool('listCustomers', { sort: 'top' }) },
+  { id: 'status', command: 'status', hint: 'Make a WhatsApp Status for a product and see which customers to mention', menu: { section: 'Customers', title: 'Make a Status' }, aliases: ['status', 'make a status', 'make status', 'status post', 'post a status'], next: [['menu', 'Menu']], run: makeStatus },
   { id: 'campaign', command: 'campaign', hint: 'Send an update to customers who opted in; you see the cost first', menu: { section: 'Customers', title: 'Send a campaign' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign'],
     async run(c) { await c.setAwaiting('campaign'); return 'Type the message to send to your customers who opted in to updates. You\'ll see how many people and the cost before anything is sent.'; } },
   // Settings
@@ -232,7 +280,13 @@ export const ACTIONS: OwnerAction[] = [
     async run(c) { await startTest(c.admin, c.deps, c.business, c.reply); return null; } },
   { id: 'call', command: 'call', hint: 'A real person from Relay calls or WhatsApps you', menu: { section: 'Help', title: 'Talk to a person' }, aliases: ['call', 'call me', 'talk to a person', 'talk to someone', 'support'], next: [['menu', 'Menu']],
     async run(c) { await openTicket(c.db, c.cfg, c.deps, { ownerPhone: c.ownerPhone, businessId: c.business.id, businessName: c.business.name, stage: c.business.status, message: 'Asked from the menu' }); return 'Got it 👍 A real person from Relay will call or WhatsApp you shortly on this number.'; } },
-  // Not in the menu: the buttons on order alerts and after adding a product.
+  // Not in the menu: the buttons on order alerts, Status posts and after adding a product.
+  { id: 'stposted', hint: 'The Status is posted', next: [['status', 'Make another'], ['menu', 'Menu']], run: c => statusPost(c, 'posted') },
+  { id: 'stpeople', hint: 'Other customers to mention', run: c => statusPost(c, 'people') },
+  { id: 'stskip', hint: 'Skip this Status', next: [['menu', 'Menu']], run: c => statusPost(c, 'skip') },
+  { id: 'stothers', hint: 'Message the rest instead', run: c => statusPost(c, 'others') },
+  { id: 'tipsoff', hint: 'Stop Status tips', aliases: ['status tips off', 'status suggestions off', 'stop status tips'], next: [['status', 'Make a Status'], ['menu', 'Menu']], run: c => tips(c, false) },
+  { id: 'tipson', hint: 'Status tips again', aliases: ['status tips on', 'status suggestions on'], next: [['status', 'Make a Status'], ['menu', 'Menu']], run: c => tips(c, true) },
   { id: 'order', hint: 'One order in full', run: viewOrder },
   { id: 'msgcust', hint: 'Open the chat with an order\'s customer', run: messageCustomer },
   { id: 'ready', hint: 'Mark a paid order ready', next: [['pending', 'To deliver'], ['menu', 'Menu']], async run(c) { return runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c); } },
