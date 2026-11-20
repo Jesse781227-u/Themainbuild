@@ -49,13 +49,13 @@ export function PaymentMatch() {
   return (
     <div className="match" ref={ref}>
       <motion.div className="m-card" {...step(0)}><small>Order RLY-9QX4T asks for</small><b>₦12,500<span>.37</span></b><p>Every order gets its own exact amount.</p></motion.div>
-      <motion.div className="m-arrow" {...step(0.25)}>→</motion.div>
+      <motion.div className="m-arrow" {...step(0.25)}><span>→</span></motion.div>
       <motion.div className="m-card" {...step(0.4)}><small>The bank reports</small><b>₦12,500<span>.37</span> arrived</b><p>Straight from the payment partner, not from the customer.</p></motion.div>
-      <motion.div className="m-arrow" {...step(0.65)}>→</motion.div>
+      <motion.div className="m-arrow" {...step(0.65)}><span>→</span></motion.div>
       <motion.div className="m-card ok" {...step(0.8)}><small>Relay</small><b>Paid ✓</b><p>Receipt to the customer, alert to you, money in your wallet.</p></motion.div>
       <motion.div className="m-fake" {...step(1.1)}>
         <span className="m-x">✕</span>
-        <div><b>A screenshot, a forwarded alert, "I don pay"</b><p>None of these mark an order paid. Nothing ships until the money is really there.</p></div>
+        <div><b>A screenshot, a forwarded alert or an “I’ve paid” message</b><p>None of these mark an order paid. Nothing ships until the money arrives.</p></div>
       </motion.div>
     </div>
   );

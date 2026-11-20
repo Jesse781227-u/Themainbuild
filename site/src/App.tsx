@@ -29,27 +29,53 @@ function Rise({ children, delay = 0, className, as = 'div' }: { children: ReactN
   return <M className={className} initial={{ opacity: 0, y: 26 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.3 }} transition={{ duration: 0.8, delay, ease }}>{children}</M>;
 }
 
-// ── Top strip: the shop is open, whatever the time in Lagos ──
 function Strip() {
   const t = useLagosTime();
   return (
     <header className="strip">
       <div className="wrap strip-in">
         <a href="#top" className="brand"><Logo /><span>Relay</span></a>
-        <div className="open"><i />Lagos {t} · your shop is open</div>
+        <div className="open">{t} in Lagos</div>
         <a className="btn btn-ink sm" href={company.ctaHref}>Start free</a>
       </div>
     </header>
   );
 }
 
-// ── Opening: a statement and the shop's own products, not a template hero ──
+// Phones: a call to action that stays in reach after the opening, and steps aside for the closing one.
+function MobileCta() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const on = () => {
+      const y = window.scrollY, vh = window.innerHeight;
+      const close = document.querySelector('.close') as HTMLElement | null;
+      const day = document.querySelector('.day') as HTMLElement | null;
+      const end = close ? close.offsetTop - vh + 120 : Infinity;
+      const inDay = !!day && y > day.offsetTop - vh * 0.5 && y < day.offsetTop + day.offsetHeight - vh * 0.6;
+      setShow(y > 640 && y < end && !inDay);
+    };
+    on();
+    window.addEventListener('scroll', on, { passive: true });
+    return () => window.removeEventListener('scroll', on);
+  }, []);
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div className="m-cta" initial={{ y: 90 }} animate={{ y: 0 }} exit={{ y: 90 }} transition={{ duration: 0.3, ease }}>
+          <span><b>1%</b> per paid order</span>
+          <a className="btn btn-lime" href={company.ctaHref}>Open my shop</a>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function Opening() {
   const ref = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
   const drift = [useTransform(scrollYProgress, [0, 1], [0, -120]), useTransform(scrollYProgress, [0, 1], [0, -60]), useTransform(scrollYProgress, [0, 1], [0, -180]), useTransform(scrollYProgress, [0, 1], [0, -90])];
   const narrow = useViewport().w < 1000;
-  const lines = [['No website.', ''], ['No app.', ''], ['No missed', 'orders.']];
+  const lines = [['Take orders', ''], ['on WhatsApp', ''], ['while you', 'sleep.']];
   const cards = [
     { src: PHOTOS.ankaraTop, name: 'Ankara Off-shoulder Top', price: '₦18,500', note: 'Sold 02:13', cls: 'c1' },
     { src: PHOTOS.jollof, name: 'Jollof Rice + Chicken', price: '₦4,500', note: 'Paid ✓', cls: 'c2' },
@@ -69,13 +95,13 @@ function Opening() {
           ))}
         </h1>
         <motion.div className="op-side" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.8 }}>
-          <p>Relay runs your shop inside WhatsApp. It takes orders day and night, confirms only real payments, tells customers where their order is, and markets to your customers for you with Smart Reach.</p>
-          <p className="op-small">For food and fashion sellers who don't want to spend a month's sales on a website they don't need.</p>
+          <p>Relay answers your customers on WhatsApp day and night. It sells from your catalogue, marks an order paid only when the money arrives, and keeps buyers updated until delivery.</p>
+          <p className="op-small">Built for food and fashion sellers in Lagos who sell through DMs and don't need a website.</p>
           <div className="op-cta">
             <a className="btn btn-lime" href={company.ctaHref}>Open my shop free</a>
-            <a className="link" href="#day">Watch a day ↓</a>
+            <a className="link" href="#day">See a day of orders ↓</a>
           </div>
-          <div className="op-fee"><b>1%</b> only when you sell. Nothing upfront, nothing monthly.</div>
+          <div className="op-fee"><b>1%</b> per paid order. No setup or monthly fee.</div>
         </motion.div>
         <div className="op-cards" aria-hidden>
           {cards.map((c, i) => (
@@ -110,26 +136,26 @@ function Day() {
   const mobile = w < 900;
   const d = DEVICES[s.script.device];
   const ratio = (d.w + d.bezel * 2) / (d.h + d.bezel * 2);
-  const phoneW = Math.round(Math.min(mobile ? 280 : 330, (h - (mobile ? 280 : 110)) * ratio, w - 40));
+  const phoneW = Math.round(Math.min(mobile ? 290 : 330, (h - (mobile ? 300 : 110)) * ratio, w - 40));
   const jump = (k: number) => { const el = ref.current; if (!el) return; const top = el.offsetTop + (el.offsetHeight - h) * ((k + 0.5) / DAY.length); window.scrollTo({ top, behavior: 'smooth' }); };
   return (
-    <section className="day" id="day" ref={ref} style={{ height: `${DAY.length * 110}vh` }}>
+    <section className="day" id="day" ref={ref} style={{ height: `${DAY.length * (mobile ? 100 : 110)}vh` }}>
       <motion.div className={`day-pin${dark ? ' night' : ''}`} style={{ backgroundColor: sky }}>
         <motion.div className="sun" style={{ left: sunX, top: sunY }} aria-hidden><i className={dark ? 'moon' : ''} /></motion.div>
         <div className="wrap day-in">
           <div className="day-copy">
-            <span className="day-kicker">A day at two Lagos shops</span>
-            <div className="clock" aria-live="polite">
-              <AnimatePresence mode="popLayout">
-                <motion.span key={s.time} initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -40, opacity: 0 }} transition={{ duration: 0.45, ease }}>{s.time}</motion.span>
-              </AnimatePresence>
+            <div className="day-head">
+              <div className="clock" aria-live="polite">
+                <AnimatePresence mode="popLayout">
+                  <motion.span key={s.time} initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -40, opacity: 0 }} transition={{ duration: 0.45, ease }}>{s.time}</motion.span>
+                </AnimatePresence>
+              </div>
+              <span className="day-tag">{s.tag}</span>
             </div>
             <AnimatePresence mode="wait">
               <motion.div key={i} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4, ease }}>
-                <span className="day-tag">{s.tag}</span>
                 <h2>{s.title}</h2>
-                <p>{s.body}</p>
-                <small className="day-who">Shown: {s.who} · {s.script.device === 'android' ? 'Samsung Galaxy S24' : 'iPhone 15'} · example shops</small>
+                <p>{mobile ? s.short : s.body}</p>
               </motion.div>
             </AnimatePresence>
             <div className="hours">
@@ -140,7 +166,7 @@ function Day() {
           <div className="day-phone" style={{ width: phoneW }}>
             <AnimatePresence mode="wait">
               <motion.div key={i} initial={{ opacity: 0, y: 40, rotate: -2 }} animate={{ opacity: 1, y: 0, rotate: 0 }} exit={{ opacity: 0, y: -30, rotate: 2 }} transition={{ duration: 0.5, ease }}>
-                <Phone device={s.script.device} maxWidth={phoneW} label={`${s.who}'s phone at ${s.time}`}><Chat script={s.script} speed={1.25} loop={false} /></Phone>
+                <Phone device={s.script.device} maxWidth={phoneW} label={`${s.who}'s phone at ${s.time}`}><Chat script={s.script} speed={mobile ? 1.6 : 1.25} loop={false} /></Phone>
               </motion.div>
             </AnimatePresence>
           </div>
@@ -150,15 +176,15 @@ function Day() {
   );
 }
 
-// ── Talk to your shop: things owners actually type, and what happens ──
+// ── Talk to your shop: things owners type, and what happens ──
 const PHRASES: [string, string, string][] = [
-  ['jollof don finish', 'Marked sold out. Customers stop being offered it.', 'Undo for 10 min'],
+  ['jollof is finished', 'Marked sold out. Customers stop seeing it.', 'Undo for 10 min'],
   ['egusi restock 20', 'Back in stock with 20 plates.', 'Undo for 10 min'],
-  ['who never pay?', 'Every order still waiting for money, with amounts.', 'Instant'],
-  ['RLY-7PL2M don leave', 'Marked out for delivery. The customer is told.', 'Instant'],
-  ['price of zobo 1000', 'Shows the change and waits for your Confirm.', 'Asks first'],
-  ['remind people wey leave cart', 'Abandoned-cart reminders switched on.', 'Asks first'],
-  ['how far with sales this week?', 'This week vs last week, in one message.', 'Instant'],
+  ['who hasn’t paid?', 'Every unpaid order, with the amount owed.', 'Instant'],
+  ['RLY-7PL2M is out for delivery', 'Order updated. The customer gets a message.', 'Instant'],
+  ['zobo price 1000', 'Shows the new price and waits for your Confirm.', 'Asks first'],
+  ['remind people who left their cart', 'Turns on cart reminders.', 'Asks first'],
+  ['how far with sales this week?', 'This week against last week, in one message.', 'Instant'],
   ['withdraw 80k', 'Sends it to your bank after one Confirm.', 'Asks first'],
 ];
 function Phrasebook() {
@@ -166,8 +192,8 @@ function Phrasebook() {
     <section className="phrase">
       <div className="wrap">
         <Rise className="ph-head">
-          <h2>Manage the shop by <em>saying</em> it.</h2>
-          <p>No dashboard to learn. Type or send a voice note to Relay, in English or Pidgin. Anything touching prices, money or your customers' inboxes waits for your Confirm.</p>
+          <h2>Run the shop by <em>texting</em> it.</h2>
+          <p>Type or send a voice note to Relay in English or Pidgin. Price changes, withdrawals and messages to customers wait for your Confirm.</p>
         </Rise>
         <ul className="ph-list">
           {PHRASES.map(([say, does, how], k) => (
@@ -185,38 +211,37 @@ function Phrasebook() {
 
 // ── Smart Reach: WhatsApp marketing that targets and sends itself ──
 const REACH: [string, string, string][] = [
-  ['Back in stock', 'Sent to: everyone who asked for it.', 'Good news Amaka! The Ankara top is back in your size 🎉'],
-  ['Left in cart', 'Sent to: shoppers who stopped at checkout.', 'Your sneakers are still in your cart. 2 pairs left.'],
-  ['Price drop', 'Sent to: people who looked and didn’t buy.', 'The linen shirt you liked is now ₦12,000.'],
-  ['After delivery', 'Sent to: yesterday’s buyers, for the next order.', 'Hope you’re enjoying your top! Anything else you need?'],
-  ['Usual order', 'Sent to: regulars, when they normally buy.', 'It’s about time for your usual egusi. Same again?'],
-  ['Your own campaign', 'Say the offer and who gets it. Relay writes it, counts them and prices it.', '“tell my regulars 10% off this weekend”'],
+  ['Back in stock', 'Goes to everyone who asked for it.', 'Good news Amaka! The Ankara top is back in your size 🎉'],
+  ['Left in cart', 'Goes to shoppers who stopped at checkout.', 'Your sneakers are still in your cart. 2 pairs left.'],
+  ['Price drop', 'Goes to people who looked and didn’t buy.', 'The linen shirt you liked is now ₦12,000.'],
+  ['After delivery', 'Goes to yesterday’s buyers.', 'Hope you’re enjoying your top! Anything else you need?'],
+  ['Usual order', 'Goes to regulars when they normally reorder.', 'It’s about time for your usual egusi. Same again?'],
+  ['Your own campaign', 'Describe the offer and who gets it. Relay writes it and shows the reach and cost.', '“tell my regulars 10% off this weekend”'],
 ];
-const REACH_RULES = ['Targeted from real shopping, not a contact dump', 'Max 1 promo a week per customer', 'Never at night', 'One tap to unsubscribe', 'You approve the cost before anything paid goes out'];
+const REACH_RULES = ['Targeted by what they viewed and bought', 'At most 1 promo a week per customer', 'Nothing sent 9pm to 8am', 'Stop updates on every message'];
 function Reach() {
   return (
     <section className="reach" id="reach">
       <div className="wrap">
         <Rise className="rh-top">
-          <div>
-            <span className="kicker">Smart Reach · WhatsApp marketing</span>
-            <h2>Your marketing, <em>running</em> while you cook and pack.</h2>
-          </div>
-          <p>Smart Reach is a marketing tool built into your shop. It knows what every customer viewed, asked for, carted and bought, so each promo goes only to the people most likely to buy, in your shop's own voice. Turn on the campaigns you want and they run themselves.</p>
+          <h2>Smart Reach brings buyers <em>back</em>.</h2>
+          <p>Smart Reach is the marketing tool inside Relay. It knows what every customer viewed, asked for, carted and bought, and sends each promo only to the people likely to buy. Switch on the campaigns you want and they run on their own.</p>
         </Rise>
-        <ul className="rh-grid">
-          {REACH.map(([name, who, say], k) => (
-            <Rise as="li" key={name} delay={k * 0.05}>
-              <b>{name}</b>
-              <span className="rh-who">{who}</span>
-              <span className="rh-say">{say}</span>
-            </Rise>
-          ))}
-        </ul>
+        <Rise>
+          <ul className="rh-grid">
+            {REACH.map(([name, who, say]) => (
+              <li key={name}>
+                <b>{name}</b>
+                <span className="rh-who">{who}</span>
+                <span className="rh-say">{say}</span>
+              </li>
+            ))}
+          </ul>
+        </Rise>
         <Rise className="rh-rules">
           {REACH_RULES.map(r => <span key={r}>{r}</span>)}
         </Rise>
-        <Rise><p className="rh-note">Automatic campaigns go out free inside open chats. For regulars, Relay writes the promo and you send it from your own phone, also free. Paid WhatsApp messages come from your wallet at Meta's price, only after you say yes. Type <b>REACH</b> to switch campaigns on or off.</p></Rise>
+        <Rise><p className="rh-note">Campaigns go out free inside open chats. For regulars, Relay writes the promo and you send it from your own phone, also free. Paid WhatsApp messages come from your wallet at Meta's price, and only after you approve the cost. Type <b>REACH</b> to switch campaigns on or off.</p></Rise>
       </div>
     </section>
   );
@@ -227,9 +252,8 @@ function Payments() {
     <section className="pay">
       <div className="wrap">
         <Rise className="pay-head">
-          <span className="kicker">Fake transfers</span>
           <h2>Only real money marks an order paid.</h2>
-          <p>Fake alerts cost sellers food, clothes and rider fees every week. With Relay, the customer's word and the customer's screenshot don't count. The bank's does.</p>
+          <p>Fake transfer alerts cost sellers food, clothes and rider fees every week. Relay marks an order paid only when the payment partner reports the exact amount arriving. Screenshots and forwarded alerts change nothing.</p>
         </Rise>
         <PaymentMatch />
       </div>
@@ -242,13 +266,12 @@ function Cost() {
     <section className="cost">
       <div className="wrap cost-in">
         <Rise className="cost-copy">
-          <span className="kicker">What it costs</span>
           <h2>Keep the month of sales a website would have eaten.</h2>
-          <p>Your customers are already on WhatsApp. Relay gives you the parts of a website that matter there: a catalogue, a cart, payments, receipts, tracking and follow-ups. It costs nothing until you make a sale.</p>
+          <p>Your customers already buy on WhatsApp. Relay adds what a website would give you there: a catalogue, a cart, payments, receipts, tracking and marketing. You pay 1% when an order is paid, and nothing before your first sale.</p>
           <ul className="cost-points">
-            <li><b>Nothing to build.</b> Send your menu or price list as a photo, PDF, spreadsheet or text.</li>
+            <li><b>Set up from what you have.</b> Send your menu or price list as a photo, PDF, spreadsheet or text.</li>
             <li><b>Keep your number.</b> Customers message the WhatsApp Business number they already know.</li>
-            <li><b>Your money, your bank.</b> Withdraw any time from the chat. ₦1,000 minimum, no fee.</li>
+            <li><b>Withdraw any time.</b> Straight to your bank from the chat, ₦1,000 minimum, free.</li>
           </ul>
         </Rise>
         <Receipt />
@@ -259,11 +282,11 @@ function Cost() {
 
 function Setup() {
   const steps = [
-    ['Say hi to Relay', 'on WhatsApp. No forms, no app.'],
-    ['Send your menu or price list', 'photo, PDF, spreadsheet or typed.'],
-    ['Add area, hours, delivery prices', 'or upload your whole delivery list.'],
-    ['Try it yourself', 'send TEST and shop like a customer.'],
-    ['Connect your number', 'and you are open, all day and all night.'],
+    ['Say hi to Relay', 'on WhatsApp to start.'],
+    ['Send your menu or price list', 'as a photo, PDF, spreadsheet or text.'],
+    ['Add your area, hours and delivery prices', 'or upload your whole delivery list.'],
+    ['Try it as a customer', 'by sending TEST.'],
+    ['Connect your number', 'and start taking orders.'],
   ];
   return (
     <section className="setup">
@@ -281,18 +304,18 @@ function Setup() {
 
 const QA: [string, string][] = [
   ['I already reply DMs myself. Why do I need this?', 'You can reply. You can\'t also confirm transfers, track deliveries, chase unpaid carts and remember every regular, at 2am, every day. Relay does those parts so you can run the business.'],
-  ['Do my customers have to download anything?', 'No. They chat with your WhatsApp number like they always do.'],
-  ['Can I keep my number and my WhatsApp Business app?', 'Yes. You connect the number your customers know, through Meta\'s official signup, and keep using the app on your phone.'],
-  ['How does it stop fake transfers?', 'Each order has its own exact amount, and it is only marked paid when our payment partner reports that money arriving. Screenshots and "I don pay" never mark anything paid.'],
-  ['Will it spam my customers?', 'No. Smart Reach is targeted marketing, not a broadcast. Each customer gets at most one promo a week, only about things they showed interest in, never at night, and every message has a Stop updates button.'],
-  ['What does it cost?', '1% of each paid order, capped at ₦2,000, nothing on delivery. No setup fee, no monthly fee, and nothing at all until you sell.'],
-  ['What if a customer wants a real person?', 'Relay hands the chat to you and stays quiet until you hand it back. It also hands over on complaints and refund requests.'],
+  ['Do my customers have to download anything?', 'No. They chat with your WhatsApp number as they always have.'],
+  ['Can I keep my number and my WhatsApp Business app?', 'Yes. You connect the number your customers know through Meta\'s official signup, and keep using the app on your phone.'],
+  ['How does it stop fake transfers?', 'Each order has its own exact amount, and it is marked paid only when our payment partner reports that money arriving. A screenshot or an "I\'ve paid" message never marks anything paid.'],
+  ['Will Smart Reach spam my customers?', 'No. Each customer gets at most one promo a week, only about things they showed interest in, and never at night. Every message has a Stop updates button.'],
+  ['What does it cost?', '1% of each paid order, capped at ₦2,000, with nothing charged on delivery fees. There is no setup or monthly fee. Paid marketing messages are charged at Meta\'s price, after you approve them.'],
+  ['What if a customer wants a real person?', 'Relay hands the chat to you and stays quiet until you hand it back. It also hands over complaints and refund requests.'],
 ];
 function Questions() {
   return (
     <section className="qs">
       <div className="wrap qs-in">
-        <Rise className="qs-head"><h2>Asked by shop owners.</h2><p>Answered the way Relay answers: short.</p></Rise>
+        <Rise className="qs-head"><h2>Questions from shop owners.</h2></Rise>
         <div className="thread">
           {QA.map(([q, a]) => (
             <div key={q} className="pair">
@@ -354,6 +377,7 @@ export default function App() {
         <Close />
       </main>
       <Footer />
+      <MobileCta />
     </>
   );
 }
