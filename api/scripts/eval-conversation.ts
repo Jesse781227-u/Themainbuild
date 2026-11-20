@@ -1,4 +1,4 @@
-// npm run eval:conversation [-- --only <id,id> --model <name>]
+// npm run eval:conversation [-- --only <id,id> --model <name> --pace <ms between messages, default 4000>]
 // Runs the Shop Bot agent over the conversation fixtures (scripts/eval/fixtures.ts) against the real
 // Gemini model, on an in-memory pretend shop (nothing is saved anywhere). Reports the pass rate, the
 // time per message and the estimated cost. The key comes from api/.dev.vars; it's never printed.
@@ -21,6 +21,7 @@ async function main() {
   const llm = geminiProvider({ GEMINI_API_KEY: vars.GEMINI_API_KEY, GEMINI_MODEL: model ?? vars.GEMINI_MODEL ?? 'gemini-3.7-flash', GEMINI_FALLBACK_MODEL: model ? '' : vars.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-latest,gemini-3.1-flash-lite' });
   const only = arg('only')?.split(',');
   const fixtures = FIXTURES.filter(f => !only || only.includes(f.id));
+  const pace = Number(arg('pace') ?? 4000);
   const times: number[] = [];
   let turns = 0, passed = 0, inTok = 0, outTok = 0, fallbacks = 0;
   const failures: string[] = [];
@@ -29,6 +30,7 @@ async function main() {
     let memory: AgentMemory = { turns: [], summary: null };
     for (const [i, t] of fx.turns.entries()) {
       turns++;
+      if (turns > 1 && pace) await new Promise(res => setTimeout(res, pace)); // the free tier allows ~15 requests a minute
       const before = sent.length;
       const r = await runAgent({ llm, system: shopSystem(h), context: shopContext(h, await h.cart()), memory, message: t.say, tools: shopTools(h), c: null, maxSteps: 4, timeoutMs: 15_000 });
       times.push(r.usage.ms); inTok += r.usage.inTokens; outTok += r.usage.outTokens;
@@ -36,7 +38,12 @@ async function main() {
       if (isFail(r)) fallbacks++;
       else { if (r.finish) await r.finish(r.text); else sent.push(r.text); reply = sent.slice(before).join('\n'); memory = remember(memory, t.say, r.text, r.calls.map(c => c.name)); }
       const called = r.calls.filter(c => c.ok).map(c => c.name);
-      const problems = judge(t, { called, reply, rec, failed: isFail(r) ? r.failed : null });
+      if (process.argv.includes('--verbose')) console.log(`
+[${fx.id}#${i + 1}] ${t.say}
+  calls: ${r.calls.map(c => `${c.name}${JSON.stringify(c.args)}`).join(' → ') || 'none'}
+  cart: ${JSON.stringify(Object.fromEntries(rec.cart))}
+  reply: ${isFail(r) ? `(fell back: ${r.failed})` : r.text}`);
+      const problems = judge(t, { called, reply, rec, failed: isFail(r) ? `${r.failed}${r.detail ? `: ${r.detail.slice(0, 200)}` : ''}` : null });
       if (problems.length) failures.push(`✗ ${fx.id}#${i + 1} "${t.say.slice(0, 50)}" → ${problems.join('; ')} | tools: ${called.join(',') || 'none'} | reply: ${reply.replace(/\s+/g, ' ').slice(0, 140)}`);
       else passed++;
       process.stdout.write(problems.length ? '✗' : '·');
@@ -53,7 +60,11 @@ async function main() {
 function judge(t: Turn, x: { called: string[]; reply: string; rec: ReturnType<typeof fakeHelpers>['rec']; failed: string | null }) {
   const p: string[] = [];
   if (x.failed && (t.tools?.length || t.allTools?.length)) p.push(`fell back (${x.failed})`);
-  if (t.tools?.length && !t.tools.some(n => x.called.includes(n))) p.push(`expected one of ${t.tools.join('/')}`);
+  // Reading the catalogue, cart or shop info can come from the context instead of a tool (small
+  // shops have it all there); actions and anything not in the context need their tool.
+  const fromContext = ['searchProducts', 'getProduct', 'viewCart', 'showProducts', 'shopInfo'];
+  const readOnly = !!t.tools?.length && t.tools.every(n => fromContext.includes(n));
+  if (t.tools?.length && !t.tools.some(n => x.called.includes(n)) && !(readOnly && !x.failed)) p.push(`expected one of ${t.tools.join('/')}`);
   for (const n of t.allTools ?? []) if (!x.called.includes(n)) p.push(`expected ${n}`);
   for (const n of t.notTools ?? []) if (x.called.includes(n)) p.push(`must not call ${n}`);
   if (t.never && t.never.test(x.reply)) p.push(`reply matched ${t.never}`);

@@ -329,3 +329,11 @@ test('eval fixtures: 60+ conversations, every expected tool exists', async () =>
   assert.equal(new Set(FIXTURES.map(f => f.id)).size, FIXTURES.length, 'unique ids');
   for (const f of FIXTURES) for (const t of f.turns) for (const n of [...(t.tools ?? []), ...(t.allTools ?? []), ...(t.notTools ?? [])]) assert.ok(names.has(n), `${f.id}: ${n}`);
 });
+
+test('gemini: an out-of-quota model is skipped for as long as Gemini says (at most an hour)', async () => {
+  const { quotaWait } = await import('../src/services/ai');
+  assert.equal(quotaWait('{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"37s"}]}}'), 37_000);
+  assert.equal(quotaWait('{"error":{"message":"You exceeded your current quota","details":[{"retryDelay":"85414s"}]}}'), 3_600_000);
+  assert.equal(quotaWait('{"error":{"message":"quota"}}'), 60_000);
+  assert.equal(quotaWait('{"error":{"message":"The model is overloaded"}}'), null, 'busy, not out of quota: retried as before');
+});

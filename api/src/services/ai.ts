@@ -46,10 +46,16 @@ export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)
 export const MAX_CATALOG_BYTES = 15_000_000;
 // Quick replies (choosing what an owner meant) vs reading a whole catalogue.
 const CHAT_TIMEOUT_MS = 30_000;
-// Models that said "quota exceeded" are skipped for 5 minutes (per worker), so each message doesn't
-// lose time asking them again.
-const QUOTA_PAUSE_MS = 5 * 60_000;
+// Models that said "quota exceeded" are skipped (per worker) for as long as Gemini says to wait
+// (RetryInfo: "37s" for a per-minute limit, ~24h for a daily one; at most an hour, then asked
+// again), so each message doesn't lose time asking them again.
 const quotaUntil = new Map<string, number>();
+export function quotaWait(body: string): number | null {
+  if (!/quota|RESOURCE_EXHAUSTED/i.test(body)) return null;
+  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
+  const ms = m ? Number(m[1]) * 1000 : 60_000;
+  return Math.min(Math.max(ms, 5_000), 3_600_000);
+}
 // Catalogues: models race. The main model starts; if it hasn't answered after HEDGE_MS (or fails),
 // the next one starts too, and the first good answer wins. Nothing waits longer than the total.
 const CATALOG_HEDGE_MS = 8_000;
@@ -93,7 +99,10 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
           last = await doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
           if (![429, 500, 503].includes(last.status)) return last;
           // Out of quota (not just busy): skip this model for a while instead of retrying it.
-          if (last.status === 429 && /quota/i.test(await last.clone().text().catch(() => ''))) { quotaUntil.set(model, Date.now() + QUOTA_PAUSE_MS); break; }
+          if (last.status === 429) {
+            const wait = quotaWait(await last.clone().text().catch(() => ''));
+            if (wait) { quotaUntil.set(model, Date.now() + wait); break; }
+          }
         } catch (e) {
           if (!(e instanceof Error && /abort|timeout/i.test(`${e.name} ${e.message}`))) throw e; // timed out: try again / next model
         }
@@ -174,7 +183,12 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       for (const t of turns) {
         if (t.role === 'user') push('user', { text: t.text });
         else if (t.role === 'assistant') push('model', { text: t.text });
-        else if (t.role === 'call') push('model', t.raw ?? { functionCall: { name: t.name, args: t.args } });
+        // Gemini's own reply goes back exactly as it came (thought signatures included): the first
+        // call of a step carries all its parts, the others are already in it.
+        else if (t.role === 'call') {
+          if (Array.isArray(t.raw)) for (const part of t.raw) push('model', part);
+          else if (!(t.raw && (t.raw as { sameStep?: boolean }).sameStep)) push('model', t.raw ?? { functionCall: { name: t.name, args: t.args } });
+        }
         else push('user', { functionResponse: { name: t.name, response: { result: t.result } } });
       }
       const res = await gemini({
@@ -187,11 +201,11 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
           generationConfig: { temperature: 0.5, maxOutputTokens: 800 },
         }),
       }, timeoutMs);
-      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status} ${((await res.text().catch(() => "")).match(/"message":\s*"([^"]{0,160})/)?.[1] ?? "")}`.trim());
       const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string; thought?: boolean; functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[]; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } };
       const parts = json.candidates?.[0]?.content?.parts ?? [];
       return {
-        calls: parts.filter(p => p.functionCall).map(p => ({ name: p.functionCall!.name, args: p.functionCall!.args ?? {}, raw: p })),
+        calls: parts.filter(p => p.functionCall).map((p, i) => ({ name: p.functionCall!.name, args: p.functionCall!.args ?? {}, raw: i === 0 ? parts.filter(x => !x.thought || x.functionCall) : { sameStep: true } })),
         text: parts.filter(p => typeof p.text === 'string' && !p.thought).map(p => p.text).join('').trim(),
         usage: { inTokens: json.usageMetadata?.promptTokenCount ?? 0, outTokens: (json.usageMetadata?.candidatesTokenCount ?? 0) + (json.usageMetadata?.thoughtsTokenCount ?? 0) },
       };

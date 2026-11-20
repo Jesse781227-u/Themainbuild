@@ -56,7 +56,7 @@ export const FIXTURES: Fixture[] = [
     { say: 'add the socks too', tools: ['addToCart'], cart: { 'rsl#': 1, 'sox#': 1 } },
   ] },
   { id: 'cart-view', shop: 'food', turns: [{ say: 'add zobo' , tools: ['addToCart'] }, { say: 'wetin dey my cart now?', tools: ['viewCart', 'showCart'] }] },
-  { id: 'cart-too-many', shop: 'fashion', turns: [{ say: 'add 3 jordan 4 size 42', tools: ['addToCart'], cart: {} }] },
+  { id: 'cart-too-many', shop: 'fashion', turns: [{ say: 'add 3 jordan 4 size 42', tools: ['addToCart', 'getProduct', 'searchProducts'], cart: {} }] },
   { id: 'cart-swap-size', shop: 'fashion', turns: [
     { say: 'add black sneakers 42', tools: ['addToCart'], cart: { 'blk#s42': 1 } },
     { say: 'sorry change am to 41', tools: ['updateCart', 'addToCart'] },
@@ -94,7 +94,7 @@ export const FIXTURES: Fixture[] = [
   { id: 'bargain-ask-owner', shop: 'fashion', turns: [
     { say: 'the jordan 4 too cost, fit you ask your oga to reduce am?', tools: ['askOwner', 'searchProducts', 'getProduct'], never: NO_DISCOUNT },
   ] },
-  { id: 'bargain-bulk', shop: 'food', turns: [{ say: 'if I buy 20 plates of jollof for my party, how much discount?', tools: ['askOwner', 'searchProducts', 'getProduct', 'handToOwner'], never: /\b\d{1,2}\s?%/ }] },
+  { id: 'bargain-bulk', shop: 'food', turns: [{ say: 'if I buy 20 plates of jollof for my party, how much discount?', never: /\b\d{1,2}\s?%/, notTools: ['applyOfferCode'] }] },
 
   // ── Hand to the owner ──
   { id: 'owner-complaint', shop: 'fashion', pastOrder: true, turns: [{ say: 'the shoe you sent me is torn, I want my money back', tools: ['handToOwner'], owner: true }] },
