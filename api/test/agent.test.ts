@@ -98,8 +98,9 @@ test('agent: stops calling tools after the step limit and writes the reply', asy
   const loop = Array.from({ length: 6 }, () => ({ call: [['viewCart', {}]] as [string, Record<string, unknown>][] }));
   const llm = scripted([...loop]);
   const r = await runAgent({ llm, system: 's', context: 'c', memory: { turns: [], summary: null }, message: 'hi', tools: [{ spec: { name: 'viewCart', description: '', params: {} }, async run() { return { result: { empty: true } }; } }], c: null, maxSteps: 2, timeoutMs: 2000 });
-  assert.equal(llm.seen.length, 3);
-  assert.equal(llm.seen[2].mode, 'text', 'the last step may only write');
+  assert.equal(llm.seen.length, 4, '2 tool steps, the writing step, and one more when it wrote nothing');
+  assert.equal(llm.seen[2].mode, 'text', 'after the limit it may only write');
+  assert.equal(llm.seen[3].mode, 'text');
   assert.ok(!isFail(r) || r.calls.length === 2);
 });
 
@@ -336,4 +337,12 @@ test('gemini: an out-of-quota model is skipped for as long as Gemini says (at mo
   assert.equal(quotaWait('{"error":{"message":"You exceeded your current quota","details":[{"retryDelay":"85414s"}]}}'), 3_600_000);
   assert.equal(quotaWait('{"error":{"message":"quota"}}'), 60_000);
   assert.equal(quotaWait('{"error":{"message":"The model is overloaded"}}'), null, 'busy, not out of quota: retried as before');
+});
+
+test('agent: tools ran but no words came back → one more step writes them', async () => {
+  const llm = scripted([{ call: [['viewCart', {}]] }, { say: '' }, { say: 'Your cart is empty 🙂' }]);
+  const r = await runAgent({ llm, system: 's', context: 'c', memory: { turns: [], summary: null }, message: 'wetin dey my cart', tools: [{ spec: { name: 'viewCart', description: '', params: {} }, async run() { return { result: { empty: true } }; } }], c: null, maxSteps: 4, timeoutMs: 2000 });
+  assert.ok(!isFail(r));
+  assert.equal(r.text, 'Your cart is empty 🙂');
+  assert.equal(llm.seen.at(-1)!.mode, 'text');
 });

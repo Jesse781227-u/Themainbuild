@@ -93,6 +93,8 @@ export async function runAgent<C>(opts: {
         turns.push({ role: 'result', name: call.name, result });
       }
     }
+    // Tools ran but no words came back: one more step to write them.
+    if (!text && calls.length) text = whatsappStyle((await step('text')).text);
     if (!text) return fail('empty');
     let check = checkFacts(text, known), retried = false;
     if (!check.ok) {
