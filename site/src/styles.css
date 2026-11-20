@@ -144,6 +144,23 @@ h1 em { color: var(--lime-deep); background: linear-gradient(transparent 58%, va
 .ph-how.ask { background: #FDECC8; color: #8A5300; }
 @media (max-width: 760px) { .ph-head { grid-template-columns: 1fr; gap: 0; } .ph-list li { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; } .ph-does { grid-column: 1 / -1; grid-row: 2; } .phrase { padding: 84px 0; } }
 
+/* ── smart reach ── */
+.reach { padding: 120px 0; }
+.rh-top { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: end; margin-bottom: 48px; }
+.reach h2 { font-size: clamp(36px, 5vw, 64px); line-height: 1.0; }
+.reach h2 em { color: var(--lime-deep); }
+.rh-top p { font-size: 18px; color: var(--muted); margin: 0 0 6px; }
+.rh-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.rh-grid li { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px 22px 20px; display: flex; flex-direction: column; gap: 6px; }
+.rh-grid b { font-family: var(--display); font-size: 22px; letter-spacing: -.02em; }
+.rh-who { color: var(--muted); font-size: 15.5px; }
+.rh-say { margin-top: 10px; align-self: flex-start; background: #E3F5C8; color: var(--ink); font-size: 14.5px; padding: 9px 13px; border-radius: 14px 14px 14px 4px; }
+.rh-rules { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; }
+.rh-rules span { font-family: var(--mono); font-size: 12.5px; padding: 7px 13px; border-radius: 999px; border: 1.5px solid var(--ink); }
+.rh-note { max-width: 760px; color: var(--muted); font-size: 16px; margin: 22px 0 0; }
+@media (max-width: 960px) { .rh-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .rh-top { grid-template-columns: 1fr; gap: 14px; } .rh-grid { grid-template-columns: 1fr; } .reach { padding: 84px 0; } }
+
 /* ── cost / receipt ── */
 .cost { background: var(--paper-2); padding: 120px 0; }
 .cost-in { display: grid; grid-template-columns: minmax(0, 1.1fr) 440px; gap: 70px; align-items: start; }
