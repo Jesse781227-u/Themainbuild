@@ -382,8 +382,10 @@ test('tone: the owner picks one in Settings and the shop assistant uses it', asy
   assert.equal((await doc('businesses', fx.a.id)).tone, null);
 });
 
-test('sales report: the AI assistant\'s messages and cost this month', async () => {
+test('money: the AI assistant is Relay\'s cost, so owners never see it as a charge (the stats are kept for Relay)', async () => {
   await db.set(db.doc('agentStats', `${fx.a.id}_${lagosDate(new Date())}`), { businessId: fx.a.id, date: lagosDate(new Date()), shopTurns: 40, adminTurns: 2, costKobo: 9_000.4 }, { merge: true });
   const out = await new Bot(null).send('admin', { from: fx.a.ownerPhone.slice(1), text: 'sales' });
-  assert.match(out[0].text, /🤖 AI assistant this month: \d+ messages, about ₦\d[\d,.]*\./);
+  assert.match(out[0].text, /^💰 \*Money\*/);
+  assert.ok(!/AI assistant|🤖/.test(out[0].text));
+  assert.ok((await doc('agentStats', `${fx.a.id}_${lagosDate(new Date())}`)).shopTurns >= 40);
 });

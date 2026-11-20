@@ -105,8 +105,6 @@ export async function moneyScreen(c: ActionCtx): Promise<Out> {
   const by = new Map(days.map((d, i) => [d, stats[i]]));
   const sum = (ds: string[], k: string) => ds.reduce((t, d) => t + Number(by.get(d)?.[k] ?? 0), 0);
   const ownerFee = c.business.feePayer === 'owner' ? n.paidToday.reduce((t, o) => t + (o.feeKobo ?? 0), 0) : 0;
-  const ai = await c.db.getAll(month.map(d => c.db.doc(C.agentStats, `${c.business.id}_${d}`)));
-  const aiMessages = ai.reduce((t, s) => t + Number(s?.shopTurns ?? 0) + Number(s?.adminTurns ?? 0), 0);
   const lines = [
     `💰 *Money* · ${c.business.name}`,
     `Today: ${formatKobo(n.goodsKobo)} goods + ${formatKobo(n.deliveryKobo)} delivery${ownerFee ? ` − ${formatKobo(ownerFee)} Relay fee` : ''} = *${formatKobo(n.netKobo)}* (${n.paidToday.length} paid order${n.paidToday.length === 1 ? '' : 's'})`,
@@ -114,7 +112,6 @@ export async function moneyScreen(c: ActionCtx): Promise<Out> {
     `This month: ${formatKobo(sum(month, 'salesKobo'))} goods + ${formatKobo(sum(month, 'deliveryKobo'))} delivery`,
     '',
     `Wallet: *${formatKobo(wallet.availableKobo)}* available.${n.unpaid.length ? ` ${n.unpaid.length} order${n.unpaid.length === 1 ? '' : 's'} waiting for payment.` : ''}`,
-    ...(aiMessages ? [`🤖 AI assistant this month: ${aiMessages} message${aiMessages === 1 ? '' : 's'}, about ${formatKobo(Math.round(ai.reduce((t, s) => t + Number(s?.costKobo ?? 0), 0)))}.`] : []),
   ];
   const verified = kyc?.status === 'verified';
   return buttons(lines.join('\n').slice(0, 1024), [[verified ? 'act:withdraw' : 'act:verify', verified ? 'Withdraw' : 'Verify now'], ['act:owing', 'Who owes me'], ['act:menu', 'Menu']]);

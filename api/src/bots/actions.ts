@@ -96,31 +96,6 @@ function lastDays(days: number, now = new Date()) {
   return Array.from({ length: days }, (_, i) => lagosDate(new Date(now.getTime() - i * 86_400_000)));
 }
 
-async function salesReport(c: ActionCtx): Promise<Out> {
-  const today = lagosDate();
-  const month = lastDays(31).filter(d => d.slice(0, 7) === today.slice(0, 7));
-  const week = lastDays(7);
-  const days = [...new Set([...month, ...week])];
-  const stats = await c.db.getAll(days.map(d => c.db.doc(C.dailyStats, `${c.business.id}_${d}`)));
-  const by = new Map(days.map((d, i) => [d, stats[i]]));
-  const sum = (ds: string[]) => ds.reduce((t, d) => ({ orders: t.orders + Number(by.get(d)?.ordersPaid ?? 0), sales: t.sales + Number(by.get(d)?.salesKobo ?? 0) }), { orders: 0, sales: 0 });
-  const line = (label: string, s: { orders: number; sales: number }) => `${label}: ${formatKobo(s.sales)} from ${s.orders} paid order${s.orders === 1 ? '' : 's'}`;
-  const unpaid = await recentOrders(c.db, [['businessId', '==', c.business.id], ['status', '==', 'awaiting_payment']], 50);
-  // The assistant's cost this month (no cap; shown so the owner knows).
-  const ai = await c.db.getAll(month.map(d => c.db.doc(C.agentStats, `${c.business.id}_${d}`)));
-  const aiMessages = ai.reduce((t, s) => t + Number(s?.shopTurns ?? 0) + Number(s?.adminTurns ?? 0), 0);
-  const aiKobo = Math.round(ai.reduce((t, s) => t + Number(s?.costKobo ?? 0), 0));
-  return [`📊 Sales for ${c.business.name}`, line('Today', sum([today])), line('Last 7 days', sum(week)), line('This month', sum(month)), '', `${unpaid.length} order${unpaid.length === 1 ? '' : 's'} waiting for payment.`, ...(aiMessages ? [`🤖 AI assistant this month: ${aiMessages} message${aiMessages === 1 ? '' : 's'}, about ${formatKobo(aiKobo)}.`] : [])].join('\n');
-}
-
-// Paid, not yet delivered or picked up.
-async function pendingOrders(c: ActionCtx): Promise<Out> {
-  const paid = await recentOrders(c.db, [['businessId', '==', c.business.id], ['status', '==', 'paid']], 50);
-  const open = paid.filter(o => !['delivered', 'picked_up'].includes(o.fulfilment));
-  if (!open.length) return 'No paid orders waiting to go out. 👍';
-  return `Paid, still to deliver or hand over (${open.length}):\n${open.slice(0, 15).map(o => `${orderLine(o)} · ${o.fulfilment.replace(/_/g, ' ')}`).join('\n')}\n\nWhen one is ready, send e.g. *${open[0].ref} ready* or *${open[0].ref} delivered*.`;
-}
-
 // The assistant's tone: learned from the shop's messages (default) or one the owner picks.
 async function toneMenu(c: ActionCtx): Promise<Out> {
   const now = c.business.tone ?? null;
