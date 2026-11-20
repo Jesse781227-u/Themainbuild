@@ -21,6 +21,7 @@ import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
 import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords } from '../services/segments';
+import { ZONES_ASK } from './zones-flow';
 import { ALL_TRIGGERS, executeCampaign, markOwnerSent, planCampaign, planText, TRIGGER_HINT, TRIGGER_LABEL, triggerOn } from '../services/reach';
 import { interestedIn } from '../services/reach-triggers';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
@@ -231,12 +232,18 @@ async function hours(c: ActionCtx): Promise<Out> {
   return `${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set: customers can order any time.'}\n\nTo change them send e.g. *hours Mon–Sat 8am–9pm, Sun closed*, or *hours 8am–9pm* for every day.`;
 }
 
-async function delivery(c: ActionCtx): Promise<Out> {
+async function delivery(c: ActionCtx): Promise<Out | Out[]> {
   const zones = (await listZones(c.db, c.business.id)).sort(byPriority);
   const form = flowId(c.cfg, 'delivery');
-  if (form) return flowMessage('delivery', form, c.business.id, `${zones.length ? `You deliver to ${zones.map(z => z.name).join(', ')}.` : 'No delivery prices yet.'} Tap below to add areas and prices.`);
+  if (form) return flowMessage('delivery', form, c.business.id, `${zones.length ? `You deliver to ${zones.length} area${zones.length === 1 ? '' : 's'}.` : 'No delivery prices yet.'} Tap below to add areas and prices, or send *DELIVERY LIST* to upload them all.`);
   const how = c.business.fulfilment === 'pickup' ? 'Pickup only.' : zones.length ? `Delivery prices:\n${zones.map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}${z.timeframe ? `, ${z.timeframe}` : ''}`).join('\n')}${c.business.shipsInterstate && c.business.interstatePricing === 'quote' ? '\n• Other states: you quote per order' : ''}` : 'No delivery prices yet.';
-  return `${how}\n\nTo add or change one send e.g. *delivery zone Lekki, 1500, same day*.`;
+  return [`${how}`.slice(0, 3800), buttons('Add one with e.g. *delivery zone Lekki, 1500, same day*, or send your whole list at once.', [['act:zonesupload', 'Send my price list'], ['act:menu', 'Menu']])];
+}
+
+// "Send my price list": the next message (a paste, spreadsheet, document or photo) is the delivery list.
+async function zonesUpload(c: ActionCtx): Promise<Out> {
+  await c.setAwaiting('zones');
+  return ZONES_ASK;
 }
 
 // ── Status posts (services/status-posts.ts) ──
@@ -434,6 +441,7 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'delivery', command: 'delivery', hint: 'See or change your delivery areas and prices', menu: { section: 'Settings', title: 'Delivery' }, aliases: ['delivery', 'delivery prices', 'delivery zones', 'zones'], next: [['hours', 'Opening hours'], ['menu', 'Menu']], run: delivery },
   { id: 'messages', command: 'messages', hint: 'Choose the messages customers get from your shop', menu: { section: 'Settings', title: 'Messages' }, aliases: ['messages', 'my messages', 'customer messages'], async run() { return messagesMenu(); } },
   { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies' }, aliases: ['policies', 'policy', 'my policies'], next: [['menu', 'Menu']], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; } },
+  { id: 'zonesupload', hint: 'Upload all your delivery areas and prices at once', aliases: ['delivery list', 'upload delivery', 'delivery prices list', 'upload delivery prices', 'send delivery list'], run: zonesUpload },
   { id: 'tone', hint: 'How the shop assistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
   { id: 'settone', hint: 'Set the assistant tone', run: setTone },
   { id: 'fee', hint: "Who pays Relay's 1% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },

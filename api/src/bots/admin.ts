@@ -28,6 +28,7 @@ import { ACTION_TOOLS, adminContext, adminSystem, adminTools2, applyUndo, confir
 import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
+import { answerZoneImport, startZoneImport, ZONES_ASK } from './zones-flow';
 import { handleMessageInput } from './messages-flow';
 import { handleCustomerChoice } from './customers';
 import { CALL, openTicket } from '../services/support';
@@ -152,6 +153,20 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   // ── Wallet: verify (KYC) answers, withdraw amounts and confirmations ──
   const walletOut = await handleWalletInput({ ...actionCtx, arg: null }, choiceId, text);
   if (walletOut) return reply(walletOut);
+
+  // ── A delivery list (pasted, spreadsheet, document or photo): read, review, save ──
+  const zones = { db, cfg, deps, business, convRef };
+  const zoneTap = await answerZoneImport(zones, choiceId);
+  if (zoneTap) { for (const o of zoneTap.out) await reply(o); return; }
+  const deliveryHint = /\bdeliver(y|ies)?\b/i.test(text) && (!!input.document || !!input.imageId || text.split(/\r?\n/).filter(l => /\d/.test(l)).length >= 3);
+  if (!choiceId && (state.awaiting === 'zones' || deliveryHint) && (text.trim() || input.document || input.imageId)) {
+    if (state.awaiting === 'zones' && !input.document && !input.imageId && matchAction(text)) await setAwaiting(null);
+    else {
+      const out = await startZoneImport(zones, input, text, reply);
+      if (out) { await setAwaiting(null); for (const o of out) await reply(o); return; }
+      if (state.awaiting === 'zones') return reply(`I couldn't find areas with prices there. ${ZONES_ASK}`);
+    }
+  }
 
   // ── Waiting for the next message after Add product / Send a campaign / Add photo ──
   if (state.awaiting === 'add' && !choiceId) {

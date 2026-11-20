@@ -35,7 +35,8 @@ export interface LLMProvider {
   writeTexts?(input: { prompt: string; keys: readonly string[] }): Promise<Record<string, string>>;
   // Picks items that go with what a customer just added (cross) and maybe one dearer version (upsell). Ids only.
   pickPairs?(input: { shop: string; shopType: string; anchor: PairItem; candidates: PairItem[] }): Promise<{ cross: string[]; upsell: string | null }>;
-  readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
+  // purpose "delivery": a list of delivery areas and fees (name = area, price = fee).
+  readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[]; purpose?: 'products' | 'delivery' }): Promise<CatalogItem[]>;
   // Which product each photo shows: returns, per photo (in order), a 1-based index into names, or null.
   matchPhotos?(input: { names: string[]; photos: { mimeType: string; bytes: Uint8Array }[] }): Promise<(number | null)[]>;
   // One conversation step (see AgentTurn). mode "text" forbids tool calls (the final reply).
@@ -263,9 +264,13 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       } catch { return { cross: [], upsell: null }; }
     },
 
-    async readCatalog({ file, text, businessType, categories, images }) {
+    async readCatalog({ file, text, businessType, categories, images, purpose }) {
       if (file && (!CATALOG_MIME.test(file.mimeType) || file.bytes.byteLength > MAX_CATALOG_BYTES)) throw new Error('CATALOG_FILE_UNSUPPORTED');
-      const parts: Record<string, unknown>[] = [{ text: [
+      const parts: Record<string, unknown>[] = [{ text: purpose === 'delivery' ? [
+        'This is a list of delivery areas and delivery fees of a small business in Nigeria (a table, a list, a price sheet or a photo of one).',
+        'Extract every area / place name with its delivery fee: name = the area exactly as written, price = the fee in naira ("3k" is 3000, "₦3,000" is 3000, "free" is 0), category = null.',
+        'Only include what is written. Do not invent areas or fees. Ignore titles, notes, phone numbers and totals.',
+      ].join(' ') : [
         'Extract every product or service with its price from this menu / price list of a small business in Nigeria.',
         'Use the section headings as categories (e.g. "Rice dishes", "Drinks"); keep them short and title case. If there are no headings, group items into a few sensible categories.',
         businessType ? `The business type is ${businessType}.` : '',

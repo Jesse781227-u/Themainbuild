@@ -38,6 +38,7 @@ import { log } from '../lib/logger';
 import { parseAdminCommand } from './intent';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
 import { categoryCarousel, productCarousel, productDetails } from './product-cards';
+import { answerZoneImport, startZoneImport } from './zones-flow';
 
 export type Stage = 'basics' | 'products' | 'location' | 'hours' | 'delivery' | 'connect' | 'live';
 export type Step =
@@ -348,6 +349,18 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
     case 'fee_local': {
+      // A whole list instead of one price (pasted, spreadsheet, document or photo).
+      const zones = { db: c.ctx.db, cfg: c.ctx.cfg, deps: c.deps, business: c.business!, convRef: c.ctx.db.doc(C.conversations, c.ctx.conversationId) };
+      const tapped = await answerZoneImport(zones, choiceId);
+      if (tapped) {
+        for (const o of tapped.out) await c.reply(o);
+        if (tapped.saved) { await setOb(c, { step: 'interstate' }); return prompt(c); }
+        return prompt(c);
+      }
+      if (!choiceId && (input?.document || input?.imageId || text.split(/\r?\n/).length >= 2)) {
+        const out = await startZoneImport(zones, input ?? { text, choiceId: null, imageId: null, audioId: null, document: null } as never, text, c.reply);
+        if (out) { for (const o of out) await c.reply(o); return; }
+      }
       const fee = feeFrom(text);
       if (fee === null || choiceId) return c.reply(`How much is delivery within ${c.business!.area ?? 'your area'}? Send an amount, e.g. *1500*, or *0* if it's free.`);
       await addZone(c, c.business!.area ?? 'Nearby', c.business!.area ?? '', fee, 2);
@@ -735,7 +748,7 @@ async function prompt(c: Ctx): Promise<unknown> {
     case 'prep': return ask(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
     case 'prep_custom': return ask('How long does an order usually take? e.g. *45 minutes*');
     case 'delivery': return ask(buttons(`How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
-    case 'fee_local': return ask(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if free`);
+    case 'fee_local': return ask(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if free.\n\nHave a full list of areas and prices? Paste it or send the spreadsheet, PDF or photo.`);
     case 'fee_city': return ask(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
     case 'interstate': return ask(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
     case 'interstate_pricing': return ask(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
