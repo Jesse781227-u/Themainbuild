@@ -4,6 +4,7 @@
 // arguments. Destructive tools return a confirmation prompt first and only run after a YES.
 import { z } from 'zod';
 import { backInStock } from '../services/reach';
+import { priceDrop } from '../services/reach-triggers';
 import { log } from '../lib/logger';
 import { C } from '../db';
 import type { Config } from '../config';
@@ -166,6 +167,7 @@ export const adminTools = {
     async run(a, ctx) {
       const p = await oneProduct(ctx, a.product);
       await ctx.db.update(ctx.db.doc(C.products, p.id), { priceKobo: a.price, updatedAt: new Date().toISOString() });
+      if (a.price < p.priceKobo) await priceDrop(ctx.db, ctx.cfg, ctx.deps, ctx.business, p, p.priceKobo, a.price).catch(e => log('warn', 'price_drop_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }));
       if (a.price < p.priceKobo) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'price', name: p.name, fromKobo: p.priceKobo, toKobo: a.price }, { productId: p.id }).catch(() => false);
       return `${p.name} is now ${formatKobo(a.price)} (was ${formatKobo(p.priceKobo)}). Orders already placed keep their price.`;
     },

@@ -21,7 +21,8 @@ import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
 import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords } from '../services/segments';
-import { executeCampaign, markOwnerSent, PHASE1_TRIGGERS, planCampaign, planText, TRIGGER_LABEL, triggerOn } from '../services/reach';
+import { ALL_TRIGGERS, executeCampaign, markOwnerSent, planCampaign, planText, TRIGGER_HINT, TRIGGER_LABEL, triggerOn } from '../services/reach';
+import { interestedIn } from '../services/reach-triggers';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
 import { flowId, flowMessage } from '../services/flows';
 import { listCategories } from '../services/catalog';
@@ -263,7 +264,7 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
 
 // ── Smart Reach (services/reach.ts) ──
 async function reachHome(c: ActionCtx): Promise<Out> {
-  const rows = PHASE1_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: t === 'back_in_stock' ? 'Tell people who wanted it when it\'s back' : 'Remind people who left items in their cart' }));
+  const rows = ALL_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: TRIGGER_HINT[t] }));
   return list('Smart Reach sends updates to the right customers, free where it can. Tap an automatic update to switch it on or off.', 'Open Smart Reach', [...rows,
     { id: 'act:reachgroup', title: 'Send to a group', description: 'e.g. "my sneaker buyers", "people who haven\'t ordered in a month"' },
     { id: 'act:reachall', title: 'Send to everyone', description: 'All your customers who get updates' },
@@ -271,7 +272,7 @@ async function reachHome(c: ActionCtx): Promise<Out> {
   ], 'Smart Reach');
 }
 async function reachToggle(c: ActionCtx): Promise<Out> {
-  const t = PHASE1_TRIGGERS.find(x => x === c.arg);
+  const t = ALL_TRIGGERS.find(x => x === c.arg);
   if (!t) return reachHome(c);
   const on = !triggerOn(c.business, t);
   const reachTriggers = { ...(c.business.reachTriggers ?? {}), [t]: on };
@@ -322,6 +323,18 @@ async function reachPick(c: ActionCtx): Promise<Out> {
   if (!d || !text) return reachGroup(c);
   await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { reachDraft: null }, { merge: true });
   return reachPlan(c, text, d.audience, d.segment);
+}
+
+// From Relay's daily suggestion: an update to the people who looked at a product and didn't buy.
+async function reachAsk(c: ActionCtx): Promise<Out> {
+  const p = (await listProducts(c.db, c.business.id)).find(x => x.id === c.arg);
+  if (!p) return reachGroup(c);
+  const audience = await interestedIn(c.db, c.business.id, p.id, new Date());
+  if (!audience.length) return buttons(`Nobody is waiting on *${p.name}* any more.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  const samples = await draftUpdates(c, `${p.name} is available now, ${formatKobo(p.priceKobo)}`);
+  await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { reachDraft: { audience, segment: `looked at ${p.name}`, samples } }, { merge: true });
+  return [`*${audience.length} people* looked at ${p.name}.\n\nPick the wording:\n\n${samples.map((x, i) => `*${i + 1}.* ${x}`).join('\n\n')}`.slice(0, 4000),
+    list('Which one?', 'Pick wording', samples.map((_, i) => ({ id: `act:reachpick:${i + 1}`, title: `Option ${i + 1}` })), 'Wording')] as unknown as Out;
 }
 
 async function segmentsView(c: ActionCtx): Promise<Out> {
@@ -377,6 +390,7 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'reachall', hint: 'Send an update to everyone', run: c => reachEveryone(c) },
   { id: 'reachgroup', hint: 'Send an update to a group of customers', run: reachGroup },
   { id: 'reachpick', hint: 'Use this wording', run: reachPick },
+  { id: 'reachask', hint: 'Write an update to the people who looked', run: reachAsk },
   { id: 'segments', hint: 'Your customer groups and their sizes', aliases: ['groups', 'segments', 'customer groups', 'my groups'], run: segmentsView },
   { id: 'reachtoggle', hint: 'Switch an automatic update on or off', run: reachToggle },
   { id: 'reachsend', hint: 'Send the planned update', run: c => reachSend(c, false) },

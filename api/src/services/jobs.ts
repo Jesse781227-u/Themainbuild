@@ -13,6 +13,7 @@ import { dueStatusReports } from './status-posts';
 import { abandonedCarts, releaseQueuedSends } from './reach';
 import { dueCampaignReports } from './reach-results';
 import { refreshSegments } from './segments';
+import { afterDelivery, dailyReach, weeklySummaries } from './reach-triggers';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
 export const CRON_DAILY_SUMMARY = '0 19 * * *'; // 20:00 Africa/Lagos
@@ -23,9 +24,12 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   if (event.cron === CRON_DAILY_SUMMARY) {
     const ids = await queueDailySummaries(db, now);
     const nudges = await dayTwoNudges(db, now);
+    // Smart Reach: Relay's suggestions, regulars / win-back, and Monday's weekly summary.
+    const cfg = getConfig(env);
+    const reach = [...(await dailyReach(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now)), ...(await weeklySummaries(db, now))];
     // Smart Reach: every live shop's group sizes, fresh each night.
     for (const b of await db.query(C.businesses, [['status', '==', 'active']], { limit: 500 })) await refreshSegments(db, b._id as string, now).catch(() => undefined);
-    await enqueue(env, [...ids, ...nudges].map(messageId => ({ kind: 'outbox' as const, messageId })));
+    await enqueue(env, [...ids, ...nudges, ...reach].map(messageId => ({ kind: 'outbox' as const, messageId })));
     log('info', 'daily_summaries_queued', { count: ids.length, nudges: nudges.length });
     return { summaries: ids.length, nudges: nudges.length };
   }
@@ -38,6 +42,7 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const cfg = getConfig(env);
   const reachIds = await releaseQueuedSends(db, cfg, now);
   await abandonedCarts(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now);
+  if (now.getUTCMinutes() === 0) await afterDelivery(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now); // hourly
   const reachReports = await dueCampaignReports(db, now);
   await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders, ...statusReports, ...reachIds, ...reachReports].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
   if (released || events.length || outbox.length) log('info', 'sweep', { released, requeuedEvents: events.length, requeuedOutbox: outbox.length });

@@ -34,6 +34,8 @@ export interface OutboxMessage {
   document?: { path: string; filename: string } | null;
 }
 
+import { explicitOptIn, triggerOn, type ReachCustomer } from './reach';
+
 export type PaidResult = { applied: false; reason: 'not_found' | 'already_paid' | 'cancelled' } | { applied: true; order: Order; late: boolean; outboxIds: string[] };
 
 // The on-paid pipeline, inside the caller's transaction. Every side effect lands in the same commit
@@ -116,6 +118,15 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${order.feeKobo ? `
 Relay fee (1%${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}): ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
     buttons: [{ id: `act:order:${order.ref}`, title: 'View order' }, { id: `act:ready:${order.ref}`, title: 'Mark ready' }, { id: 'act:menu', title: 'Menu' }],
+  });
+
+  // Smart Reach: a new customer's first order: thanks, and the "send me updates" ask (only when they
+  // haven't said yes yet; the receipt already says thank you).
+  if (business && customer?.phone && !(customer.orderCount ?? 0) && triggerOn(business, 'first_order_thanks') && !explicitOptIn(customer as ReachCustomer)) queue({
+    id: `${order.id}_first_thanks`, audience: 'customer', channel: order.channel, to: customer.phone,
+    conversationId: customerConversationId(order.businessId, order.channel, customer.phone), kind: 'first_order_thanks',
+    text: `Thanks for your first order with ${business.name}! 🙏 Want news when new things arrive? (At most once a week.)`,
+    buttons: [{ id: 'optin', title: 'Yes, send updates' }, { id: 'menu', title: 'See the menu' }],
   });
 
   if (business?.ownerPhone && !business.firstSaleAt) {

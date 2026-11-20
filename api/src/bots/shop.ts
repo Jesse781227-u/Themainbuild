@@ -167,7 +167,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     // The "Send me updates" box at checkout: only ticked when they tap it.
     if (kind === 'optin') {
       if (!ctx.test) await optIn(db, conversationId);
-      return reply(buttons(`👍 You'll get updates from ${business.name} when new things arrive. Tap *Stop updates* on any of them to stop.`, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), state.step === 'confirm' ? { ...state } : undefined);
+      return reply(buttons(`👍 You'll get updates from ${business.name} when new things arrive. Tap *Stop updates* on any of them to stop.`, state.step === 'confirm' ? [['confirm', 'Confirm order'], ['menu', 'Keep shopping']] : [['menu', 'See the menu']]), state.step === 'confirm' ? { ...state } : undefined);
     }
     if (kind === 'testpay' && ctx.test) return testPaid(ctx, business, id, reply);
     if (kind === 'delete_no') return reply('OK, nothing was deleted.', { step: 'browse' });

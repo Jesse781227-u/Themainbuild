@@ -27,7 +27,7 @@ const DAY = 86_400_000;
 export type StatusCustomer = Customer & {
   interests?: Record<string, string> | null;   // p_<productId> / c_<categoryId> → when they last looked or asked
   lastStatusMentionAt?: string | null; statusMentionCount?: number;
-  marketingOptOutAt?: string | null; spamReportedAt?: string | null;
+  marketingOptOutAt?: string | null; marketingOptInAt?: string | null; spamReportedAt?: string | null;
 };
 
 export interface Ranked { customerId: string; name: string; phone: string; score: number; cooling: boolean }
@@ -106,6 +106,25 @@ async function bytesOf(images: R2BucketLike | undefined, url: string | null | un
 }
 
 const firstName = (n: string) => n.split(' ')[0];
+
+export function replyKeyword(name: string) {
+  const ws = name.normalize('NFKD').replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !/^\d+$/.test(w));
+  return (ws.at(-1) ?? 'ORDER').toUpperCase().slice(0, 15);
+}
+
+async function interestedFor(db: Firestore, businessId: string, productIds: string[], now: Date) {
+  const since = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+  const latest = new Map<string, string>();
+  for (const pid of productIds.slice(0, 10)) {
+    const sigs = (await db.query(C.customerSignals, [['businessId', '==', businessId], ['productId', '==', pid]], { limit: 500 })) as unknown as { customerId: string; type: string; at: string }[];
+    for (const s of sigs) if (s.at >= since && ['asked', 'viewed', 'carted'].includes(s.type) && s.at > (latest.get(s.customerId) ?? '')) latest.set(s.customerId, s.at);
+  }
+  const ids = [...latest.keys()].sort((a, b) => latest.get(b)!.localeCompare(latest.get(a)!));
+  const docs = (await db.getAll(ids.map(id => db.doc(C.customers, id)))) as (StatusCustomer | null)[];
+  const result = new Map<string, StatusCustomer>();
+  docs.forEach((c, i) => { if (c && c.businessId === businessId && !(c.marketingOptOutAt && !(c.marketingOptInAt && c.marketingOptInAt > c.marketingOptOutAt))) result.set(ids[i], c); });
+  return result;
+}
 export const mentionLine = (m: StatusPost['suggestedMentions']) => m.map(x => `${firstName(x.name)} (…${x.phone.replace(/\D/g, '').slice(-4)})`).join(' · ');
 
 export async function prepareStatus(db: Firestore, cfg: { API_BASE_URL: string }, images: R2BucketLike | undefined, business: Business, target: Target, now = new Date()): Promise<StatusPost | null> {
@@ -125,11 +144,20 @@ export async function prepareStatus(db: Firestore, cfg: { API_BASE_URL: string }
   await images.put(key, jpeg.slice().buffer as ArrayBuffer, { httpMetadata: { contentType: 'image/jpeg' } });
 
   const { ranking, all } = await rankAudience(db, business.id, { productIds: one ? [one.id] : items.map(p => p.id), categoryId: target.categoryId ?? one?.categoryId ?? null }, now);
+  // Smart Reach first: people who looked at, asked about or carted these lately (and haven't said stop).
+  const wanted = await interestedFor(db, business.id, one ? [one.id] : items.map(p => p.id), now);
+  for (const [id, c] of wanted) if (!ranking.some(r => r.customerId === id) && c.phone && !c.spamReportedAt && !((Date.now() - new Date(c.lastStatusMentionAt ?? 0).getTime()) < COOLDOWN_DAYS * 86_400_000)) ranking.push({ customerId: id, name: c.name?.trim() || 'A customer', phone: c.phone, score: 0, cooling: false });
+  // Interested people first, the most recent interest first; then everyone else as scored.
+  const order = [...wanted.keys()];
+  const rank = (id: string) => { const i = order.indexOf(id); return i < 0 ? Infinity : i; };
+  ranking.sort((a, b) => rank(a.customerId) - rank(b.customerId));
   const mentions = ranking.slice(0, MENTIONS).map(r => ({ customerId: r.customerId, name: r.name, phone: r.phone }));
   const mentioned = new Set(mentions.map(m => m.customerId));
+  // "Reply *BOOTS* to order": a word from the name, so the reply finds it and opens a free chat.
+  const keyword = replyKeyword(one ? one.name : cat?.name ?? items[0].name);
   const caption = one
-    ? `✨ ${title}\n${price}${one.description ? `\n${one.description.slice(0, 120)}` : ''}\n\nReply to this Status to order 💬`
-    : `✨ ${title}: ${items.slice(0, 4).map(p => p.name).join(', ')}${items.length > 4 ? '…' : ''}\n${price}\n\nReply to this Status to order 💬`;
+    ? `✨ ${title}\n${price}${one.description ? `\n${one.description.slice(0, 120)}` : ''}\n\nReply *${keyword}* to order 💬`
+    : `✨ ${title}: ${items.slice(0, 4).map(p => p.name).join(', ')}${items.length > 4 ? '…' : ''}\n${price}\n\nReply *${keyword}* to order 💬`;
   const post: StatusPost = {
     id, businessId: business.id, productIds: items.map(p => p.id).slice(0, 30), categoryId: target.categoryId ?? one?.categoryId ?? null,
     imageUrl: `${cfg.API_BASE_URL}/media/${key}`, caption, title,

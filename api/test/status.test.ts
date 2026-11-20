@@ -75,7 +75,7 @@ test('status: /status → picture + caption + 5 to mention → change people →
   const made = await bot.send('admin', { from: o, choice: `act:status:p:${boots.id}`, text: 'Black Ankle Boots' });
   const img = made[0].content as { type: string; link: string; caption: string };
   assert.equal(img.type, 'image');
-  assert.match(img.caption, /^✨ Black Ankle Boots\n₦15,000[\s\S]*Reply to this Status to order/);
+  assert.match(img.caption, /^✨ Black Ankle Boots\n₦15,000[\s\S]*Reply \*BOOTS\* to order/);
   const key = img.link.split('/media/')[1];
   assert.equal(stored.get(key)!.type, 'image/jpeg', 'the picture is saved for WhatsApp to fetch');
   assert.match(made[1].text, /tap \*@\* and add these 5:\n1\. Buyer1 Okafor \(…0001\)\n2\. Buyer2 Okafor/, 'the most recent buyers first');

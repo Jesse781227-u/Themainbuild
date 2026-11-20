@@ -50,6 +50,7 @@ export interface Campaign {
   id: string; businessId: string; source: 'owner' | 'trigger' | 'suggested'; name: string;
   text: string; button?: [string, string] | null; audience: string[];
   segment?: string | null;           // the group, in words
+  trigger?: TriggerType | null;      // which automatic update made it (for the weekly summary)
   template?: string | null;          // the paid template, when one is approved
   reportedAt?: string | null;
   routePlan: Record<string, number>; estCost: number; status: 'planned' | 'sending' | 'sent' | 'cancelled';
@@ -156,13 +157,13 @@ async function loadAudience(db: Firestore, businessId: string, ids?: string[] | 
 }
 
 // Plans a campaign (nothing is sent): the route for everyone, saved for [Send all].
-export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string; segment?: string | null }, now = new Date()) {
+export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string; segment?: string | null; trigger?: TriggerType | null }, now = new Date()) {
   const { customers, lastInbound } = await loadAudience(db, business.id, input.audience ?? null);
   const paidOk = input.source === 'owner' && (await templateState(db, business.id, 'relay_update')) === 'approved';
   const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now, paidOk, needs: usedVariables(input.text) });
   const summary = planSummary(decisions);
   const id = input.id ?? `c_${randomId(9).replace(/[^A-Za-z0-9]/g, 'x')}`;
-  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), segment: input.segment ?? null, template: paidOk ? 'relay_update' : null, routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
+  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), segment: input.segment ?? null, trigger: input.trigger ?? null, template: paidOk ? 'relay_update' : null, routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
   const created = await db.create(db.doc(C.campaigns, id), { ...campaign });
   return { campaign, decisions, summary, created };
 }
@@ -251,14 +252,21 @@ export async function releaseQueuedSends(db: Firestore, cfg: Config, now = new D
 // ── Triggers ──
 export type TriggerType = 'back_in_stock' | 'abandoned_cart' | 'price_drop' | 'usual_order_due' | 'win_back' | 'after_delivery' | 'first_order_thanks';
 export const TRIGGER_LABEL: Record<TriggerType, string> = { back_in_stock: 'Back in stock', abandoned_cart: 'Left in cart', price_drop: 'Price drop', usual_order_due: 'Usual order time', win_back: 'Win back', after_delivery: 'After delivery', first_order_thanks: 'First-order thanks' };
-export const PHASE1_TRIGGERS: TriggerType[] = ['back_in_stock', 'abandoned_cart'];
+export const ALL_TRIGGERS: TriggerType[] = ['back_in_stock', 'abandoned_cart', 'price_drop', 'after_delivery', 'first_order_thanks', 'usual_order_due', 'win_back'];
+export const TRIGGER_HINT: Record<TriggerType, string> = {
+  back_in_stock: 'Tell people who wanted it when it\'s back', abandoned_cart: 'Remind people who left items in their cart',
+  price_drop: 'Tell people who looked when the price drops', after_delivery: '"Hope you love it", a day after delivery',
+  first_order_thanks: 'Thank new customers, ask if they want updates', usual_order_due: 'Regulars, when their usual order is due',
+  win_back: 'Customers with no order for 60+ days',
+};
 
 // On unless the owner turned it off; the defaults depend on what the shop sells (Smart Reach Q5).
 export function triggerOn(business: Pick<Business, 'category' | 'reachTriggers'>, type: TriggerType) {
   const set = business.reachTriggers?.[type];
   if (typeof set === 'boolean') return set;
   const food = business.category === 'food_beverage';
-  const on: TriggerType[] = food ? ['abandoned_cart', 'after_delivery', 'first_order_thanks', 'usual_order_due'] : ['back_in_stock', 'price_drop', 'abandoned_cart', 'after_delivery', 'first_order_thanks'];
+  // "Usual order time" and "win back" stay off until the owner turns them on.
+  const on: TriggerType[] = food ? ['abandoned_cart', 'after_delivery', 'first_order_thanks'] : ['back_in_stock', 'price_drop', 'abandoned_cart', 'after_delivery', 'first_order_thanks'];
   return on.includes(type);
 }
 
@@ -273,7 +281,7 @@ export async function backInStock(db: Firestore, cfg: Config, deps: { enqueue: (
   if (!wanted.size) return null;
   const label = variantId ? `${product.name} (${product.variants?.find(v => v.id === variantId)?.label ?? ''})` : product.name;
   const id = `bis_${product.id}_${restockKey}`.replace(/[^A-Za-z0-9_-]/g, '_');
-  const planned = await planCampaign(db, cfg, business, { id, name: `Back in stock: ${label}`, source: 'trigger', text: `Good news {name}! ${label} is back in stock at ${business.name} 🎉`, button: [`buy:${product.id}`, 'Add to cart'], audience: [...wanted] }, now);
+  const planned = await planCampaign(db, cfg, business, { id, name: `Back in stock: ${label}`, source: 'trigger', trigger: 'back_in_stock', text: `Good news {name}! ${label} is back in stock at ${business.name} 🎉`, button: [`buy:${product.id}`, 'Add to cart'], audience: [...wanted] }, now);
   if (!planned.created) return null; // this restock already fired
   // Triggers only use the free chat route automatically; regulars' links wait for the owner.
   return executeCampaign(db, cfg, deps, business, id, { freeOnly: true }, now);
@@ -293,7 +301,7 @@ export async function abandonedCarts(db: Firestore, cfg: Config, deps: { enqueue
     const p = (await db.get(db.doc(C.products, cart.items[0].productId))) as Product | null;
     const what = p ? `${p.name}${cart.items.length > 1 ? ` and ${cart.items.length - 1} more` : ''}` : 'your items';
     const campaignId = `cart_${id}_${cart.updatedAt}`.replace(/[^A-Za-z0-9_-]/g, '_');
-    const planned = await planCampaign(db, cfg, business, { id: campaignId, name: 'Left in cart', source: 'trigger', text: `Hi {name}, your cart at ${business.name} is saved: ${what}. Ready to check out?`, button: ['checkout', 'Checkout'], audience: [cart.customerId] }, now);
+    const planned = await planCampaign(db, cfg, business, { id: campaignId, name: 'Left in cart', source: 'trigger', trigger: 'abandoned_cart', text: `Hi {name}, your cart at ${business.name} is saved: ${what}. Ready to check out?`, button: ['checkout', 'Checkout'], audience: [cart.customerId] }, now);
     if (!planned.created) continue;
     const r = await executeCampaign(db, cfg, deps, business, campaignId, { freeOnly: true }, now);
     if (r?.sent || r?.queued) fired++;
