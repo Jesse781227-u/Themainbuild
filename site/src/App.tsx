@@ -69,7 +69,7 @@ function Opening() {
           ))}
         </h1>
         <motion.div className="op-side" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.8 }}>
-          <p>Relay runs your shop inside WhatsApp. It takes orders day and night, confirms only real payments, tells customers where their order is, and with Smart Reach brings back the ones who went quiet.</p>
+          <p>Relay runs your shop inside WhatsApp. It takes orders day and night, confirms only real payments, tells customers where their order is, and markets to your customers for you with Smart Reach.</p>
           <p className="op-small">For food and fashion sellers who don't want to spend a month's sales on a website they don't need.</p>
           <div className="op-cta">
             <a className="btn btn-lime" href={company.ctaHref}>Open my shop free</a>
@@ -183,26 +183,26 @@ function Phrasebook() {
   );
 }
 
-// ── Smart Reach: the right customer hears the right thing, once ──
+// ── Smart Reach: WhatsApp marketing that targets and sends itself ──
 const REACH: [string, string, string][] = [
-  ['Back in stock', 'Only people who asked for it.', 'Good news Amaka! The Ankara top is back in your size 🎉'],
-  ['Left in cart', 'One reminder an hour later. Never twice.', 'Your sneakers are still in your cart. 2 pairs left.'],
-  ['Price drop', 'Only people who looked at it and didn’t buy.', 'The linen shirt you liked is now ₦12,000.'],
-  ['After delivery', 'A day later, a friendly check-in.', 'Hope you’re enjoying your top! Anything else you need?'],
-  ['Usual order', 'Regulars, around when they normally buy.', 'It’s about time for your usual egusi. Same again?'],
-  ['Send to a group', 'Say who and what. Relay shows the count and cost first.', '“tell my regulars we open Sunday”'],
+  ['Back in stock', 'Sent to: everyone who asked for it.', 'Good news Amaka! The Ankara top is back in your size 🎉'],
+  ['Left in cart', 'Sent to: shoppers who stopped at checkout.', 'Your sneakers are still in your cart. 2 pairs left.'],
+  ['Price drop', 'Sent to: people who looked and didn’t buy.', 'The linen shirt you liked is now ₦12,000.'],
+  ['After delivery', 'Sent to: yesterday’s buyers, for the next order.', 'Hope you’re enjoying your top! Anything else you need?'],
+  ['Usual order', 'Sent to: regulars, when they normally buy.', 'It’s about time for your usual egusi. Same again?'],
+  ['Your own campaign', 'Say the offer and who gets it. Relay writes it, counts them and prices it.', '“tell my regulars 10% off this weekend”'],
 ];
-const REACH_RULES = ['At most 1 update a week per customer', 'Nothing between 9pm and 8am', 'Every message has Stop updates', 'Paid messages only after you see the cost'];
+const REACH_RULES = ['Targeted from real shopping, not a contact dump', 'Max 1 promo a week per customer', 'Never at night', 'One tap to unsubscribe', 'You approve the cost before anything paid goes out'];
 function Reach() {
   return (
     <section className="reach" id="reach">
       <div className="wrap">
         <Rise className="rh-top">
           <div>
-            <span className="kicker">Smart Reach</span>
-            <h2>Sell again to people who <em>already</em> bought.</h2>
+            <span className="kicker">Smart Reach · WhatsApp marketing</span>
+            <h2>Your marketing, <em>running</em> while you cook and pack.</h2>
           </div>
-          <p>Relay remembers what every customer asked for, bought and left in the cart. When something changes, it tells only the people it matters to, in your shop's own voice. No blasting your whole contact list.</p>
+          <p>Smart Reach is a marketing tool built into your shop. It knows what every customer viewed, asked for, carted and bought, so each promo goes only to the people most likely to buy, in your shop's own voice. Turn on the campaigns you want and they run themselves.</p>
         </Rise>
         <ul className="rh-grid">
           {REACH.map(([name, who, say], k) => (
@@ -216,7 +216,7 @@ function Reach() {
         <Rise className="rh-rules">
           {REACH_RULES.map(r => <span key={r}>{r}</span>)}
         </Rise>
-        <Rise><p className="rh-note">Automatic updates go out free inside open chats. For regulars, Relay writes the message and you send it from your own phone, also free. You can switch each update on or off by typing <b>REACH</b>.</p></Rise>
+        <Rise><p className="rh-note">Automatic campaigns go out free inside open chats. For regulars, Relay writes the promo and you send it from your own phone, also free. Paid WhatsApp messages come from your wallet at Meta's price, only after you say yes. Type <b>REACH</b> to switch campaigns on or off.</p></Rise>
       </div>
     </section>
   );
@@ -284,7 +284,7 @@ const QA: [string, string][] = [
   ['Do my customers have to download anything?', 'No. They chat with your WhatsApp number like they always do.'],
   ['Can I keep my number and my WhatsApp Business app?', 'Yes. You connect the number your customers know, through Meta\'s official signup, and keep using the app on your phone.'],
   ['How does it stop fake transfers?', 'Each order has its own exact amount, and it is only marked paid when our payment partner reports that money arriving. Screenshots and "I don pay" never mark anything paid.'],
-  ['Will it spam my customers?', 'No. Smart Reach sends each customer at most one update a week, only about things they care about, never at night. Every message has a Stop updates button.'],
+  ['Will it spam my customers?', 'No. Smart Reach is targeted marketing, not a broadcast. Each customer gets at most one promo a week, only about things they showed interest in, never at night, and every message has a Stop updates button.'],
   ['What does it cost?', '1% of each paid order, capped at ₦2,000, nothing on delivery. No setup fee, no monthly fee, and nothing at all until you sell.'],
   ['What if a customer wants a real person?', 'Relay hands the chat to you and stays quiet until you hand it back. It also hands over on complaints and refund requests.'],
 ];
