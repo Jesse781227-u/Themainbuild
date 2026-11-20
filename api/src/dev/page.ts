@@ -162,7 +162,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
       <input id="text" placeholder="Message" autocomplete="off" enterkeyhint="send">
       <button class="ic" id="clip" type="button" aria-label="Attach a file">${ICON.clip}</button>
       <button class="ic" id="cam" type="button" aria-label="Send a photo">${ICON.camera}</button>
-      <input type="file" id="fileIn" accept="application/pdf,image/*,text/plain,text/csv,.csv,.txt" hidden>
+      <input type="file" id="fileIn" accept="application/pdf,image/*,text/plain,text/csv,.csv,.txt,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
       <input type="file" id="photoIn" accept="image/*" hidden>
     </div>
     <button id="fab" aria-label="Send">${ICON.mic}</button>
