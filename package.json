@@ -2,7 +2,7 @@
   "name": "relay",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n db,api -c yellow,cyan \"npx -y firebase-tools@14 --project demo-relay emulators:start --only firestore\" \"cd api && npm run dev\"",
+    "dev": "concurrently -n db,test-db,api,tracker -c yellow,gray,cyan,magenta \"npx -y firebase-tools@14 --project demo-relay emulators:start --only firestore\" \"npx -y firebase-tools@14 --config tools/test-emulator/firebase.json --project demo-relay emulators:start --only firestore\" \"cd api && npm run dev\" \"node tools/mvp-tracker/server.mjs\"",
     "build": "cd api && npm run build",
     "test": "cd api && npm run test",
     "tracker": "node tools/mvp-tracker/server.mjs"

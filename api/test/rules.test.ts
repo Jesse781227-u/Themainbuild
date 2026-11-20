@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 let env: RulesTestEnvironment;
 before(async () => {
   const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080').split(':');
-  env = await initializeTestEnvironment({ projectId: 'demo-relay-rules', firestore: { rules: fs.readFileSync(path.join(__dirname, '../../firestore.rules'), 'utf8'), host, port: Number(port) } });
+  env = await initializeTestEnvironment({ projectId: `${process.env.TEST_PROJECT_ID ?? 'demo-relay'}-rules`, firestore: { rules: fs.readFileSync(path.join(__dirname, '../../firestore.rules'), 'utf8'), host, port: Number(port) } });
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async ctx => {
     const db = ctx.firestore();

@@ -10,7 +10,8 @@ import type { LLMProvider, ToolChoice } from '../src/services/ai';
 import { handleQueueBatch } from '../src/services/queue';
 import { buildPayload } from '../scripts/simulate-webhook';
 
-export const projectId = 'demo-relay';
+// The tracker runs its tests in its own project (TEST_PROJECT_ID) so they never clash with other runs.
+export const projectId = process.env.TEST_PROJECT_ID || 'demo-relay';
 export const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
 export const META_SECRET = 'test-app-secret';
 export const VERIFY_TOKEN = 'v'.repeat(16);

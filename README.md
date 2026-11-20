@@ -78,4 +78,4 @@ It also refuses `FIRESTORE_EMULATOR_HOST` outside development. Development, stag
 
 ## Tracker
 
-`npm run tracker` serves the phase tracker at http://localhost:4700 ([tools/mvp-tracker/tasks.mjs](tools/mvp-tracker/tasks.mjs)).
+`npm run dev` also serves the one-week tracker at http://localhost:4700 (or `npm run tracker` on its own) ([tools/mvp-tracker/tasks.mjs](tools/mvp-tracker/tasks.mjs)).

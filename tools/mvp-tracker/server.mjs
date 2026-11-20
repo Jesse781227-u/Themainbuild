@@ -187,7 +187,7 @@ async function runTests(reason) {
   const [cmd, args] = pkg.scripts?.['test:tracker']
     ? ['npm', ['run', 'test:tracker', '--silent']]
     : ['node', ['--import', 'tsx', '--test', '--test-reporter=tap', 'test/**/*.test.ts']];
-  const env = { ...process.env, RELAY_ENV: 'development', FIRESTORE_EMULATOR_HOST: `127.0.0.1:${TEST_PORT}`, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:9199', GCLOUD_PROJECT: process.env.GCLOUD_PROJECT || 'demo-relay' };
+  const env = { ...process.env, RELAY_ENV: 'development', FIRESTORE_EMULATOR_HOST: `127.0.0.1:${TEST_PORT}`, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:9199', GCLOUD_PROJECT: process.env.GCLOUD_PROJECT || 'demo-relay', TEST_PROJECT_ID: 'demo-relay-tracker' };
   const started = Date.now();
   let output = '';
   await new Promise(resolve => {
