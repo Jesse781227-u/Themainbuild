@@ -162,7 +162,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.equal(biz.messages.paymentThanks, 'Thanks {customer_name}! We got your {total} for {order_id} 🙏');
   assert.equal(biz.messages.menuIntro, undefined, 'kept the default');
   // Who pays the fee comes before TEST, so the pretend order shows the right total.
-  assert.match(fee.at(-1)!.text, /^\*Step 6 of 6\* · Relay only earns when you get paid: \*4\.5% of each sale, at most ₦4,000\*\. No sale, no fee\./);
+  assert.match(fee.at(-1)!.text, /^\*Step 6 of 6\* · You only pay when you get paid: \*4\.5% of each sale, at most ₦4,000\*\. Nothing upfront or monthly\./);
   fee[0] = fee.at(-1)!;
   assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
   const ready = await say("I'll pay it", 'fee:owner');

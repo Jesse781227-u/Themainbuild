@@ -35,7 +35,7 @@ function Strip() {
     <header className="strip">
       <div className="wrap strip-in">
         <a href="#top" className="brand"><Logo /><span>Relay</span></a>
-        <div className="open">{t} in Lagos</div>
+        <div className="open">{t} in Nigeria</div>
         <a className="btn btn-ink sm" href={company.ctaHref}>Start free</a>
       </div>
     </header>
@@ -97,12 +97,11 @@ function Opening() {
         <motion.div className="op-side" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.8 }}>
           <p>Your customer asks “how much?” at 11pm. You don’t see it until morning, and they’ve bought from someone else.</p>
           <p>Relay replies to your customers in seconds and takes the order for you.</p>
-          <p className="op-small">Made for food and fashion sellers in Lagos.</p>
+          <p className="op-small">For any Nigerian business that sells products or services on WhatsApp.</p>
           <div className="op-cta">
             <a className="btn btn-lime" href={company.ctaHref}>Open my shop free</a>
             <a className="link" href="#day">See a day of orders ↓</a>
           </div>
-          <div className="op-fee">You pay <b>4.5%</b> of a sale, only after you get paid.</div>
         </motion.div>
         <div className="op-cards" aria-hidden>
           {cards.map((c, i) => (
@@ -267,11 +266,11 @@ function Cost() {
     <section className="cost">
       <div className="wrap cost-in">
         <Rise className="cost-copy">
-          <h2>Keep the money a website would have cost you.</h2>
+          <h2>You only pay when you get paid.</h2>
           <p>Your customers already buy from you on WhatsApp. Relay gives you a catalogue, a cart and payments right there in the chat.</p>
-          <p>You pay 4.5% of a sale, and only after the money reaches you.</p>
+          <p>There is nothing to pay upfront or monthly. When an order is paid, 4.5% goes to Relay and the rest is yours.</p>
           <ul className="cost-points">
-            <li><b>Start with what you have.</b> Send your menu or price list as a photo or a PDF.</li>
+            <li><b>Start with what you have.</b> Send your menu, price list or services as a photo or a PDF.</li>
             <li><b>Keep your number.</b> Your customers message the number they already know.</li>
             <li><b>Withdraw any time.</b> Your money goes straight to your bank, free.</li>
           </ul>
@@ -305,7 +304,7 @@ function Setup() {
 }
 
 const QA: [string, string][] = [
-  ['I already reply my DMs. Why do I need Relay?', 'You can’t reply at 2am, or while you’re cooking for a party. Relay replies for you, so you stop losing those orders.'],
+  ['I already reply my DMs. Why do I need Relay?', 'You can’t reply at 2am, or while you’re busy with another customer. Relay replies for you, so you stop losing those orders.'],
   ['Do my customers need to download anything?', 'No. They chat with your number like they always do.'],
   ['Can I keep my number and my WhatsApp Business app?', 'Yes. You keep your number and keep using the app on your phone.'],
   ['How does Relay stop fake transfers?', 'Each order gets its own exact amount. Relay marks it paid only when that amount reaches your account.'],
@@ -337,7 +336,7 @@ function Close() {
     <section className="close">
       <div className="wrap">
         <Rise className="close-in">
-          <span className="close-time">It's {t} in Lagos.</span>
+          <span className="close-time">It's {t}.</span>
           <h2>Someone wants to buy from you right now.</h2>
           <a className="btn btn-lime lg" href={company.ctaHref}>Open my shop free</a>
           <p>You pay nothing until your customer pays you.</p>
@@ -356,7 +355,7 @@ function Footer() {
         <div className="foot-col"><h4>Legal</h4><p><a href="/privacy">Privacy policy</a></p><p><a href="/terms">Terms of service</a></p><p><a href="/data-deletion">Delete your data</a></p></div>
       </div>
       <div className="wrap foot-base">
-        <span>© {new Date().getFullYear()} {company.legalName}. Example shops, sellers and chats are illustrations. Photos from Unsplash.</span>
+        <span>© {new Date().getFullYear()} {company.legalName}</span>
         <span>WhatsApp is a trademark of Meta Platforms, Inc. Relay is an independent business using the WhatsApp Business Platform.</span>
       </div>
     </footer>

@@ -200,7 +200,6 @@ h1 em { color: var(--lime-deep); background: linear-gradient(transparent 58%, va
 .rc-rule.dashed { border-top-style: dashed; }
 .rc-line { position: relative; display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; }
 .rc-line em { font-style: normal; white-space: nowrap; }
-.rc-strike { position: absolute; left: 0; right: 46px; top: 50%; height: 2px; background: #DC2626; transform-origin: 0 50%; }
 .rc-line.total { font-weight: 700; font-size: 15px; }
 .rc-line.big { font-weight: 800; font-size: 18px; margin-top: 6px; }
 .rc-calc label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
