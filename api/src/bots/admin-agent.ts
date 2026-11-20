@@ -88,6 +88,7 @@ export function adminSystem(business: Business) {
     'Simple changes happen straight away with an Undo button; say what you did in one line.',
     'If a request is unclear (which product? which order?), ask one short question. Never guess product names or order numbers.',
     'Only help with running this shop on Relay; other topics get one friendly line.',
+    'Reply in the owner\'s language and style (English, Pidgin or mixed).',
   ].join('\n');
 }
 
@@ -189,6 +190,14 @@ export function adminTools2(h: AdminHelpers): AgentTool<null>[] {
     },
     // ── Changes ──
     {
+      spec: { name: 'setTone', description: 'How the shop assistant sounds to customers: friendly, professional, street, or learned (copies the shop\'s own messages).', params: { tone: { type: 'string', description: 'The tone', enum: ['friendly', 'professional', 'street', 'learned'] } }, required: ['tone'] },
+      async run(a) {
+        const tone = ['friendly', 'professional', 'street'].includes(str(a.tone, 20)) ? str(a.tone, 20) : null;
+        await ctx.db.update(ctx.db.doc(C.businesses, ctx.business.id), { tone, updatedAt: new Date().toISOString() });
+        return { result: { done: true, tone: tone ?? 'learned from your messages' } };
+      },
+    },
+    {
       spec: { name: 'markSoldOut', description: 'Mark a product (or one size/colour of it) sold out. Customers still see it, marked sold out. Has an Undo button.', params: { product: { type: 'string', description: 'Product name' }, option: { type: 'string', description: 'Size/colour, if only one option is sold out' } }, required: ['product'] },
       async run(a) {
         const products = (await listProducts(ctx.db, ctx.business.id)).filter(p => !p.deletedAt);
@@ -275,7 +284,7 @@ export type { Config };
 // The tools that change something (or ask the owner to confirm a change): a reply that says
 // "I've changed…" needs one of them called.
 const READ_ONLY = new Set(['salesSummary', 'topProducts', 'ordersList', 'stockList', 'customerLookup', 'customerGroup', 'walletBalance', 'campaignResults', 'shopLink', 'orderReceipt', 'listCustomers', 'findCustomer']);
-export const ACTION_TOOLS = ['markSoldOut', 'addProduct', ...DIRECT, ...CONFIRM_FIRST].filter(n => !READ_ONLY.has(n));
+export const ACTION_TOOLS = ['markSoldOut', 'addProduct', 'setTone', ...DIRECT, ...CONFIRM_FIRST].filter(n => !READ_ONLY.has(n));
 // A Confirm tap is forced only on changes without their own check (prices, delivery fees, bank
 // details); deleting, cancelling, marking paid and sending keep their own questions and guards.
 export const mustConfirm = (name: AdminToolName) => CONFIRM_FIRST.has(name) && !adminTools[name].confirm;

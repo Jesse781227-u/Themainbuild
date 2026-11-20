@@ -48,7 +48,7 @@ interface ShopState {
   greetedAt?: string | null; // when this conversation's welcome was sent
   pidgin?: boolean;          // the customer writes in Pidgin: the bot's own words follow
 }
-interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */; agent?: boolean /* the conversation agent is on */ }
+interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */; agent?: boolean /* the conversation agent is on */; voice?: boolean /* this message was a voice note */ }
 type ShopConversation = Conversation & { shop?: ShopState | null };
 
 const SHOP_TOOLS: ToolSpec[] = [
@@ -103,6 +103,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     const heard = token ? await slowJob(() => transcribeVoice(cfg, deps, token, input.audioId!), { react: reactTo, ok: r => !!r }) : null;
     if (!heard) return reply("Sorry, I couldn't play that voice note. Please type your message.");
     text = heard;
+    run.voice = true;
   }
   // A quick answer the agent offered ("say:<n>"): it comes back as the words on the button.
   const agentChoice = input.choiceId?.startsWith('say:') || (/^\d{1,2}$/.test(text.trim()) && state.options?.[Number(text.trim()) - 1]?.startsWith('say:'));
@@ -356,7 +357,7 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
     return { cart: c, lines: lines.map(l => ({ name: lineName(l.product!, l.variantId), qty: l.qty, totalKobo: priceOf(l.product!, l.variantId) * l.qty })), subtotalKobo: subtotal };
   };
   const helpers: ShopHelpers = {
-    business, customer, first: !!run.first, welcome, pidgin: !!run.state.pidgin, products: products.filter(p => p.available && !p.deletedAt), categories,
+    business, customer, first: !!run.first, welcome, voice: !!run.voice, pidgin: !!run.state.pidgin, products: products.filter(p => p.available && !p.deletedAt), categories,
     lastOrder: last ? { ref: last.ref, items: last.items.map(i => `${i.qty} × ${i.name}`), status: last.status === 'paid' ? `paid, ${last.fulfilment.replace(/_/g, ' ')}` : last.status } : null,
     cart,
     search: q => search(db, business.id, q),

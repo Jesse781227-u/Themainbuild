@@ -346,3 +346,44 @@ test('agent: tools ran but no words came back → one more step writes them', as
   assert.equal(r.text, 'Your cart is empty 🙂');
   assert.equal(llm.seen.at(-1)!.mode, 'text');
 });
+
+// ── Phase 4: voice, tone ──
+test('shop agent: a voice note goes through the same agent, marked as a voice note', async () => {
+  const { postMeta, queueMessage } = await import('./helpers');
+  const { handleQueueBatch } = await import('../src/services/queue');
+  const llm = scripted([{ say: 'Yes o, *Black Sneakers* dey for 42, na ₦15,000 👍' }]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await postMeta({ object: 'whatsapp_business_account', entry: [{ id: 'waba-a', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '000', phone_number_id: fx.a.pnid }, contacts: [{ wa_id: phone, profile: { name: 'Ada' } }], messages: [{ from: phone, id: `wamid.voice-${phone}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'audio', audio: { id: 'media-voice-1', mime_type: 'audio/ogg' } }] } }] }] });
+  const media = (async (url: string) => (String(url).includes('media-voice-1') ? Response.json({ url: 'https://media.test/v.ogg', mime_type: 'audio/ogg' }) : new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'audio/ogg' } }))) as typeof fetch;
+  const before = bot.transport.sent.length;
+  await handleQueueBatch({ queue: 'test', messages: env.EVENTS.sent.splice(0).map(j => queueMessage(j)) }, env, { transport: bot.transport, llm, transcriber: { async transcribe() { return 'abeg una get black sneakers for size 42 how much'; } }, fetch: media });
+  assert.match(llm.seen[0].system, /voice note, written out by a machine/);
+  assert.equal((llm.seen[0].turns.at(-1) as { text: string }).text, 'abeg una get black sneakers for size 42 how much');
+  const out = bot.transport.sent.slice(before).filter(m => m.content.type !== 'reaction');
+  assert.ok(out.some(m => JSON.stringify(m.content).includes('dey for 42')));
+});
+
+test('tone: the owner picks one in Settings and the shop assistant uses it', async () => {
+  const owner = fx.a.ownerPhone.slice(1);
+  const ob = new Bot(null);
+  const menu = await ob.send('admin', { from: owner, text: 'tone' });
+  assert.deepEqual(menu[0].options, ['act:settone:learned', 'act:settone:friendly', 'act:settone:professional', 'act:settone:street']);
+  assert.match((await ob.send('admin', { from: owner, choice: 'act:settone:street', text: 'Street' }))[0].text, /now sound street/);
+  assert.equal((await doc('businesses', fx.a.id)).tone, 'street');
+  const llm = scripted([{ say: 'Wetin you need today? 😎' }]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'how far, wetin dey happen for una shop today?' });
+  assert.match(llm.seen[0].system, /Tone \(the owner chose it\): Street/);
+  await ob.send('admin', { from: owner, choice: 'act:settone:learned', text: 'Like my messages' });
+  assert.equal((await doc('businesses', fx.a.id)).tone, null);
+});
+
+test('sales report: the AI assistant\'s messages and cost this month', async () => {
+  await db.set(db.doc('agentStats', `${fx.a.id}_${lagosDate(new Date())}`), { businessId: fx.a.id, date: lagosDate(new Date()), shopTurns: 40, adminTurns: 2, costKobo: 9_000.4 }, { merge: true });
+  const out = await new Bot(null).send('admin', { from: fx.a.ownerPhone.slice(1), text: 'sales' });
+  assert.match(out[0].text, /🤖 AI assistant this month: \d+ messages, about ₦\d[\d,.]*\./);
+});

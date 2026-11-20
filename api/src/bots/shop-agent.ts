@@ -9,11 +9,11 @@ import type { Customer } from '../domain/commerce';
 import { formatKobo } from '../lib/money';
 import { describeHours, openNow } from '../services/hours';
 import { policyText } from '../services/policies';
-import type { AgentTool } from './agent';
+import { toneLine, type AgentTool } from './agent';
 
 // What shop.ts hands the agent (so this file needs nothing from it).
 export interface ShopHelpers {
-  business: Business; customer: Customer | null; first: boolean; welcome: string | null; pidgin: boolean;
+  business: Business; customer: Customer | null; first: boolean; welcome: string | null; pidgin: boolean; voice?: boolean;
   products: Product[]; categories: { id: string; name: string }[];
   cart: () => Promise<{ cart: Cart | null; lines: { name: string; qty: number; totalKobo: number }[]; subtotalKobo: number }>;
   lastOrder: { ref: string; items: string[]; status: string } | null;
@@ -68,6 +68,7 @@ export function shopSystem(h: ShopHelpers) {
     'Bargaining ("how much last?", "reduce am"): never lower or invent a price. State the price politely and offer to ask the owner; call askOwner only if they want that.',
     'Complaints, refunds, a wrong or late order, custom orders, an angry customer, or anything you can\'t do with the tools: call handToOwner.',
     'Off-topic requests: one friendly line, then back to the shop. Light small talk is fine.',
+    toneLine(b.tone),
     'Use their first name now and then, not in every message. Suggest at most one extra item, and only right after adding to cart, once per chat.',
     'As soon as they say checkout, pay, "that\'s all", "I\'ll pick it up" or where to deliver it, call goToCheckout (with pickup=true or deliverTo). Never hold checkout up with suggestions.',
     'If they ask to be told about new items or offers, call setUpdates(on=true); if they don\'t want promos, setUpdates(on=false).',
@@ -96,6 +97,7 @@ export function shopContext(h: ShopHelpers, cartNow: Awaited<ReturnType<ShopHelp
     `Pickup: ${h.canPickup ? 'yes' : 'no'}. Delivery: ${b.fulfilment === 'pickup' ? 'no' : 'yes'}.`,
     cartNow.lines.length ? `Their cart: ${cartNow.lines.map(l => `${l.qty} × ${l.name} = ${naira(l.totalKobo)}`).join('; ')}. Subtotal ${naira(cartNow.subtotalKobo)}.` : 'Their cart is empty.',
     h.pidgin ? 'They write in Pidgin: reply in Pidgin.' : '',
+    h.voice ? 'Their message is a voice note, written out by a machine: small mistakes are possible; if a product or number is unclear, ask.' : '',
     h.first && h.welcome ? `This is the start of the chat. The line "${h.welcome}" is sent before your reply automatically, so don't greet again.` : '',
   ].filter(Boolean).join('\n');
 }

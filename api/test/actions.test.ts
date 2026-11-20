@@ -55,7 +55,7 @@ test('menu: "hi" opens it; too many rows for one list → sections, each its own
   const hi = await bot.send('admin', { from: owner(), text: 'hi' });
   assert.deepEqual(hi[0].options, ['menu:Shop', 'menu:Orders', 'menu:Money', 'menu:Customers', 'menu:Settings', 'menu:Help']);
   const settings = await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' });
-  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:fee', 'act:close'], 'one shop: no Switch shop; not paused: no Reopen');
+  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:close'], 'one shop: no Switch shop; not paused: no Reopen');
   assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Shop', text: 'Shop' }))[0]), ['act:add', 'act:products', 'act:soldout']);
   // A second shop brings Switch shop; pausing swaps Pause for Reopen.
   await addShop(db, fx.a.ownerPhone, fx.b.id, {});

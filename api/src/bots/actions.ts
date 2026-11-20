@@ -97,7 +97,11 @@ async function salesReport(c: ActionCtx): Promise<Out> {
   const sum = (ds: string[]) => ds.reduce((t, d) => ({ orders: t.orders + Number(by.get(d)?.ordersPaid ?? 0), sales: t.sales + Number(by.get(d)?.salesKobo ?? 0) }), { orders: 0, sales: 0 });
   const line = (label: string, s: { orders: number; sales: number }) => `${label}: ${formatKobo(s.sales)} from ${s.orders} paid order${s.orders === 1 ? '' : 's'}`;
   const unpaid = await recentOrders(c.db, [['businessId', '==', c.business.id], ['status', '==', 'awaiting_payment']], 50);
-  return [`📊 Sales for ${c.business.name}`, line('Today', sum([today])), line('Last 7 days', sum(week)), line('This month', sum(month)), '', `${unpaid.length} order${unpaid.length === 1 ? '' : 's'} waiting for payment.`].join('\n');
+  // The assistant's cost this month (no cap; shown so the owner knows).
+  const ai = await c.db.getAll(month.map(d => c.db.doc(C.agentStats, `${c.business.id}_${d}`)));
+  const aiMessages = ai.reduce((t, s) => t + Number(s?.shopTurns ?? 0) + Number(s?.adminTurns ?? 0), 0);
+  const aiKobo = Math.round(ai.reduce((t, s) => t + Number(s?.costKobo ?? 0), 0));
+  return [`📊 Sales for ${c.business.name}`, line('Today', sum([today])), line('Last 7 days', sum(week)), line('This month', sum(month)), '', `${unpaid.length} order${unpaid.length === 1 ? '' : 's'} waiting for payment.`, ...(aiMessages ? [`🤖 AI assistant this month: ${aiMessages} message${aiMessages === 1 ? '' : 's'}, about ${formatKobo(aiKobo)}.`] : [])].join('\n');
 }
 
 // Paid, not yet delivered or picked up.
@@ -106,6 +110,25 @@ async function pendingOrders(c: ActionCtx): Promise<Out> {
   const open = paid.filter(o => !['delivered', 'picked_up'].includes(o.fulfilment));
   if (!open.length) return 'No paid orders waiting to go out. 👍';
   return `Paid, still to deliver or hand over (${open.length}):\n${open.slice(0, 15).map(o => `${orderLine(o)} · ${o.fulfilment.replace(/_/g, ' ')}`).join('\n')}\n\nWhen one is ready, send e.g. *${open[0].ref} ready* or *${open[0].ref} delivered*.`;
+}
+
+// The assistant's tone: learned from the shop's messages (default) or one the owner picks.
+async function toneMenu(c: ActionCtx): Promise<Out> {
+  const now = c.business.tone ?? null;
+  const mark = (v: string | null) => (now === v ? ' ✅' : '');
+  return list('How should your shop assistant sound to customers?', 'Pick a tone', [
+    { id: 'act:settone:learned', title: `Like my messages${mark(null)}`, description: 'Copies the tone of your welcome and other messages' },
+    { id: 'act:settone:friendly', title: `Friendly${mark('friendly')}`, description: 'Warm and chatty, a few emojis' },
+    { id: 'act:settone:professional', title: `Professional${mark('professional')}`, description: 'Polite and clear, no slang' },
+    { id: 'act:settone:street', title: `Street${mark('street')}`, description: 'Relaxed Lagos style, Pidgin welcome' },
+  ], 'Tone');
+}
+
+async function setTone(c: ActionCtx): Promise<Out> {
+  const tone = (['friendly', 'professional', 'street'] as const).find(t => t === c.arg) ?? null;
+  await c.db.update(c.db.doc(C.businesses, c.business.id), { tone, updatedAt: new Date().toISOString() });
+  c.business.tone = tone;
+  return `✅ Your shop assistant will now sound ${tone ? tone : 'like your own messages'}.`;
 }
 
 async function soldOut(c: ActionCtx): Promise<Out> {
@@ -411,6 +434,8 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'delivery', command: 'delivery', hint: 'See or change your delivery areas and prices', menu: { section: 'Settings', title: 'Delivery' }, aliases: ['delivery', 'delivery prices', 'delivery zones', 'zones'], next: [['hours', 'Opening hours'], ['menu', 'Menu']], run: delivery },
   { id: 'messages', command: 'messages', hint: 'Choose the messages customers get from your shop', menu: { section: 'Settings', title: 'Messages' }, aliases: ['messages', 'my messages', 'customer messages'], async run() { return messagesMenu(); } },
   { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies' }, aliases: ['policies', 'policy', 'my policies'], next: [['menu', 'Menu']], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; } },
+  { id: 'tone', hint: 'How the shop assistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
+  { id: 'settone', hint: 'Set the assistant tone', run: setTone },
   { id: 'fee', hint: "Who pays Relay's 1% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
   { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', menu: { section: 'Settings', title: 'Pause my shop' }, aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
     hidden: c => !!c.business.pausedUntil },

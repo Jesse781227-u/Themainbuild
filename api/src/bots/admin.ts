@@ -67,10 +67,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
 
   const input = readInput(ctx.event);
   let text = input.text;
+  let voice = false; // this message was a voice note (written out by a machine)
   if (input.audioId) {
     const heard = cfg.ADMIN_BOT_ACCESS_TOKEN ? await slowJob(() => transcribeVoice(cfg, deps, cfg.ADMIN_BOT_ACCESS_TOKEN!, input.audioId!), { react: reactTo, ok: r => !!r }) : null;
     if (!heard) return reply("Sorry, I couldn't listen to that voice note. Please type it instead.");
     text = heard;
+    voice = true;
   }
   const choiceId = input.choiceId;
   if (choiceId === 'yes' || choiceId === 'no') text = choiceId;
@@ -319,7 +321,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
       },
     };
     const tools = adminTools2(helpers);
-    const r = await runAgent({ llm: deps.llm, system: adminSystem(business), context: await adminContext(toolBase), memory, message, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.AGENT_TIMEOUT_MS, actionTools: ACTION_TOOLS });
+    const r = await runAgent({ llm: deps.llm, system: adminSystem(business), context: `${await adminContext(toolBase)}${voice ? '\nThis message is a voice note written out by a machine: small mistakes are possible; ask if a name or number is unclear.' : ''}`, memory, message, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.AGENT_TIMEOUT_MS, actionTools: ACTION_TOOLS });
     await recordAgentTurn(db, cfg, business, 'admin', r).catch(() => undefined);
     const botNumber = await resolveSender(db, cfg, { adminBot: true }).then(s => s.phoneNumberId).catch(() => '');
     await debugNote(db, cfg, { phone: ctx.ownerPhone, botNumber, r }).catch(() => undefined);

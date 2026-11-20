@@ -134,3 +134,11 @@ export const conversational = (lower: string) => {
   const words = lower.split(/\s+/).filter(Boolean);
   return words.length > 5 || (words.length > 3 && /[?,]/.test(lower)) || PIDGIN.test(lower);
 };
+
+// How the assistant sounds for a shop: the owner's choice, or learned from the shop's own messages.
+export const TONES = {
+  friendly: 'Friendly: warm and chatty, a few emojis, everyday English (Pidgin when they use it).',
+  professional: 'Professional: polite and clear, no slang, at most one emoji.',
+  street: 'Street: relaxed Lagos style, Pidgin welcome, playful but respectful.',
+} as const;
+export const toneLine = (tone: keyof typeof TONES | null | undefined) => (tone && TONES[tone] ? `Tone (the owner chose it): ${TONES[tone]}` : 'Tone: copy the tone of the shop\'s own messages.');
