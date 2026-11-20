@@ -48,7 +48,7 @@ export async function routeEvent(db: Firestore, cfg: Config, event: InboundEvent
   const conversationId = await recordCustomerInbound(db, {
     businessId, channel: event.source, customerKey: event.from,
     phone: event.source === 'whatsapp' ? event.from : null, name: event.contactName, at: event.sentAt,
-    fromAd: event.source === 'whatsapp' && fromAd(event.message),
+    fromAd: event.source === 'whatsapp' && fromAd(event.message), text: event.text, messageId: event.messageId,
   });
   await handlers.shop({ db, cfg, event, businessId, conversationId });
   return 'shop';

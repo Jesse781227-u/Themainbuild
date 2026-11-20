@@ -15,13 +15,14 @@ export const adminConversationId = (ownerPhone: string) => `admin_${digits(owner
 
 // Called for every inbound message before any handler runs: keeps the 24-hour window and the
 // customer record current.
-export async function recordCustomerInbound(db: Firestore, args: { businessId: string; channel: Channel; customerKey: string; phone?: string | null; name?: string | null; at: string; fromAd?: boolean }) {
+export async function recordCustomerInbound(db: Firestore, args: { businessId: string; channel: Channel; customerKey: string; phone?: string | null; name?: string | null; at: string; fromAd?: boolean; text?: string | null; messageId?: string | null }) {
   const id = customerConversationId(args.businessId, args.channel, args.customerKey);
   await db.runTransaction(async tx => {
     const [conv, customer] = await tx.getAll([db.doc(C.conversations, id), db.doc(C.customers, id)]);
     const lastInboundAt = latest(conv?.lastInboundAt, args.at);
     // Merge writes never touch counters, opt-in or takeover mode; those get defaults only when new.
-    tx.set(db.doc(C.conversations, id), { id, businessId: args.businessId, channel: args.channel, customerId: id, lastInboundAt, updatedAt: args.at, ...(conv ? {} : { mode: 'bot' }) }, { merge: true });
+    // lastAsk: their latest words, so an answer the owner sends from their own app can be learnt from.
+    tx.set(db.doc(C.conversations, id), { id, businessId: args.businessId, channel: args.channel, customerId: id, lastInboundAt, updatedAt: args.at, ...(args.text?.trim() ? { lastAsk: { t: args.text.trim().slice(0, 400), at: args.at, id: args.messageId ?? args.at } } : {}), ...(conv ? {} : { mode: 'bot' }) }, { merge: true });
     tx.set(db.doc(C.customers, id), {
       id, businessId: args.businessId, channel: args.channel, ...(args.phone ? { phone: args.phone } : {}), ...(args.name ? { name: args.name } : {}),
       lastInboundAt, updatedAt: args.at,

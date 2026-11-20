@@ -1,5 +1,6 @@
 import { C } from '../db';
 import { log } from '../lib/logger';
+import { learnFromOwner } from '../services/owner-examples';
 import type { Handlers } from '../services/router';
 import { handleAdmin } from './admin';
 import { handleShop } from './shop';
@@ -20,6 +21,8 @@ export function createBotHandlers(deps: BotDeps): Handlers {
         mode: 'owner', takeoverAt: at, takeoverReason: OWNER_TAKEOVER_REASON, updatedAt: at,
       }, { merge: true });
       log('info', 'owner_takeover', { businessId: ctx.businessId, channel: ctx.event.source });
+      // Their answer becomes an example the shop assistant learns their way of answering from.
+      if (ctx.event.text) await learnFromOwner(ctx.db, ctx.businessId, ctx.conversationId, ctx.event.text).catch(e => log('warn', 'owner_example_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }));
     },
   };
 }

@@ -10,6 +10,7 @@ import { formatKobo } from '../lib/money';
 import { describeHours, openNow } from '../services/hours';
 import { policyText } from '../services/policies';
 import { toneLine, type AgentTool } from './agent';
+import { examplesBlock } from '../services/owner-examples';
 
 // What shop.ts hands the agent (so this file needs nothing from it).
 export interface ShopHelpers {
@@ -91,6 +92,7 @@ export function shopContext(h: ShopHelpers, cartNow: Awaited<ReturnType<ShopHelp
     `Shop: ${b.name}. ${b.hours ? `Hours: ${describeHours(b.hours)}. ${open?.open ? 'Open now.' : `Closed now${open?.next ? `, opens ${open.next}` : ''}.`}` : 'No opening hours set (orders any time).'}`,
     `Fulfilment: ${b.fulfilment ?? 'delivery'}${b.prepTime ? `, ready in about ${b.prepTime}` : ''}.`,
     b.messages?.welcome ? `The shop's own welcome message (copy its tone, not its words): "${b.messages.welcome.slice(0, 200)}"` : '',
+    examplesBlock((b as { ownerExamples?: unknown }).ownerExamples),
     b.policies ? `Policies: ${policyText(b.policies)?.replace(/\n/g, ' ').slice(0, 400) ?? ''}` : '',
     `Catalogue (id | name | price | stock | section | options):\n${catalogue}`,
     `Customer: ${name ?? 'name unknown'}; ${h.customer?.orderCount ?? 0} past orders.${h.lastOrder ? ` Last order ${h.lastOrder.ref} (${h.lastOrder.status}): ${h.lastOrder.items.join(', ')}.` : ''}${h.savedAddress ? ` Saved delivery address: ${h.savedAddress}.` : ''}`,
