@@ -39,7 +39,7 @@ button:disabled { opacity: .6; cursor: default; }
 
 const shopHeader = (b: Business) => `<div class="shop"><div class="logo">${b.profilePhotoUrl ? `<img src="${esc(b.profilePhotoUrl)}" alt="">` : esc(b.name.charAt(0).toUpperCase())}</div><div><b>${esc(b.name)}</b><small>${esc([b.area, b.city].filter(Boolean).join(', '))}</small></div></div>`;
 // Back to the shop's own WhatsApp chat when we know its number; WhatsApp's home otherwise.
-const backLink = (b: Business) => { const n = String((b as { whatsappDisplayNumber?: string | null }).whatsappDisplayNumber ?? '').replace(/D/g, ''); return n.length >= 10 ? `https://wa.me/${n}` : 'https://wa.me/'; };
+const backLink = (b: Business) => { const n = String((b as { whatsappDisplayNumber?: string | null }).whatsappDisplayNumber ?? '').replace(/\D/g, ''); return n.length >= 10 ? `https://wa.me/${n}` : 'https://wa.me/'; };
 const success = (o: Order, b: Business) => `<div class="card done"><div class="big">✅</div><h1>Payment successful</h1><p class="muted">${esc(formatKobo(o.payAmountKobo))} for order ${esc(o.ref)}.<br>Your receipt is in the chat.</p><a class="back" href="${esc(backLink(b))}">Back to WhatsApp</a></div>`;
 
 export function payRoutes() {

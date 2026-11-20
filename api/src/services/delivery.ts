@@ -44,6 +44,14 @@ export async function resolveDelivery(db: Firestore, businessId: string, locatio
   return anywhere ? quote(anywhere) : null;
 }
 
+// "gbagada" alone names the area but not the door: a rider needs a street, house number or landmark.
+export function needsStreet(address: string | null | undefined, zone: Pick<DeliveryZone, 'name' | 'match'> | null): boolean {
+  if (!address || !zone) return false;
+  const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 2);
+  const known = new Set([...words(zone.name), ...words(zone.match)]);
+  return !words(address).some(w => !known.has(w) && (!NOT_A_PLACE.test(w) || /\d/.test(w)));
+}
+
 export async function quoteDelivery(db: Firestore, businessId: string, location: string, method: DeliveryMethod): Promise<OrderDelivery | null> {
   if (method === 'pickup') return { method, feeKobo: 0, timeframe: 'Ready for pickup' };
   const r = await resolveDelivery(db, businessId, location);

@@ -29,7 +29,7 @@ export function payMessage(cfg: Pick<Config, 'API_BASE_URL'>, order: Pick<Order,
     type: 'interactive',
     interactive: {
       type: 'cta_url',
-      body: { text: `${intro ? `${intro}\n\n` : ''}Order ${order.ref}\n${items}\n\nTotal: *${formatKobo(order.payAmountKobo)}*\n\nTap below to pay securely. We're holding your items for ${minutes} minutes.` },
+      body: { text: `${intro ? `${intro}\n\n` : ''}${intro?.includes(order.ref) ? '' : `Order ${order.ref}\n`}${items}\n\nTotal: *${formatKobo(order.payAmountKobo)}*\n\nTap below to pay securely. We're holding your items for ${minutes} minutes.` },
       footer: { text: 'Test payment: no real money moves' },
       action: { name: 'cta_url', parameters: { display_text: `Pay ${formatKobo(order.payAmountKobo)}`.slice(0, 20), url: payUrl(cfg, token) } },
     },

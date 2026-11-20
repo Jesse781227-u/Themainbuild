@@ -20,7 +20,7 @@ import { noteInterest } from '../services/status-posts';
 import { DEFAULT_MESSAGES, fill, renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { modelsResting } from '../services/ai';
-import { byPriority, listZones, quoteDelivery, resolveDelivery, type DeliveryZone } from '../services/delivery';
+import { byPriority, listZones, needsStreet, quoteDelivery, resolveDelivery, type DeliveryZone } from '../services/delivery';
 import { describeLocation } from '../services/location';
 import { describeHours, openNow } from '../services/hours';
 import { policyText, POLICY_QUESTION } from '../services/policies';
@@ -42,7 +42,7 @@ const CART_HOURS = 24;
 // A new conversation (welcome first) after this long without a message.
 const SESSION_HOURS = 12;
 
-type Step = 'browse' | 'await_address' | 'confirm' | 'confirm_delete';
+type Step = 'browse' | 'await_address' | 'await_street' | 'confirm' | 'confirm_delete';
 interface ShopState {
   step: Step; options?: string[]; delivery?: OrderDelivery | null;
   suggested?: string[];      // products we've already suggested pairings for
@@ -154,8 +154,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   // ── The first message of a conversation: welcome first, then answer what they actually said ──
   if (!choice && text.trim()) {
     const fresh = !state.greetedAt || Date.now() - new Date(state.greetedAt).getTime() > SESSION_HOURS * 3600_000;
+    // Replies follow each message's language: Pidgin words → Pidgin; a plain English sentence → English;
+    // short replies ("ok", "yes") keep the last one.
     if (PIDGIN.test(lower)) state.pidgin = true;
-    else if (fresh) state.pidgin = false;
+    else if (fresh || lower.split(/\s+/).filter(Boolean).length >= 3) state.pidgin = false;
     if (fresh) {
       run.first = true;
       state.greetedAt = new Date().toISOString();
@@ -224,6 +226,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     return reply(buttons(`✅ Code ${r.offer.code} saved: ${r.offer.percentOff ? `${r.offer.percentOff}% off` : `${formatKobo(r.offer.amountOffKobo ?? 0)} off`} at checkout.`, [['checkout', 'Checkout'], ['menu', 'See the menu']]), { ...state });
   }
 
+  if (state.step === 'await_street' && state.delivery && text.trim().length >= 2 && !/^(menu|cancel|cart)$/.test(lower)) {
+    const zoneName = (await listZones(db, businessId)).find(z => z.id === state.delivery!.zoneId)?.name;
+    return confirmOrder(ctx, business, { ...state.delivery, address: `${text.trim().slice(0, 160)}${zoneName && !lower.includes(zoneName.toLowerCase()) ? `, ${zoneName}` : ''}` }, reply);
+  }
   if (state.step === 'await_address' && text.length >= 3 && !/^(menu|cancel|cart)$/.test(lower)) {
     const resolved = await resolveDelivery(db, businessId, text);
     if (resolved && 'choices' in resolved) return reply(areaPicker(resolved.choices, text, state.pidgin), { ...state, address: text.slice(0, 200) });
@@ -266,6 +272,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     case 'talkToHuman': return handOver(ctx, deps, business, customer, reply);
     // "Add one zobo to my order", "cancel my order", "change my address": the owner decides.
     case 'orderChange': return handOver(ctx, deps, business, customer, reply, text);
+    case 'notSold': {
+      const what = String(intent.args.product ?? '').slice(0, 40);
+      return reply(buttons(state.pidgin ? `We no get *${what}* for now o. See wetin we get 👇` : `Sorry, we don't have *${what}* right now. Here's what we do have 👇`, [['menu', say(state.pidgin, 'See what we have', 'See wetin we get')], ['ask', 'Ask a question']]));
+    }
     // "How much is the fried rice?": the price, in words, when one product clearly matches.
     case 'price': {
       const ranked = await rankProducts(db, businessId, String(intent.args.product ?? ''));
@@ -513,6 +523,9 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
 }
 
 async function shopIntent(lower: string, text: string, llm: LLMProvider | null, db: Firestore, businessId: string, opts: { fuzzy?: boolean } = {}): Promise<ToolChoice | null> {
+  // "Good evening. What is the price of the jollof rice please?": the greeting is manners, the rest is the ask.
+  const ask = lower.replace(/^(?:hi+|hello|hey|hy|good (?:morning|afternoon|evening|day)|morning|evening|how far|how (?:are|r) (?:you|u))(?:\s+(?:sir|ma|madam|o|oo|dear|boss|bros))?[\s,.!?]*/, '');
+  if (ask && ask !== lower && ask.split(/\s+/).length >= 2) { lower = ask; text = ask; }
   if (opts.fuzzy !== false && /^(hi|hello|hey|good (morning|afternoon|evening)|menu|start|catalog(ue)?|price ?list|what do you (have|sell)\??)\b/.test(lower)) return { tool: 'showMenu', args: {} };
   if (/^(cart|my cart|view cart|basket)$/.test(lower)) return { tool: 'viewCart', args: {} };
   if (/^(checkout|check out|pay|place order|order now)$/.test(lower)) return { tool: 'checkout', args: {} };
@@ -526,7 +539,10 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   const m = /^(\d{1,2})\s*x?\s+(.+)$/.exec(lower) ?? /^(.+?)\s*x\s*(\d{1,2})$/.exec(lower);
   const [q, n] = m ? (/^\d/.test(m[1]) ? [m[2], Number(m[1])] : [m[1], Number(m[2])]) : [lower, 1];
   const cleaned = productWords(q);
-  if (opts.fuzzy !== false && PRICE_Q.test(lower) && cleaned && (await search(db, businessId, cleaned)).length) return { tool: 'price', args: { product: cleaned } };
+  const priceAsk = PRICE_Q.test(lower) ? productWords(lower.split(/[?.!\n]+/).find(part => PRICE_Q.test(part)) ?? lower) : '';
+  if (opts.fuzzy !== false && priceAsk && (await search(db, businessId, priceAsk)).length) return { tool: 'price', args: { product: priceAsk } };
+  // "Do you have shawarma?" and nothing like it: say so, then the menu.
+  if (opts.fuzzy !== false && HAVE_Q.test(lower) && cleaned && !(await search(db, businessId, cleaned)).length) return { tool: 'notSold', args: { product: cleaned } };
   if (opts.fuzzy !== false && cleaned && (await findProducts(db, businessId, cleaned)).length) return { tool: 'addToCart', args: { product: cleaned, quantity: n } };
   if (opts.fuzzy !== false && cleaned && (await search(db, businessId, cleaned)).length) return { tool: 'addToCart', args: { product: cleaned, quantity: n } }; // shows the matches
   if (!llm) return null;
@@ -611,6 +627,7 @@ async function pickVariant(ctx: ShopContext, business: Business, productId: stri
 const FILLER = /\b(abeg|pls|plz|please|biko|sir|ma|madam|bros|boss|oga|how much|wetin be|what is|what's|whats|is the|is it|price of|price|prices|cost of|cost|i want|i wan|i need|i go take|i'd like|i would like|give me|send me|make i get|make i buy|can i get|can i have|you get|una get|una dey sell|una sell|do you have|do you sell|have you got|is there|any|the|a|an|some|for me|dey|na|be|is|are|o|oh|ehn|abi)\b/g;
 export const productWords = (text: string) => text.toLowerCase().replace(/[?!.,"'’]/g, ' ').replace(FILLER, ' ').replace(/\s+/g, ' ').trim();
 const PRICE_Q = /\b(how much|price|prices|cost|wetin be (the )?price)\b/;
+const HAVE_Q = /\b(do you (have|sell)|you get|una get|una dey sell|have you got|is there|any)\b/;
 // "Cancel my order", "add one zobo to my order", "change my address to Ifako".
 const ORDER_CHANGE = /\b(cancel|change|edit|modify|update|add|remove|swap|reduce|increase)\b[^.?!]{0,40}\b(my order|the order|this order)\b|\b(change|update|new|different|wrong)\b[^.?!]{0,15}\b(my )?(delivery )?(address|location)\b|\b(change|update) (the )?address\b/;
 
@@ -734,7 +751,7 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
   // The 1% service fee, when the shop has the customer pay it: shown from the cart on, never a surprise.
   const policy = policyFor(business, ctx.cfg);
   const fee = customerFee(feeKobo(subtotal, policy), policy);
-  const feeLine = fee ? `\nService fee: ${formatKobo(fee)}` : '';
+  const feeLine = fee ? `\nService fee: ${formatKobo(fee)}\nTotal: *${formatKobo(subtotal + fee)}* + delivery` : '';
   return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}${feeLine}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Empty my cart']]), { step: 'browse' });
 }
 
@@ -753,6 +770,11 @@ async function startCheckout(ctx: ShopContext, business: Business, reply: Reply)
 }
 
 async function confirmOrder(ctx: ShopContext, business: Business, delivery: OrderDelivery, reply: Reply) {
+  const zone = delivery.method !== 'pickup' && delivery.zoneId ? (await listZones(ctx.db, business.id)).find(z => z.id === delivery.zoneId) ?? null : null;
+  if (zone && zone.match && needsStreet(delivery.address, zone)) {
+    const pidgin = ((await ctx.db.get(ctx.db.doc(C.conversations, ctx.conversationId)))?.shop as ShopState | undefined)?.pidgin;
+    return reply(buttons(pidgin ? `Which street for *${zone.name}*? Send the street and house number, or a landmark, make the rider fit find you.` : `Which street in *${zone.name}*? Send the street and house number, or a landmark, so the rider can find you.`, [['cart', 'My cart'], ['menu', 'Keep shopping']]), { step: 'await_street', delivery });
+  }
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
   const { text, subtotal: goods } = await cartLines(ctx.db, cart);
@@ -766,7 +788,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
     'Please confirm your order:', text,
     `Subtotal: ${formatKobo(goods)}`,
     ...(discount ? [`Code ${code}: -${formatKobo(discount)}`] : []),
-    delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}${shopAddress(business) ? `\n📍 Pick up from: ${shopAddress(business)}` : ''}` : quoteLater(delivery) ? `Delivery (${delivery.address ?? ''}): ${delivery.timeframe}` : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
+    delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}${shopAddress(business) ? `\n📍 Pick up from: ${shopAddress(business)}` : ''}` : quoteLater(delivery) ? `Delivery to ${zone?.match ? `*${zone.name}*` : 'you'}: ${delivery.timeframe}${delivery.address ? `\n📍 ${delivery.address}` : ''}` : `Delivery to ${zone?.match ? `*${zone.name}*` : 'you'}: ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}${delivery.address ? `\n📍 ${delivery.address}` : ''}`,
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     quoteLater(delivery) ? `Total: about ${formatKobo(subtotal + fee)} plus delivery (${business.name} confirms the delivery price)` : `Total: ${formatKobo(subtotal + delivery.feeKobo + fee)}`,
   ].join('\n');

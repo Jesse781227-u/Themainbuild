@@ -115,9 +115,12 @@ test('report: "gbagada" offers its areas; one clear area is used; "anywhere else
   await bot.send('shop', { ...c, choice: 'checkout', text: 'Checkout' });
   const [pick] = await bot.send('shop', { ...c, text: 'Gbagada' });
   assert.deepEqual(pick.options, [`zone:${fx.a.id}_gb1`, `zone:${fx.a.id}_gb2`]);
-  const [confirm] = await bot.send('shop', { ...c, choice: `zone:${fx.a.id}_gb2`, text: 'Gbagada Phase 2' });
+  // Just an area: the rider needs a street first.
+  const [street] = await bot.send('shop', { ...c, choice: `zone:${fx.a.id}_gb2`, text: 'Gbagada Phase 2' });
+  assert.match(street.text, /^Which street in \*Gbagada Phase 2\*\?/);
+  const [confirm] = await bot.send('shop', { ...c, text: '14 Diya Street, near the church' });
   assert.match(confirm.text, /Please confirm your order/);
-  assert.match(confirm.text, /Gbagada \(Gbagada Phase 2\)/);
+  assert.match(confirm.text, /Delivery to \*Gbagada Phase 2\*: ₦1,500, Same day\n📍 14 Diya Street, near the church, Gbagada Phase 2/);
 });
 
 test('report: "where do you deliver?" with many areas asks theirs; the answer gets its price', async () => {
@@ -160,4 +163,50 @@ test('report: "Upgrade to this" swaps the item in the cart instead of adding a s
   assert.match(out[0].text, /Upgraded to 2 × Ofada Rice & Ayamase/);
   const cart = await doc('carts', `${fx.a.id}_wa_${c.from}`);
   assert.deepEqual(cart.items.map((i: { productId: string; qty: number }) => [i.productId, i.qty]), [['ofada', 2]]);
+});
+
+// ── Second run (20 Nov) ──
+test('report 2: the Back to WhatsApp link is digits only', async () => {
+  await db.update(db.doc('businesses', fx.a.id), { whatsappDisplayNumber: '+234 800 000 0000' });
+  const bot = new Bot();
+  const c = { from: phone(), to: fx.a.pnid };
+  await bot.send('shop', { ...c, text: 'hi' });
+  await bot.send('shop', { ...c, choice: 'add:zobo', text: 'Add to cart' });
+  await bot.send('shop', { ...c, choice: 'checkout', text: 'Checkout' });
+  await bot.send('shop', { ...c, text: '5 Isaac John Street, Ikeja' });
+  const placed = await bot.send('shop', { ...c, choice: 'confirm', text: 'Confirm order' });
+  const body = placed.map(m => JSON.stringify(m.content)).join(' ');
+  const ref = /RLY-[A-Z0-9]{5}/.exec(body)![0];
+  assert.equal(body.split(ref).length - 1, 1, 'the order number appears once in the checkout message');
+  const token = /\/pay\/([A-Za-z0-9_-]+)/.exec(body)![1];
+  await createApp().request(`/pay/${token}`, { method: 'POST' }, env);
+  assert.match(await (await createApp().request(`/pay/${token}`, {}, env)).text(), /href="https:\/\/wa\.me\/2348000000000">Back to WhatsApp/);
+});
+
+test('report 2: an area with no street asks for the street; the confirmation names the matched area', async () => {
+  const bot = new Bot();
+  const c = { from: phone(), to: fx.a.pnid };
+  await bot.send('shop', { ...c, text: 'hi' });
+  const cart = await bot.send('shop', { ...c, choice: 'add:jollof', text: 'Add to cart' });
+  assert.match(cart.at(-1)!.text, /Service fee: ₦30\nTotal: \*₦3,030\* \+ delivery/);
+  await bot.send('shop', { ...c, choice: 'checkout', text: 'Checkout' });
+  const [ask] = await bot.send('shop', { ...c, text: 'ikeja' });
+  assert.match(ask.text, /^Which street in \*Ikeja GRA\*\?/);
+  const [confirm] = await bot.send('shop', { ...c, text: '5 Isaac John Street' });
+  assert.match(confirm.text, /Delivery to \*Ikeja GRA\*: ₦2,500, Same day\n📍 5 Isaac John Street, Ikeja GRA/);
+});
+
+test('report 2: greetings, long Pidgin, things we don\'t sell, and replies in the language of each message', async () => {
+  await product('jollof-chicken', 'Jollof Rice & Chicken', 350_000);
+  const bot = new Bot();
+  const c = { from: phone(), to: fx.a.pnid };
+  await bot.send('shop', { ...c, text: 'hi' });
+  const [long] = await bot.send('shop', { ...c, text: 'abeg how much be the fried rice? i want 2 with extra chicken' });
+  assert.match(long.text, /^\*Fried Rice\* na ₦3,500\./);
+  const [english] = await bot.send('shop', { ...c, text: 'Good evening. What is the price of the jollof rice please?' });
+  assert.match(english.text, /^\*Jollof Rice\* is ₦3,000\./, 'English question, English answer, greeting ignored');
+  const [none] = await bot.send('shop', { ...c, text: 'do you have shawarma?' });
+  assert.match(none.text, /^Sorry, we don't have \*shawarma\* right now\./);
+  const [pidgin] = await bot.send('shop', { ...c, text: 'una get shawarma?' });
+  assert.match(pidgin.text, /^We no get \*shawarma\* for now o\./);
 });

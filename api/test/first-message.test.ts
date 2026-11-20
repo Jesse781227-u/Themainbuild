@@ -79,7 +79,7 @@ test('delivery: a Yaba address gets the Yaba price, not the Lagos one', async ()
   await bot.send('shop', { from: me, to: fx.a.pnid, choice: 'checkout', text: 'Checkout' });
   await bot.send('shop', { from: me, to: fx.a.pnid, choice: 'deliver', text: 'Deliver to me' });
   const c = await bot.send('shop', { from: me, to: fx.a.pnid, text: '12 Herbert Macaulay Way, Yaba, Lagos' });
-  assert.match(c[0].text, /Delivery \(12 Herbert Macaulay Way, Yaba, Lagos\): ₦1,500/);
+  assert.match(c[0].text, /Delivery to \*Yaba\*: ₦1,500\n📍 12 Herbert Macaulay Way, Yaba, Lagos/);
   // Pickup shows where.
   const pick = await bot.send('shop', { from: me, to: fx.a.pnid, choice: 'pickup', text: "I'll pick it up" });
   assert.match(pick[0].text, /📍 Pick up from: 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market/);

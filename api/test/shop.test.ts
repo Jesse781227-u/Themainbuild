@@ -48,7 +48,7 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   const paid = await shop(bot, me, { choice: 'confirm', text: 'Confirm order' });
   // Test environments use simulated payments: a "Pay ₦X" button to the payment page.
   assert.equal((paid[0].content as unknown as { interactive: { type: string } }).interactive.type, 'cta_url');
-  assert.match(paid[0].text, /Order RLY-[A-Z0-9]{5}\n3 × Product biz-a\n\nTotal: \*₦3,0\d\d(\.\d\d)?\*[\s\S]*holding your items for 30 minutes\.\nPay ₦3,0[\d.,]*: https?:\/\/[^/]+\/pay\/[A-Za-z0-9]+/);
+  assert.match(paid[0].text, /Your order RLY-[A-Z0-9]{5} is placed\. Pay below to confirm it\.\n\n3 × Product biz-a\n\nTotal: \*₦3,0\d\d(\.\d\d)?\*[\s\S]*holding your items for 30 minutes\.\nPay ₦3,0[\d.,]*: https?:\/\/[^/]+\/pay\/[A-Za-z0-9]+/);
 
   const [order] = await recentOrders(db, [['customerId', '==', convId(me)]], 1);
   assert.equal(order.status, 'awaiting_payment');
@@ -70,7 +70,7 @@ test('shop: delivery is quoted from the merchant zones', async () => {
   assert.match((await shop(bot, me, { text: 'Ikeja GRA' }))[0].text, /doesn't deliver to "Ikeja GRA"/);
   await shop(bot, me, { choice: 'deliver', text: 'Delivery' });
   const c = await shop(bot, me, { text: '5 Admiralty Way, Lekki Phase 1' });
-  assert.match(c[0].text, /Delivery \(5 Admiralty Way, Lekki Phase 1\): ₦1,500, same day\nService fee: ₦10\n/);
+  assert.match(c[0].text, /Delivery to \*Lekki\*: ₦1,500, same day\n📍 5 Admiralty Way, Lekki Phase 1\nService fee: ₦10\n/);
   await shop(bot, me, { text: 'yes' });
   const [order] = await recentOrders(db, [['customerId', '==', convId(me)]], 1);
   assert.equal(order.deliveryFeeKobo, 150_000);

@@ -47,11 +47,11 @@ test('shop: questions about policies, hours, location and delivery are answered 
   await shop(bot, me, 'Buy', `buy:${fx.a.product}`);
   await shop(bot, me, 'Checkout', 'checkout');
   await shop(bot, me, 'Delivery', 'deliver');
-  assert.match((await shop(bot, me, '12 Herbert Macaulay Way, Yaba, Lagos'))[0].text, /Delivery \(12 Herbert Macaulay Way, Yaba, Lagos\): ₦1,500/);
+  assert.match((await shop(bot, me, '12 Herbert Macaulay Way, Yaba, Lagos'))[0].text, /Delivery to \*Yaba\*: ₦1,500\n📍 12 Herbert Macaulay Way, Yaba, Lagos/);
   await shop(bot, me, 'Not yet', 'menu');
   await shop(bot, me, 'Checkout', 'checkout');
   await shop(bot, me, 'Delivery', 'deliver');
-  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery \(5 Ring Road, Ibadan\): delivery price to be confirmed by Business biz-a[\s\S]*Total: about ₦[\d,]+ plus delivery/);
+  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery to you: delivery price to be confirmed by Business biz-a\n📍 5 Ring Road, Ibadan[\s\S]*Total: about ₦[\d,]+ plus delivery/);
 });
 
 test('shop: pickup-only shops skip the delivery question and show the prep time', async () => {
