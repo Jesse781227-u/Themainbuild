@@ -7,7 +7,9 @@ import { StatusBar, type Device } from './Phone';
 export type Msg = { side: 'in' | 'out'; time: string; wait?: number } & (
   | { kind: 'text'; text: string }
   | { kind: 'buttons'; text: string; buttons: string[] }
-  | { kind: 'product'; title: string; price: string; art: string; text: string; buttons?: string[] }
+  | { kind: 'product'; title: string; price: string; photo: string; text: string; buttons?: string[] }
+  | { kind: 'shot'; amount: string; to: string; caption?: string }
+  | { kind: 'track'; text: string; steps: string[]; at: number; buttons?: string[] }
   | { kind: 'cta'; text: string; button: string }
   | { kind: 'list'; text: string; button: string }
   | { kind: 'doc'; name: string; meta: string; text?: string }
@@ -39,16 +41,8 @@ const ReplyIcon = () => <svg width="15" height="15" viewBox="0 0 24 24"><path fi
 const LinkIcon = () => <svg width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="M14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3h-7zm5 16H5V5h7V3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2v-7h-2v7z" /></svg>;
 const ListIcon = () => <svg width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" /></svg>;
 
-function Art({ name }: { name: string }) {
-  // Drawn product "photos" so the demo has no stock imagery.
-  const arts: Record<string, [string, string, string]> = {
-    jollof: ['🍛', '#F59E0B', '#B45309'],
-    zobo: ['🍹', '#BE185D', '#701A75'],
-    sneakers: ['👟', '#0EA5E9', '#1E3A8A'],
-    ankara: ['👗', '#F97316', '#7C2D12'],
-  };
-  const [emoji, a, b] = arts[name] ?? ['🛍️', '#84CC16', '#365314'];
-  return <div className="art" style={{ background: `radial-gradient(120% 90% at 30% 20%, ${a}, ${b})` }}><span>{emoji}</span></div>;
+function Photo({ src }: { src: string }) {
+  return <div className="art"><img src={src} alt="" loading="lazy" /></div>;
 }
 
 function Bubble({ m, first, read }: { m: Msg; first: boolean; read: boolean }) {
@@ -59,7 +53,26 @@ function Bubble({ m, first, read }: { m: Msg; first: boolean; read: boolean }) {
     case 'product':
       return (
         <div className="group">
-          <div className={`${cls} media`}><Art name={m.art} /><div className="prod"><b>{m.title}</b><span>{m.price}</span></div><span className="txt">{rich(m.text)}</span><Meta m={m} read={read} /></div>
+          <div className={`${cls} media`}><Photo src={m.photo} /><div className="prod"><b>{m.title}</b><span>{m.price}</span></div><span className="txt">{rich(m.text)}</span><Meta m={m} read={read} /></div>
+          {m.buttons?.map(b => <div key={b} className="wa-btn"><ReplyIcon />{b}</div>)}
+        </div>
+      );
+    case 'shot':
+      // A customer's "proof of payment" screenshot from a bank app.
+      return (
+        <div className={`${cls} media`}>
+          <div className="shot"><div className="shot-top"><span>9:41</span><span>●●● 4G</span></div><div className="shot-ok">✓</div><b>Transfer Successful</b><div className="shot-amt">{m.amount}</div><span>To {m.to}</span><span className="shot-ref">Ref: 000013251120094112</span></div>
+          {m.caption && <span className="txt">{m.caption}</span>}<Meta m={m} read={read} />
+        </div>
+      );
+    case 'track':
+      return (
+        <div className="group">
+          <div className={cls}>
+            <span className="txt">{rich(m.text)}</span>
+            <div className="trk">{m.steps.map((st, i) => <div key={st} className={`trk-s${i < m.at ? ' done' : ''}${i === m.at ? ' now' : ''}`}><i />{st}</div>)}</div>
+            <Meta m={m} read={read} />
+          </div>
           {m.buttons?.map(b => <div key={b} className="wa-btn"><ReplyIcon />{b}</div>)}
         </div>
       );
@@ -141,7 +154,7 @@ function Composer({ device }: { device: Device }) {
 }
 
 const TypingDots = () => (
-  <motion.div className="bubble in tail typing-bubble" initial={{ opacity: 0, y: 8, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}>
+  <motion.div className="bubble in tail typing-bubble" initial={{ y: 8, scale: 0.9 }} animate={{ y: 0, scale: 1 }}>
     {[0, 1, 2].map(i => <motion.i key={i} animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }} transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15 }} />)}
   </motion.div>
 );
@@ -200,7 +213,7 @@ export function Chat({ script, speed = 1, loop = true }: { script: ChatScript; s
                 </motion.div>
               );
             })}
-            {typing && <motion.div key="typing" layout className="row in gap"><TypingDots /></motion.div>}
+            {typing && <motion.div key="typing" className="row in gap" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0 } }}><TypingDots /></motion.div>}
           </AnimatePresence>
         </div>
       </div>
