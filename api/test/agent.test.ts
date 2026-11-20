@@ -369,7 +369,7 @@ test('tone: the owner picks one in Settings and the shop assistant uses it', asy
   const owner = fx.a.ownerPhone.slice(1);
   const ob = new Bot(null);
   const menu = await ob.send('admin', { from: owner, text: 'tone' });
-  assert.deepEqual(menu[0].options, ['act:settone:learned', 'act:settone:friendly', 'act:settone:professional', 'act:settone:street']);
+  assert.deepEqual(menu[0].options, ['act:settone:learned', 'act:settone:friendly', 'act:settone:professional', 'act:settone:street', 'act:menu']);
   assert.match((await ob.send('admin', { from: owner, choice: 'act:settone:street', text: 'Street' }))[0].text, /now sound street/);
   assert.equal((await doc('businesses', fx.a.id)).tone, 'street');
   const llm = scripted([{ say: 'Wetin you need today? 😎' }]);

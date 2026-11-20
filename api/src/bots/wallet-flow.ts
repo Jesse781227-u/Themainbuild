@@ -10,6 +10,7 @@ import { decrypt, encrypt, randomId } from '../lib/crypto';
 import { formatKobo, nairaToKobo } from '../lib/money';
 import { log } from '../lib/logger';
 import { bankLine, getKyc, getWallet, MIN_PAYOUT_KOBO, payoutLine, recentPayouts, requestPayout, saveKyc, settlePayout, withdrawable, type Payout } from '../services/wallet';
+import { waiting } from './owner-home';
 import { buttons, list, notifyOwner } from './common';
 import { matchAction, type ActionCtx, type Out } from './actions';
 import { parseAdminCommand } from './intent';
@@ -42,7 +43,7 @@ export async function startVerify(c: ActionCtx): Promise<Out> {
   if (kyc?.status === 'pending_review') return "We're still checking your details. I'll message you as soon as it's done.";
   await setDraft(c, {});
   await c.setAwaiting('kyc:name');
-  return "Let's verify your account so you can withdraw 🔐 It's once only, and your details are encrypted.\n\n*1 of 4* · What's the full name on your bank account? (Exactly as the bank has it.)";
+  return waiting("Let's verify your account so you can withdraw 🔐 It's once only, and your details are encrypted.\n\n*1 of 4* · What's the full name on your bank account? (Exactly as the bank has it.)");
 }
 
 const BANK_ROWS = () => list('*3 of 4* · Which bank should payouts go to?', 'Pick bank', [...BANKS.slice(0, 9).map(b => ({ id: `bank:${b}`, title: b })), { id: 'bank:other', title: 'Another bank' }], 'Banks');

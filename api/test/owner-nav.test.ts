@@ -68,8 +68,9 @@ test('4 · "back" with nothing pending opens the menu', async () => {
 test('5 · Pause → Cancel: the shop stays open and the menu still says Pause shop', async () => {
   const bot = new Bot();
   const pause = await bot.send('admin', { from: owner, choice: 'act:close', text: 'Pause shop' });
-  assert.deepEqual(pause[0].options, ['act:close:1', 'act:close:3', 'act:close:open', 'act:cancel']);
-  await bot.send('admin', { from: owner, choice: 'act:cancel', text: 'Cancel' });
+  assert.deepEqual(pause[0].options, ['act:close:1', 'act:close:3', 'act:close:open', 'act:close:cancel']);
+  const kept = await bot.send('admin', { from: owner, choice: 'act:close:cancel', text: 'Cancel' });
+  assert.equal(kept[0].text.split('\n')[0], 'Your shop is still open.');
   assert.equal((await doc('businesses', fx.a.id)).pausedUntil ?? null, null);
   const [m] = await bot.send('admin', { from: owner, text: 'menu' });
   assert.equal(rowsOf(m).find(r => r.id === 'act:close')!.title, 'Pause shop');
@@ -80,9 +81,9 @@ test('6 · Money shows goods + delivery, and its total matches Orders', async ()
   await db.set(db.doc('orders', 'nav-paid'), { id: 'nav-paid', ref: 'RLY-NAV01', businessId: fx.a.id, customerId: fx.a.customer, channel: 'whatsapp', items: [{ productId: fx.a.product, name: 'Akara', priceKobo: 160_000, qty: 1 }], subtotalKobo: 160_000, deliveryFeeKobo: 700_000, feeKobo: 1_600, feePaidBy: 'customer', uniqueKobo: 0, payAmountKobo: 861_600, status: 'paid', fulfilment: 'pending', delivery: { method: 'self_arranged', feeKobo: 700_000, address: 'Sangotedo' }, holdExpiresAt: now, paidAt: now, createdAt: now, updatedAt: now });
   const bot = new Bot();
   const money = (await bot.send('admin', { from: owner, choice: 'act:money', text: 'Money' }))[0].text;
-  assert.match(money, /Today: ₦1,600 goods \+ ₦7,000 delivery = \*₦8,600\* \(1 paid order\)/);
+  assert.match(money, /Today: \*₦8,600\* to you \(₦1,600 goods \+ ₦7,000 delivery\), 1 paid order/);
   const orders = (await bot.send('admin', { from: owner, choice: 'act:orders', text: 'Orders' }))[0];
-  assert.match(orders.text, /Paid today: 1 order, ₦8,600 to you\./);
+  assert.match(orders.text, /Paid today: 1 order, \*₦8,600 to you\*\./);
   assert.match(orders.text, /^🚚 \*To deliver \(1\)\*\n• RLY-NAV01/);
   assert.deepEqual(orders.options, ['act:deliverpick', 'act:receipt', 'act:menu']);
   const pick = await bot.send('admin', { from: owner, choice: 'act:deliverpick', text: 'Mark delivered' });

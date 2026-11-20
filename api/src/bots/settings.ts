@@ -61,11 +61,11 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   // Who pays Relay's fee.
   if (choiceId === 'fee:customer' || choiceId === 'fee:owner') {
     await save(db, business, { feePayer: choiceId === 'fee:owner' ? 'owner' : 'customer' });
-    return choiceId === 'fee:owner' ? 'Done ✅ You pay Relay\'s fee from now on: customers pay your prices, and the fee comes out of what you receive.' : 'Done ✅ Customers pay Relay\'s fee from now on, as a small service fee on their total.';
+    return buttons(choiceId === 'fee:owner' ? 'Done ✅ You pay Relay\'s fee from now on: customers pay your prices, and the fee comes out of what you receive.' : 'Done ✅ Customers pay Relay\'s fee from now on, as a small service fee on their total.', [['act:menu', 'Menu']]);
   }
   if (/^(fee|fees|relay fee|service fee)$/i.test(t)) {
     const who = business.feePayer === 'owner' ? 'You pay it: it comes out of what you receive' : 'Your customers pay it, as a service fee on their total';
-    return buttons(`Relay's fee is 1% of each paid order, at most ${formatKobo(cfg.FEE_CAP_KOBO)}, and nothing on delivery. ${who}.\n\nWho should pay it?`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]);
+    return buttons(`Relay's fee is 1% of each paid order, at most ${formatKobo(cfg.FEE_CAP_KOBO)}, and nothing on delivery. ${who}.\n\nWho should pay it?`, [['fee:customer', `My customers pay${business.feePayer === 'owner' ? '' : ' ✓'}`], ['fee:owner', `I'll pay the fee${business.feePayer === 'owner' ? ' ✓' : ''}`], ['act:menu', 'Menu']]);
   }
   return null;
 }

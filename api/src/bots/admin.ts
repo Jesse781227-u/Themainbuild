@@ -64,6 +64,9 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const reply = (content: OutboundContent | string) => send(db, cfg, deps.transport, { from: { adminBot: true }, conversationId: ctx.conversationId, to: ctx.ownerPhone, content: typeof content === 'string' ? { type: 'text', text: content } : content });
   const convRef = db.doc(C.conversations, ctx.conversationId);
   const conv = ((await db.get(convRef)) ?? {}) as AdminConversation;
+  // The owner's newest message: an AI reply still being written for an older one is dropped.
+  const prevLatest = (conv as { lastOwnerMsgAt?: string | null }).lastOwnerMsgAt ?? '';
+  if (ctx.event.sentAt >= prevLatest) await db.set(convRef, { lastOwnerMsgAt: ctx.event.sentAt, lastOwnerMsgId: ctx.event.messageId }, { merge: true });
   await showTyping(db, cfg, deps.transport, { adminBot: true }, ctx.ownerPhone, ctx.event.messageId);
   const reactTo = (emoji: string) => react(db, cfg, deps.transport, { from: { adminBot: true }, conversationId: ctx.conversationId, to: ctx.ownerPhone, messageId: ctx.event.messageId, emoji });
 
@@ -166,7 +169,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const word = text.trim().toLowerCase().replace(/[.!]+$/, '');
   if (!choiceId && !input.document && !input.imageId) {
     if (/^(menu|home|start|hi|hello)$/.test(word)) { await clearPending(); return runAction(actionById('menu')!, { ...actionCtx, arg: null }); }
-    if (/^(cancel|stop|back|exit|nevermind|never mind|no)$/.test(word)) {
+    // "no" is only a cancel when the waiting question isn't itself a yes/no one (confirm a change,
+    // the hours read-back, a withdrawal): there it's the answer.
+    const yesNoQuestion = !!(c0.pendingAction || c0.hoursDraft || (conv as { withdrawConfirm?: unknown }).withdrawConfirm);
+    if (/^(cancel|stop|back|exit|nevermind|never mind|no)$/.test(word) && !(word === 'no' && yesNoQuestion)) {
       if (pendingNow) { await clearPending(); return reply(buttons('Cancelled. Nothing was sent or saved.', [['act:menu', 'Menu']])); }
       return runAction(actionById('menu')!, { ...actionCtx, arg: null });
     }
@@ -224,6 +230,16 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     await setAwaiting(null);
     return askOrRun('broadcast', { message: text.trim(), ...(statusPost ? { statusPost } : {}) });
   }
+  // "How many are back?" (Sold out / restock): a number, or a size and a number.
+  if (state.awaiting?.startsWith('restock:') && !choiceId && text.trim()) {
+    const p = (await db.get(db.doc(C.products, state.awaiting.slice(8)))) as Product | null;
+    const m = /^(.*?)\s*(\d{1,6})$/.exec(text.trim().replace(/\s*(pcs|pieces|units)$/i, ''));
+    if (!p || p.businessId !== business.id) { await setAwaiting(null); return reply(buttons('That product is gone.', [['act:soldout', 'Sold out / restock'], ['act:menu', 'Menu']])); }
+    if (!m || !Number(m[2])) return reply(waiting(p.variants?.length ? `Send the size and how many, e.g. *${p.variants[0].label.split(' / ')[0]} 5*.` : 'Send how many are back, e.g. *10*.'));
+    await setAwaiting(null);
+    const out = await runTool('restock', { product: m[1] ? `${p.name} ${m[1]}` : p.name, quantity: Number(m[2]) }, toolBase);
+    return reply(typeof out === 'string' ? buttons(`✅ ${out}`, [['act:soldout', 'Sold out / restock'], ['act:menu', 'Menu']]) : out);
+  }
   if (state.awaiting === 'policies' && !choiceId && text.trim()) {
     await setAwaiting(null);
     const r = await handleSettings(db, cfg, business, `policies: ${text.trim()}`, null);
@@ -261,7 +277,9 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   }
 
   // ── HOURS with times ("hours Mon–Fri 8am–6pm, Sat 10–4"): read, checked with the owner, then saved ──
-  const hoursText = !choiceId ? /^(?:hours|opening hours|set hours)\s*:?\s+(.+)$/i.exec(text.trim()) : null;
+  // "Change hours" asked for them: the next message is the hours.
+  const askedHours = state.awaiting === 'hours' && !choiceId && text.trim() ? (await setAwaiting(null), ['', text.trim()] as unknown as RegExpExecArray) : null;
+  const hoursText = askedHours ?? (!choiceId ? /^(?:hours|opening hours|set hours)\s*:?\s+(.+)$/i.exec(text.trim()) : null);
   if (hoursText && !/^(none|off|always open|24\/?7|any ?time)$/i.test(hoursText[1].trim())) {
     const d = await readHoursText(hoursText[1], deps.llm);
     if (!d) return reply("I couldn't read those hours. Try *hours 8am–9pm*, or *hours Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.");
@@ -379,6 +397,9 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     const botNumber = await resolveSender(db, cfg, { adminBot: true }).then(s => s.phoneNumberId).catch(() => '');
     await debugNote(db, cfg, { phone: ctx.ownerPhone, botNumber, r }).catch(() => undefined);
     if (isFail(r)) return false;
+    // The owner sent something newer while this was being written: this reply is out of date.
+    const latest = ((await db.get(convRef)) as { lastOwnerMsgAt?: string | null } | null)?.lastOwnerMsgAt ?? '';
+    if (latest > ctx.event.sentAt) { log('info', 'agent_reply_dropped', { businessId: business.id, reason: 'newer_owner_message' }); return true; }
     await saveMemory(db, ctx.conversationId, remember(memory, message, r.text, r.calls.map(c => c.name)));
     if (r.finish) await r.finish(r.text); else await reply(r.text);
     return true;

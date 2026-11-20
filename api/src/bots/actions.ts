@@ -20,9 +20,9 @@ import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
-import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords } from '../services/segments';
+import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords, systemSegments } from '../services/segments';
 import { ZONES_ASK } from './zones-flow';
-import { deliverPick, mainMenu, moneyScreen, ordersScreen, pauseChoice, reachHub, subList, waiting } from './owner-home';
+import { deliverPick, mainMenu, moneyScreen, ordersScreen, pauseChoice, reachHub, reopenAt, restockList, soldOutPicker, soldOutSection, subList, waiting, whenLabel } from './owner-home';
 import { ALL_TRIGGERS, executeCampaign, markOwnerSent, planCampaign, planText, TRIGGER_HINT, TRIGGER_LABEL, triggerOn } from '../services/reach';
 import { interestedIn } from '../services/reach-triggers';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
@@ -99,13 +99,13 @@ function lastDays(days: number, now = new Date()) {
 // The assistant's tone: learned from the shop's messages (default) or one the owner picks.
 async function toneMenu(c: ActionCtx): Promise<Out> {
   const now = c.business.tone ?? null;
-  const mark = (v: string | null) => (now === v ? ' ✅' : '');
-  return list('How should your shop assistant sound to customers?', 'Pick a tone', [
+  const mark = (v: string | null) => (now === v ? ' ✓' : '');
+  return subList('Tone', 'How should your shop assistant sound to customers?', [
     { id: 'act:settone:learned', title: `Like my messages${mark(null)}`, description: 'Copies the tone of your welcome and other messages' },
     { id: 'act:settone:friendly', title: `Friendly${mark('friendly')}`, description: 'Warm and chatty, a few emojis' },
     { id: 'act:settone:professional', title: `Professional${mark('professional')}`, description: 'Polite and clear, no slang' },
     { id: 'act:settone:street', title: `Street${mark('street')}`, description: 'Relaxed Lagos style, Pidgin welcome' },
-  ], 'Tone');
+  ]);
 }
 
 async function setTone(c: ActionCtx): Promise<Out> {
@@ -116,6 +116,10 @@ async function setTone(c: ActionCtx): Promise<Out> {
 }
 
 async function soldOut(c: ActionCtx): Promise<Out> {
+  // The picker: sections, then a section's products (paged), or what's sold out (to restock).
+  if (!c.arg) return soldOutPicker(c);
+  if (c.arg.startsWith('cat:')) { const [, cat, page] = c.arg.split(':'); return soldOutSection(c, cat, Number(page) || 0); }
+  if (c.arg === 'out' || c.arg.startsWith('out:')) return restockList(c, Number(c.arg.split(':')[1]) || 0);
   const products = (await listProducts(c.db, c.business.id)).filter(p => p.available);
   let p: Product | null = null;
   // One size/colour: "act:soldout:<product>:<option>".
@@ -157,7 +161,17 @@ async function receipt(c: ActionCtx): Promise<Out> {
   if (c.arg) return runTool('orderReceipt', { order: c.arg }, c);
   const paid = await recentOrders(c.db, [['businessId', '==', c.business.id], ['status', '==', 'paid']], 10);
   if (!paid.length) return 'No paid orders yet, so there are no receipts to send.';
-  return list('Which order\'s receipt?', 'Pick order', paid.map(o => ({ id: `act:receipt:${o.ref}`, title: o.ref, description: `${formatKobo(o.payAmountKobo)} · ${o.items.map(l => l.name).join(', ')}` })), 'Paid orders');
+  return subList('Paid orders', 'Which order\'s receipt?', paid.slice(0, 9).map(o => ({ id: `act:receipt:${o.ref}`, title: o.ref, description: `${formatKobo(o.payAmountKobo)} · ${o.items.map(l => l.name).join(', ')}`.slice(0, 72) })));
+}
+
+// "Back in stock": how many (a number), or which size and how many for products with options.
+async function restockAsk(c: ActionCtx): Promise<Out> {
+  const p = c.arg ? ((await c.db.get(c.db.doc(C.products, c.arg))) as Product | null) : null;
+  if (!p || p.businessId !== c.business.id || p.deletedAt) return buttons('That product is gone.', [['act:soldout', 'Sold out / restock'], ['act:menu', 'Menu']]);
+  await c.setAwaiting(`restock:${p.id}`);
+  return waiting(p.variants?.length
+    ? `Which *${p.name}* is back, and how many? e.g. *${p.variants[0].label.split(' / ')[0]} 5*`
+    : `How many *${p.name}* are back in stock? Send a number, e.g. *10*.`);
 }
 
 async function viewOrder(c: ActionCtx): Promise<Out> {
@@ -188,15 +202,17 @@ async function messageCustomer(c: ActionCtx): Promise<Out> {
 // Paused: customers see the shop and a "back on …" note, but can't order until then.
 async function pause(c: ActionCtx): Promise<Out> {
   const paused = c.business.pausedUntil;
-  const choose = pauseChoice(null);
-  if (!c.arg) return pauseChoice(paused);
+  const choose = pauseChoice(null, c.business.hours);
+  if (!c.arg) return pauseChoice(paused, c.business.hours);
+  if (c.arg === 'cancel') return buttons('Your shop is still open.', [['act:menu', 'Menu']]);
   const days = c.arg === 'open' ? null : Number(c.arg);
   if (c.arg !== 'open' && !(days && days > 0 && days <= 30)) return choose;
-  // Reopens at 8am Lagos time on the day.
-  const until = days ? new Date(`${lagosDate(new Date(Date.now() + days * 86_400_000))}T07:00:00Z`).toISOString() : 'open';
+  // Reopens at that day's opening time (or the next open day's).
+  const at = days ? reopenAt(c.business.hours, days) : null;
+  const until = at ? at.toISOString() : 'open';
   await c.db.update(c.db.doc(C.businesses, c.business.id), { pausedUntil: until, updatedAt: new Date().toISOString() });
   c.business.pausedUntil = until;
-  return `⏸️ Paused. Customers can look but can't order${days ? ` until ${days === 1 ? 'tomorrow' : `${days} days from now`}, 8am` : ' until you reopen'}. Send *reopen* any time.`;
+  return buttons(`⏸️ Paused. Customers can look but can't order${at ? ` until ${whenLabel(at)}` : ' until you reopen'}.`, [['act:reopen', 'Reopen now'], ['act:menu', 'Menu']]);
 }
 
 async function reopen(c: ActionCtx): Promise<Out> {
@@ -209,7 +225,12 @@ async function hours(c: ActionCtx): Promise<Out> {
   const h = c.business.hours;
   const form = flowId(c.cfg, 'hours');
   if (form) return flowMessage('hours', form, c.business.id, `${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set yet.'} Tap below to set them day by day.`, Object.fromEntries(DAYS.flatMap(d => [[`${d}_open`, h?.[d]?.open ?? 'closed'], [`${d}_close`, h?.[d]?.close ?? 'closed']])));
-  return `${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set: customers can order any time.'}\n\nTo change them send e.g. *hours Mon–Sat 8am–9pm, Sun closed*, or *hours 8am–9pm* for every day.`;
+  return buttons(`${h ? `Your opening hours: ${describeHours(h)}.` : 'No opening hours set: customers can order any time.'}`, [['act:hourschange', 'Change hours'], ['act:menu', 'Menu']]);
+}
+
+async function hoursChange(c: ActionCtx): Promise<Out> {
+  await c.setAwaiting('hours');
+  return waiting('Send your new opening hours, e.g. *Mon–Sat 8am–9pm, Sun closed*, or *8am–9pm* for every day.');
 }
 
 async function delivery(c: ActionCtx): Promise<Out | Out[]> {
@@ -234,10 +255,10 @@ async function makeStatus(c: ActionCtx): Promise<Out | Out[] | null> {
     if (!products.length) return 'Add a product first, then I can make a Status for it.';
     const cats = (await listCategories(c.db, c.business.id)).filter(x => products.some(p => p.categoryId === x.id));
     const rows = [
-      ...products.slice(0, cats.length > 1 ? 6 : 10).map(p => ({ id: `act:status:p:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })),
-      ...(cats.length > 1 ? cats.slice(0, 4).map(x => ({ id: `act:status:c:${x.id}`, title: `All of ${x.name}`, description: 'A Status for the whole section' })) : []),
+      ...products.slice(0, cats.length > 1 ? 6 : 9).map(p => ({ id: `act:status:p:${p.id}`, title: p.name, description: formatKobo(p.priceKobo) })),
+      ...(cats.length > 1 ? cats.slice(0, 3).map(x => ({ id: `act:status:c:${x.id}`, title: `All of ${x.name}`, description: 'A Status for the whole section' })) : []),
     ];
-    return list('What should the Status be about? I\'ll make the picture and pick the customers to mention.', 'Pick one', rows, 'Make a Status');
+    return subList('Post a Status', 'What should the Status be about? I\'ll make the picture and pick the customers to mention.', rows);
   }
   const [kind, id] = c.arg.split(':');
   if (!id || !['p', 'c'].includes(kind)) return 'Send */status* to pick a product.';
@@ -275,11 +296,10 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
 // ── Smart Reach (services/reach.ts) ──
 async function reachHome(c: ActionCtx): Promise<Out> {
   const rows = ALL_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: TRIGGER_HINT[t] }));
-  return list('Automatic updates go to the right customers, free where they can. Tap one to switch it on or off.', 'Choose', [...rows,
-    { id: 'act:reachgroup', title: 'Send to a group', description: 'e.g. "my sneaker buyers", "people who haven\'t ordered in a month"' },
-    { id: 'act:reachall', title: 'Send to everyone', description: 'All your customers who get updates' },
+  // Sending one message yourself is Message customers → Send a broadcast.
+  return subList('Automatic updates', 'Automatic updates go to the right customers, free where they can. Tap one to switch it on or off.', [...rows,
     { id: 'act:segments', title: 'My customer groups', description: 'Who buys what, and how many' },
-  ], 'Automatic updates');
+  ]);
 }
 async function reachToggle(c: ActionCtx): Promise<Out> {
   const t = ALL_TRIGGERS.find(x => x === c.arg);
@@ -354,7 +374,7 @@ async function reachPicks(c: ActionCtx): Promise<Out> {
 
 async function segmentsView(c: ActionCtx): Promise<Out> {
   const groups = await refreshSegments(c.db, c.business.id);
-  return buttons(`Your customer groups:\n${groups.map(g => `• ${g.name}: ${g.size}`).join('\n')}\n\nSend to any group with *Send to a group*, e.g. "tell my top customers about…".`.slice(0, 1000), [['act:reachgroup', 'Send to a group'], ['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  return buttons(`Your customer groups:\n${groups.map(g => `• ${g.name}: ${g.size}`).join('\n')}\n\nTo message one, start a broadcast and pick the group after the preview.`.slice(0, 1000), [['act:campaign', 'Send a broadcast'], ['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
 }
 
 // The route plan, then [Send all] [Free ones only] [Edit message].
@@ -366,8 +386,30 @@ export async function reachPlan(c: ActionCtx, text: string, audience?: string[] 
   const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: extra.picks ? 'Picked for you' : segment ? `Update to ${segment}` : 'Update to everyone', text: body, source: 'owner', button: ['menu', 'See what we have'], audience: audience ?? null, segment: segment ?? null, picks: extra.picks ?? false, offer });
   if (!decisions.length) return buttons('You have no customers yet. Once people chat or order, you can send them updates here.', [['act:menu', 'Menu']]);
   if (!summary.open && !summary.owner_sent && !summary.paid_template) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this right now: paid updates need your marketing template approved by Meta.`, [['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
+  // A broadcast to everyone: the preview, then who gets it (everyone, or a group).
+  if (!audience && !segment && !extra.picks) return buttons(`${planText(summary, decisions.length)}\n\nWho should get it?`, [[`act:reachsend:${campaign.id}`, 'Everyone'], [`act:bcgroup:${campaign.id}`, 'Choose a group'], ['act:cancel', 'Cancel']]);
   const mixed = summary.owner_sent > 0 || summary.paid_template > 0;
   return buttons(planText(summary, decisions.length), mixed ? [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:cancel', 'Cancel']] : [[`act:reachsend:${campaign.id}`, 'Send'], ['act:reachall', 'Edit'], ['act:cancel', 'Cancel']]);
+}
+
+// Broadcast → Choose a group: the shop's groups with their sizes; the pick plans it again for them.
+async function broadcastGroups(c: ActionCtx): Promise<Out> {
+  const camp = c.arg ? ((await c.db.get(c.db.doc(C.campaigns, c.arg))) as { businessId: string; text: string } | null) : null;
+  if (!camp || camp.businessId !== c.business.id) return buttons('That broadcast is gone. Start again from Message customers.', [['act:reachhub', 'Message customers'], ['act:menu', 'Menu']]);
+  const groups = (await refreshSegments(c.db, c.business.id)).filter(g => g.size > 0);
+  if (!groups.length) return buttons('No groups have anyone in them yet.', [[`act:reachsend:${c.arg}`, 'Send to everyone'], ['act:cancel', 'Cancel']]);
+  return subList('Groups', 'Which group gets it?', groups.slice(0, 9).map(g => ({ id: `act:bcpick:${c.arg}:${g.key}`, title: g.name, description: `${g.size} customer${g.size === 1 ? '' : 's'}` })));
+}
+
+async function broadcastToGroup(c: ActionCtx): Promise<Out> {
+  const [campaignId, key] = (c.arg ?? '').split(':');
+  const camp = (await c.db.get(c.db.doc(C.campaigns, campaignId))) as { businessId: string; text: string } | null;
+  if (!camp || camp.businessId !== c.business.id) return buttons('That broadcast is gone. Start again from Message customers.', [['act:reachhub', 'Message customers'], ['act:menu', 'Menu']]);
+  const cats = await listCategories(c.db, c.business.id);
+  const seg = systemSegments(cats).find(s => s.key === key);
+  if (!seg) return broadcastGroups({ ...c, arg: campaignId });
+  const members = evaluate(seg.rule, await loadSegmentData(c.db, c.business.id));
+  return reachPlan(c, camp.text, members, seg.name);
 }
 async function reachSend(c: ActionCtx, freeOnly: boolean): Promise<Out | Out[]> {
   const r = await executeCampaign(c.db, c.cfg, c.deps, c.business, c.arg ?? '', { freeOnly });
@@ -402,6 +444,10 @@ export const ACTIONS: OwnerAction[] = [
   } },
   { id: 'money', hint: 'Sales (goods and delivery) and your wallet', aliases: ['money', 'my money'], run: moneyScreen },
   { id: 'reachhub', hint: 'Status, broadcast or automatic updates', aliases: ['message customers', 'marketing', 'promote'], run: async () => reachHub() },
+  { id: 'restock', hint: 'Put a sold-out product back in stock', run: restockAsk },
+  { id: 'hourschange', hint: 'Change your opening hours', run: hoursChange },
+  { id: 'bcgroup', hint: 'Choose who gets the broadcast', run: broadcastGroups },
+  { id: 'bcpick', hint: 'Send the broadcast to this group', run: broadcastToGroup },
   { id: 'cancel', hint: 'Stop what you were doing', async run() { return buttons('Cancelled. Nothing was sent or saved.', [['act:menu', 'Menu']]); } },
   { id: 'policyedit', hint: 'Change your shop policies', async run(c) { await c.setAwaiting('policies'); return waiting('Type your policies in your own words: returns, exchanges and refunds, e.g. *Exchange within 3 days. No refunds.*'); } },
   { id: 'receipt', command: 'receipt', hint: 'Send the PDF receipt of a paid order again', menu: { section: 'Orders', title: 'Resend a receipt' }, aliases: ['receipt', 'receipts', 'resend receipt'], next: [['orders', "Today's orders"], ['menu', 'Menu']], run: receipt },

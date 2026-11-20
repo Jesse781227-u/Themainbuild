@@ -45,7 +45,7 @@ test('commands: /sales, sales, "how much did I make today?", the menu row and th
     await ai.send('admin', { from: owner(), text: 'what are my takings looking like' }),
   ];
   for (const r of replies) {
-    assert.match(r[0].text, /^💰 \*Money\* · Business biz-a\nToday: ₦[\d,]+ goods \+ ₦[\d,]+ delivery = /);
+    assert.match(r[0].text, /^💰 \*Money\* · Business biz-a\nToday: \*₦[\d,]+\* to you \(₦[\d,]+ goods \+ ₦[\d,]+ delivery\)/);
     assert.deepEqual(r[0].options, ['act:verify', 'act:owing', 'act:menu']);
   }
 });
@@ -54,7 +54,7 @@ test('menu: "hi" opens one flat list (most jobs one tap away); Settings and Help
   const bot = new Bot();
   const hi = await bot.send('admin', { from: owner(), text: 'hi' });
   assert.deepEqual(hi[0].options, ['act:orders', 'act:money', 'act:add', 'act:soldout', 'act:products', 'act:reachhub', 'act:customers', 'act:close', 'menu:Settings', 'menu:Help']);
-  assert.match(hi[0].text, /^Hi 👋 \*Business biz-a\* today: \d+ to deliver · ₦[\d,]+ in sales · \d+ unpaid/);
+  assert.match(hi[0].text, /^Hi 👋 \*Business biz-a\* today: \d+ to deliver · ₦[\d,]+ to you · \d+ unpaid/);
   const settings = await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' });
   assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:menu'], 'one shop: no Switch shop; Pause is on the main menu now');
   assert.deepEqual((await bot.send('admin', { from: owner(), choice: 'menu:Shop', text: 'Shop' }))[0].options[0], 'act:orders', 'an old Shop button from chat history opens the new menu');
@@ -85,7 +85,9 @@ test('follow-ups: at most 3 buttons, and with three the last is Menu', () => {
 test('actions: sold out, receipt, add product with its follow-ups, pause stops checkout', async () => {
   const bot = new Bot();
   const pick = await bot.send('admin', { from: owner(), text: '/soldout' });
-  assert.deepEqual(rows(pick[0]), [`act:soldout:${fx.a.product}`]);
+  assert.deepEqual(rows(pick[0]), ['act:soldout:cat:none', 'act:menu'], 'a section first (the seeded product has none)');
+  const section = await bot.send('admin', { from: owner(), choice: 'act:soldout:cat:none', text: 'Other products' });
+  assert.deepEqual(rows(section[0]), [`act:soldout:${fx.a.product}`, 'act:menu']);
   const done = await bot.send('admin', { from: owner(), choice: `act:soldout:${fx.a.product}`, text: 'Product biz-a' });
   assert.match(done[0].text, /✅ \*Product biz-a\* is marked sold out/);
   assert.deepEqual(done[0].options, ['act:soldout', 'act:products', 'act:menu']);
@@ -102,7 +104,7 @@ test('actions: sold out, receipt, add product with its follow-ups, pause stops c
   assert.match((await bot.send('admin', { from: owner(), choice: `act:photo:${id}`, text: 'Add photo' }))[0].text, /Send the photo of \*Zobo\*/);
 
   const ask = await bot.send('admin', { from: owner(), text: '/close' });
-  assert.deepEqual(ask[0].options, ['act:close:1', 'act:close:3', 'act:close:open', 'act:cancel']);
+  assert.deepEqual(ask[0].options, ['act:close:1', 'act:close:3', 'act:close:open', 'act:close:cancel']);
   assert.match((await bot.send('admin', { from: owner(), choice: 'act:close:open', text: 'Until I reopen' }))[0].text, /Paused/);
   const shop = new Bot();
   await shop.send('shop', { from: '2348091300001', to: fx.a.pnid, choice: `buy:${fx.a.product}`, text: 'Add to cart' });

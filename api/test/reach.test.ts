@@ -99,14 +99,15 @@ test('route plan: counts and cost per route before sending', async () => {
   // A new week: earlier tests' updates don't count against these customers.
   for (const c of await db.query('customers', [['businessId', '==', fx.a.id]])) await db.update(db.doc('customers', c._id as string), { marketingTimes: [] });
   const home = await bot.send('admin', { from: o, text: '/reach' });
-  assert.ok(home[0].options.includes('act:reachall'));
-  await bot.send('admin', { from: o, choice: 'act:reachall', text: 'Send an update' });
+  assert.ok(!home[0].options.includes('act:reachall') && !home[0].options.includes('act:reachgroup'), 'sending is a broadcast, not an automatic update');
+  await bot.send('admin', { from: o, choice: 'act:campaign', text: 'Send a broadcast' });
   const plan = await bot.send('admin', { from: o, text: 'Hi {name}, new Ankara gowns just landed!' });
   assert.match(plan[0].text, /customers:\n• \d+ free, in their chat\n• 1 regulars: you send from your phone[\s\S]*Cost: ₦0/);
-  const [send, free, cancel] = plan[0].options;
+  const [send, group, cancel] = plan[0].options;
+  assert.match(plan[0].text, /Who should get it\?$/m);
   assert.match(send, /^act:reachsend:c_/);
-  assert.match(free, /^act:reachfree:c_/);
-  assert.equal(cancel, 'act:cancel', 'some go from your phone: Send all · Free ones only · Cancel');
+  assert.match(group, /^act:bcgroup:c_/);
+  assert.equal(cancel, 'act:cancel', 'the preview, then who gets it: Everyone · Choose a group · Cancel');
   assert.equal((await db.query('sends', [['campaignId', '==', send.split(':')[2]]])).length, 0, 'nothing sent before Send all');
   const done = await bot.send('admin', { from: o, choice: send, text: 'Send all' });
   assert.match(done[0].text, /^✅ Sent to \d+\./);
