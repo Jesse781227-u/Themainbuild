@@ -2,6 +2,7 @@
 // messages (text, media, interactive) are only allowed within 24 hours of the person's last inbound
 // message; outside it only an approved template may be sent.
 import { C } from '../db';
+import { countServiceMessage } from './messaging-costs';
 import type { Config } from '../config';
 import type { Firestore } from '../lib/firestore';
 import { decrypt } from '../lib/crypto';
@@ -166,6 +167,8 @@ export async function send(db: Firestore, cfg: Config, transport: Transport, arg
   }
   const sender = await resolveSender(db, cfg, args.from);
   const result = await transport.sendWhatsApp(sender, args.to, args.content);
+  // A shop number's free-form messages use its free monthly allowance (Smart Reach routes by it).
+  if ('businessId' in args.from && args.content.type !== 'template' && args.content.type !== 'reaction') await countServiceMessage(db, args.from.businessId, args.now).catch(() => undefined);
   log('info', 'message_sent', { conversationId: args.conversationId, to: maskPhone(args.to), type: args.content.type });
   // Local testing: keep what would have been sent, so the /dev chat page can show it.
   if (cfg.RELAY_ENV === 'development' && cfg.META_SEND_MODE === 'log') {

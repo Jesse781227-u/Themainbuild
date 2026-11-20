@@ -11,7 +11,7 @@ import { send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, listProducts, moveCategoryProducts } from '../services/catalog';
 import { prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
-import { actionById, actionForTool, followUps, handleActionTap, matchAction, runAction, withFollowUps } from './actions';
+import { actionById, actionForTool, followUps, handleActionTap, matchAction, reachPlan, runAction, withFollowUps } from './actions';
 import type { Product } from '../domain/commerce';
 import { readFlowReply } from '../services/flows';
 import { handleFlowAnswer } from './flow-answers';
@@ -150,6 +150,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     if (parsed) { await setAwaiting(null); for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o); return; }
     if (!matchAction(text)) return reply(withFollowUps(`Send the name and price together, e.g. *${example(business, await listProducts(db, business.id))}*.`, undefined));
     await setAwaiting(null);
+  }
+  if (state.awaiting === 'reach:all' && !choiceId && text.trim() && !matchAction(text)) {
+    await setAwaiting(null);
+    return reply(await reachPlan({ ...actionCtx, arg: null }, text.trim()));
   }
   if (state.awaiting?.startsWith('campaign') && !choiceId && text.trim() && !matchAction(text)) {
     const statusPost = state.awaiting.startsWith('campaign:status:') ? state.awaiting.slice(16) : undefined;

@@ -61,7 +61,7 @@ test('broadcast: only opted-in customers are targeted', async () => {
   // STOP opts out; SUBSCRIBE opts in.
   const bot = new Bot();
   const [stop] = await bot.send('shop', { from: '2348070000001', to: fx.a.pnid, text: 'STOP' });
-  assert.match(stop.text, /won't get updates/);
+  assert.match(stop.text, /No more updates from/);
   assert.equal((await doc('customers', `${fx.a.id}_wa_2348070000001`)).marketingOptIn, false);
   await bot.send('shop', { from: '2348070000003', to: fx.a.pnid, text: 'subscribe' });
   assert.equal((await doc('customers', `${fx.a.id}_wa_2348070000003`)).marketingOptIn, true);

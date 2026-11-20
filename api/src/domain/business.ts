@@ -15,6 +15,7 @@ export const BUSINESS_TYPES: { id: BusinessCategory; label: string; starters: st
 export interface Business {
   id: string; name: string; category: BusinessCategory;
   ownerName?: string | null; city?: string | null; area?: string | null;
+  reachTriggers?: Partial<Record<string, boolean>> | null; // Smart Reach triggers the owner turned on/off (else the defaults)
   statusTips?: boolean; lastStatusTipDate?: string | null; // "Make a Status?" tips (on unless false), at most one a day
   payoutDailyLimitKobo?: number | null; // per-shop withdrawal limit (default ₦500,000 a day)
   pausedUntil?: string | null;                       // PAUSE: no orders until then (ISO), or 'open' until they reopen

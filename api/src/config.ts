@@ -19,6 +19,20 @@ const schema = z.object({
   ADMIN_BOT_PHONE_NUMBER_ID: optionalString,
   ADMIN_BOT_ACCESS_TOKEN: optionalString,
   // WhatsApp Flows (forms) for Add product, Hours and Delivery: off unless "true" and published in Meta.
+  // Smart Reach: message rules and prices (services/messaging-costs.ts). Prices in US dollars per message.
+  FREE_ENTRY_WINDOW_HOURS: z.coerce.number().int().min(24).max(168).default(72),
+  SERVICE_FREE_PER_MONTH: z.coerce.number().int().min(0).default(1000),
+  OWNER_SENT_FREE: optionalString,                 // 'false' if Meta starts billing app-sent messages
+  REACH_WEEKLY_CAP: z.coerce.number().int().min(1).max(7).default(1),
+  REACH_QUIET_FROM: z.coerce.number().int().min(0).max(23).default(21), // Lagos hour; the same from/to = no quiet hours
+  REACH_QUIET_TO: z.coerce.number().int().min(0).max(23).default(8),
+  REACH_CONSENT_FROM: z.string().default('2026-11-20T00:00:00.000Z'), // customers before this are opted in unless they said stop
+  NGN_PER_USD: z.coerce.number().positive().default(1600),             // PLACEHOLDER rate: set the real one
+  MARKETING_USD: z.coerce.number().min(0).default(0.0516),
+  UTILITY_USD: z.coerce.number().min(0).default(0.0067),               // PLACEHOLDER
+  SERVICE_USD: z.coerce.number().min(0).default(0.004),                // PLACEHOLDER (over the free allowance)
+  UTILITY_USD_IS_PLACEHOLDER: optionalString,
+  SERVICE_USD_IS_PLACEHOLDER: optionalString,
   FLOWS_ENABLED: optionalString,
   // The internal payout/KYC endpoints (routes/internal.ts) are off unless this is set (24+ characters).
   OPS_API_KEY: z.string().min(24).optional().or(z.literal('').transform(() => undefined)),

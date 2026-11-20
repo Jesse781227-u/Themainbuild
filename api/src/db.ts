@@ -52,6 +52,10 @@ export const C = {
   testReceipts: 'testReceipts',
   importPhotos: 'importPhotos',         // photos from an uploaded PDF, matched to products in the background         // TEST mode: pretend orders, never real ones
   statusPosts: 'statusPosts',
+  customerSignals: 'customerSignals',   // Smart Reach: what customers viewed, asked about, carted, bought, replied to (ids only)
+  campaigns: 'campaigns',               // Smart Reach: a message to a group, with its route plan
+  sends: 'sends',                       // Smart Reach: one per customer per campaign; cost and results
+  serviceUsage: 'serviceUsage',         // free service messages sent per shop number per month
   wallets: 'wallets',                   // each shop's balance (Relay holds it until withdrawn)
   payouts: 'payouts',                   // withdrawals to the owner's bank account
   kyc: 'kyc',                           // bank details + BVN (encrypted), verified once before the first withdrawal           // Status posts Relay prepared for an owner: picture, caption, who to mention, results

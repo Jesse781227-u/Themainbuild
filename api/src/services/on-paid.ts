@@ -72,6 +72,12 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   const spent = order.subtotalKobo + order.deliveryFeeKobo;
   tx.set(db.doc(C.customers, order.customerId), { businessId: order.businessId, orderCount: increment(1), totalSpentKobo: increment(spent), lastOrderAt: at, updatedAt: at }, { merge: true });
 
+  // Smart Reach: what they bought (ids only).
+  for (const l of order.items) {
+    const sid = `${order.customerId}_bought_${l.productId}_${order.id}`.replace(/[^A-Za-z0-9_-]/g, '_');
+    tx.set(db.doc(C.customerSignals, sid), { id: sid, businessId: order.businessId, customerId: order.customerId, type: 'bought', productId: l.productId, categoryId: null, variant: l.variantId ?? null, at });
+  }
+
   tx.create(db.doc(C.ledger, order.id), {
     id: order.id, businessId: order.businessId, orderId: order.id, type: 'sale', at,
     grossKobo: order.payAmountKobo, goodsKobo: order.subtotalKobo, deliveryKobo: order.deliveryFeeKobo,

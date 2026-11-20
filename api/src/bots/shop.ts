@@ -3,6 +3,7 @@
 // (stock reserved, unique amount) → payment instructions. It stays silent while the owner has taken
 // over the chat, and hands over when the customer asks for a person.
 import { C } from '../db';
+import { consented, optIn, optOut, recordSignal, type ReachCustomer, type SignalType } from '../services/reach';
 import type { Firestore } from '../lib/firestore';
 import { formatKobo, feeKobo } from '../lib/money';
 import { log } from '../lib/logger';
@@ -61,13 +62,19 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (!conv || !business || business.status === 'deleted') return;
   const sender = ctx.test ? { adminBot: true as const } : { businessId };
   // Marketing opt-out is honoured even while the owner has taken over the chat.
-  const optText = (ctx.event.text ?? '').trim().toLowerCase();
-  if (/^(stop|unsubscribe|stop all)$/.test(optText)) {
-    await db.set(db.doc(C.customers, conversationId), { marketingOptIn: false, marketingOptOutAt: new Date().toISOString() }, { merge: true });
+  // A tap arrives as a choice, not text, so the button is checked by its id.
+  const firstInput = readInput(ctx.event);
+  const optText = (ctx.event.text ?? firstInput.text ?? '').trim().toLowerCase();
+  // "Stop updates" (the button on every update, or typed): no more marketing, at once.
+  if (firstInput.choiceId === 'stopupd' || /^(stop|unsubscribe|stop all|stop updates|no more updates)$/.test(optText)) {
+    await optOut(db, conversationId);
     if (conv.mode === 'owner') return;
-    await send(db, cfg, deps.transport, { from: sender, conversationId, to: ctx.event.from, content: { type: 'text', text: `You won't get updates from ${business.name} any more. You can still order here any time; send SUBSCRIBE to get updates again.` } });
+    await send(db, cfg, deps.transport, { from: sender, conversationId, to: ctx.event.from, content: { type: 'text', text: `Done. No more updates from ${business.name}. You can still order here any time; send *START UPDATES* to get them again.` } });
     return;
   }
+  // Replying soon after an update counts for it (Smart Reach results).
+  const c0 = customer as (Customer & { lastMarketingAt?: string | null }) | null;
+  if (!ctx.test && c0?.lastMarketingAt && Date.now() - new Date(c0.lastMarketingAt).getTime() < 48 * 3_600_000) await recordSignal(db, { businessId, customerId: conversationId, type: 'replied' }).catch(() => undefined);
   if (conv.mode === 'owner') return; // the owner is handling this chat until they hand back
 
   const to = ctx.event.from;
@@ -114,8 +121,8 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
 
   if (/^(subscribe|start updates|yes to updates)$/.test(lower)) {
     if (ctx.event.source !== 'whatsapp') return reply('Updates are only sent on WhatsApp for now.');
-    await db.set(db.doc(C.customers, conversationId), { marketingOptIn: true, marketingOptInAt: new Date().toISOString() }, { merge: true });
-    return reply(`You'll now get occasional updates and offers from ${business.name}. Send STOP any time to stop them.`);
+    await optIn(db, conversationId);
+    return reply(`You'll now get occasional updates and offers from ${business.name}. Tap *Stop updates* on any of them, or send STOP, to stop.`);
   }
 
   // ── Talk to a person ──
@@ -157,6 +164,11 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'deliver') return reply('Please send your delivery address (area and street).', { step: 'await_address' });
     if (kind === 'pickup') return confirmOrder(ctx, business, pickup(business), reply);
     if (kind === 'confirm' && state.step === 'confirm') return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
+    // The "Send me updates" box at checkout: only ticked when they tap it.
+    if (kind === 'optin') {
+      if (!ctx.test) await optIn(db, conversationId);
+      return reply(buttons(`👍 You'll get updates from ${business.name} when new things arrive. Tap *Stop updates* on any of them to stop.`, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), state.step === 'confirm' ? { ...state } : undefined);
+    }
     if (kind === 'testpay' && ctx.test) return testPaid(ctx, business, id, reply);
     if (kind === 'delete_no') return reply('OK, nothing was deleted.', { step: 'browse' });
   }
@@ -189,7 +201,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
       const available = found.filter(p => p.available);
       if (available.length === 1) return addToCart(ctx, run, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
       const matches = available.length > 1 ? available : await search(db, businessId, asked);
-      if (matches.length) { await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`)); }
+      if (matches.length) { await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`), 'asked'); }
       if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
       return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
     }
@@ -260,7 +272,7 @@ async function firstMessage(ctx: ShopContext, run: Run, business: Business, cust
     const exact = (await findProducts(ctx.db, business.id, wanted)).filter(p => p.available);
     const matches = exact.length ? exact : await search(ctx.db, business.id, wanted);
     if (matches.length) {
-      await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`));
+      await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`), 'asked');
       await sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `"${wanted.slice(0, 30)}"`, key: 'all', intro: welcome }));
       return true;
     }
@@ -417,10 +429,12 @@ async function loadCart(db: Firestore, ctx: ShopContext): Promise<Cart | null> {
 }
 
 // What this customer looked at or asked about, for Status mentions (ids only; never in TEST mode).
-const interest = (ctx: ShopContext, keys: string[]) => (ctx.test ? Promise.resolve() : noteInterest(ctx.db, ctx.conversationId, ctx.businessId, keys).catch(e => log('warn', 'interest_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 80) })));
+const interest = (ctx: ShopContext, keys: string[], type: SignalType = 'viewed', variant: string | null = null) => (ctx.test ? Promise.resolve() : Promise.all([
+  ...keys.map(k => recordSignal(ctx.db, { businessId: ctx.businessId, customerId: ctx.conversationId, type, productId: k.startsWith('p_') ? k.slice(2) : null, categoryId: k.startsWith('c_') ? k.slice(2) : null, variant })),
+]).then(() => noteInterest(ctx.db, ctx.conversationId, ctx.businessId, keys)).catch(e => log('warn', 'interest_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 80) })));
 
 async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply, variantId: string | null = null) {
-  await interest(ctx, [`p_${productId}`]);
+  if (variantId || !((await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null)?.variants?.length) await interest(ctx, [`p_${productId}`], 'carted', variantId);
   const { db } = ctx;
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
   if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
@@ -495,7 +509,10 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     quoteLater(delivery) ? `Total: about ${formatKobo(subtotal + fee)} plus delivery (${business.name} confirms the delivery price)` : `Total: ${formatKobo(subtotal + delivery.feeKobo + fee)}`,
   ].join('\n');
-  return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), { step: 'confirm', delivery });
+  // Updates: an unticked box (a button) for customers who haven't agreed yet.
+  const who = (await ctx.db.get(ctx.db.doc(C.customers, ctx.conversationId))) as ReachCustomer | null;
+  const ask = !ctx.test && !(who && consented(who, ctx.cfg));
+  return reply(buttons(body, [['confirm', 'Confirm order'], ['menu', 'Keep shopping'], ...(ask ? [['optin', 'Send me updates'] as [string, string]] : [])]), { step: 'confirm', delivery });
 }
 
 async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, delivery: OrderDelivery | null, reply: Reply) {

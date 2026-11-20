@@ -3,6 +3,8 @@
 // caller's business: the business id comes from the owner's verified phone number, never from the
 // arguments. Destructive tools return a confirmation prompt first and only run after a YES.
 import { z } from 'zod';
+import { backInStock } from '../services/reach';
+import { log } from '../lib/logger';
 import { C } from '../db';
 import type { Config } from '../config';
 import type { Firestore } from '../lib/firestore';
@@ -175,6 +177,7 @@ export const adminTools = {
       const { p, v } = await productAndOption(ctx, a.product);
       const before = v ? v.stock : p.stock;
       const n = await adjustInventory(ctx.db, p.id, ctx.business.id, a.quantity, 'restock', 'owner', v?.id);
+      if (before === 0 && n > 0) await backInStock(ctx.db, ctx.cfg, ctx.deps, ctx.business, p, v?.id ?? null, new Date().toISOString()).catch(e => log('warn', 'back_in_stock_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }));
       if (before === 0 && n > 0) await suggestStatus(ctx.db, ctx.deps, ctx.business, { kind: 'restock', name: lineName(p, v?.id) }, { productId: p.id }).catch(() => false);
       return `${lineName(p, v?.id)}: +${a.quantity}, now ${n} in stock.`;
     },

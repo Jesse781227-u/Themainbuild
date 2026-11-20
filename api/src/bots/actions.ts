@@ -20,6 +20,7 @@ import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
+import { executeCampaign, markOwnerSent, PHASE1_TRIGGERS, planCampaign, planText, TRIGGER_LABEL, triggerOn } from '../services/reach';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
 import { flowId, flowMessage } from '../services/flows';
 import { listCategories } from '../services/catalog';
@@ -259,6 +260,41 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
   return on ? '✅ I\'ll suggest a Status when you add products, restock, or drop a price (at most once a day).' : '🔕 OK, no more Status tips. Send */status* any time to make one, or *status tips on* to get tips again.';
 }
 
+// ── Smart Reach (services/reach.ts) ──
+async function reachHome(c: ActionCtx): Promise<Out> {
+  const rows = PHASE1_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: t === 'back_in_stock' ? 'Tell people who wanted it when it\'s back' : 'Remind people who left items in their cart' }));
+  return list('Smart Reach sends updates to the right customers, free where it can. Tap an automatic update to switch it on or off.', 'Open Smart Reach', [...rows, { id: 'act:reachall', title: 'Send an update', description: 'To all your customers who get updates' }], 'Smart Reach');
+}
+async function reachToggle(c: ActionCtx): Promise<Out> {
+  const t = PHASE1_TRIGGERS.find(x => x === c.arg);
+  if (!t) return reachHome(c);
+  const on = !triggerOn(c.business, t);
+  const reachTriggers = { ...(c.business.reachTriggers ?? {}), [t]: on };
+  await c.db.update(c.db.doc(C.businesses, c.business.id), { reachTriggers, updatedAt: new Date().toISOString() });
+  c.business.reachTriggers = reachTriggers;
+  return buttons(`${on ? '✅' : '⬜'} ${TRIGGER_LABEL[t]} is ${on ? 'on' : 'off'}.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+}
+async function reachEveryone(c: ActionCtx): Promise<Out> {
+  await c.setAwaiting('reach:all');
+  return 'Type the update for your customers. Write *{name}* where their first name should go, e.g. "Hi {name}, new Ankara gowns just landed!"';
+}
+// The route plan, then [Send all] [Free ones only] [Edit message].
+export async function reachPlan(c: ActionCtx, text: string): Promise<Out> {
+  const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: 'Update to everyone', text, source: 'owner', button: ['menu', 'See what we have'] });
+  if (!decisions.length) return buttons('You have no customers yet. Once people chat or order, you can send them updates here.', [['act:menu', 'Menu']]);
+  if (!summary.open && !summary.owner_sent) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this for free right now. Paid updates are coming soon.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  return buttons(planText(summary, decisions.length), [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:reachall', 'Edit message']]);
+}
+async function reachSend(c: ActionCtx, freeOnly: boolean): Promise<Out | Out[]> {
+  const r = await executeCampaign(c.db, c.cfg, c.deps, c.business, c.arg ?? '', { freeOnly });
+  if (!r) return 'That update isn\'t there any more. Send */reach* to start again.';
+  if (r.campaign.status !== 'planned' && !r.sent && !r.queued && !r.links.length) return 'That update was already sent.';
+  const head = `✅ Sent to ${r.sent}${r.queued ? `; ${r.queued} more at 8am (it's late now)` : ''}.`;
+  if (!r.links.length) return buttons(head, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  const list = r.links.map((l, i) => `${i + 1}. ${l.name}: ${l.link}`).join('\n');
+  return [head, `Your regulars: tap each link to send it from your own WhatsApp (free). The message is already typed.\n\n${list}`.slice(0, 4000), buttons('Sent them all?', [[`act:reachmark:${r.campaign.id}`, 'Mark all sent'], ['act:menu', 'Menu']])];
+}
+
 export const ACTIONS: OwnerAction[] = [
   { id: 'menu', command: 'menu', hint: 'Everything Relay can do for your shop, to tap', aliases: ['menu', 'main menu', 'options', 'home', 'start', 'open my menu', 'set up my shop'], run: c => menu(c) },
   { id: 'help', hint: 'What I can do, in short', tool: { name: 'help' }, aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
@@ -284,8 +320,13 @@ export const ACTIONS: OwnerAction[] = [
   // Customers
   { id: 'customers', command: 'customers', hint: 'Your top customers: who buys most and what they like', menu: { section: 'Customers', title: 'Top customers' }, aliases: ['customers', 'my customers', 'top customers', 'customer list'], tool: { name: 'listCustomers', args: { sort: 'top' } }, next: [['campaign', 'Send a campaign'], ['menu', 'Menu']], run: tool('listCustomers', { sort: 'top' }) },
   { id: 'status', command: 'status', hint: 'Make a WhatsApp Status for a product and see which customers to mention', menu: { section: 'Customers', title: 'Make a Status' }, aliases: ['status', 'make a status', 'make status', 'status post', 'post a status'], next: [['menu', 'Menu']], run: makeStatus },
-  { id: 'campaign', command: 'campaign', hint: 'Send an update to customers who opted in; you see the cost first', menu: { section: 'Customers', title: 'Send a campaign' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign'],
-    async run(c) { await c.setAwaiting('campaign'); return 'Type the message to send to your customers who opted in to updates. You\'ll see how many people and the cost before anything is sent.'; } },
+  { id: 'reach', command: 'reach', hint: 'Smart Reach: updates to the right customers by the cheapest route, and automatic ones', menu: { section: 'Customers', title: 'Smart Reach' }, aliases: ['reach', 'smart reach', 'marketing'], run: reachHome },
+  { id: 'campaign', command: 'campaign', hint: 'Send an update to your customers; you see who gets it and the cost first', menu: { section: 'Customers', title: 'Send an update' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign', 'send to everyone'], run: c => reachEveryone(c) },
+  { id: 'reachall', hint: 'Send an update to everyone', run: c => reachEveryone(c) },
+  { id: 'reachtoggle', hint: 'Switch an automatic update on or off', run: reachToggle },
+  { id: 'reachsend', hint: 'Send the planned update', run: c => reachSend(c, false) },
+  { id: 'reachfree', hint: 'Send the planned update by free routes only', run: c => reachSend(c, true) },
+  { id: 'reachmark', hint: 'The links were sent from your phone', next: [['reach', 'Smart Reach'], ['menu', 'Menu']], async run(c) { const n = await markOwnerSent(c.db, c.business.id, c.arg ?? ''); return n ? `👍 Marked ${n} as sent.` : 'Those were already marked as sent.'; } },
   // Settings
   { id: 'hours', command: 'hours', hint: 'See or change your opening hours', menu: { section: 'Settings', title: 'Opening hours' }, aliases: ['hours', 'opening hours', 'my hours'], next: [['delivery', 'Delivery'], ['menu', 'Menu']], run: hours },
   { id: 'delivery', command: 'delivery', hint: 'See or change your delivery areas and prices', menu: { section: 'Settings', title: 'Delivery' }, aliases: ['delivery', 'delivery prices', 'delivery zones', 'zones'], next: [['hours', 'Opening hours'], ['menu', 'Menu']], run: delivery },
