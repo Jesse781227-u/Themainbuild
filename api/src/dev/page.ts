@@ -101,7 +101,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 .doc { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,.06); border-radius: 6px; padding: 10px; margin: -2px -4px 4px; min-width: 220px; }
 .doc .badge { width: 34px; height: 40px; border-radius: 4px; background: #e5534b; color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; flex: none; }
 .doc a { color: var(--ink); text-decoration: none; word-break: break-all; }
-#text { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 16.5px; padding: 8px 4px; min-width: 0; }
+#text { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 16.5px; padding: 8px 4px; min-width: 0; resize: none; max-height: 140px; line-height: 1.35; }
 #text::placeholder { color: var(--meta); }
 #fab { width: 48px; height: 48px; border-radius: 50%; border: 0; background: var(--green); color: var(--green-ink); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; flex: none; }
 .cmds { position: absolute; left: 8px; right: 8px; bottom: 64px; max-height: 50%; overflow-y: auto; background: var(--menu); border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.25); z-index: 5; display: none; }
@@ -159,7 +159,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   <footer>
     <div class="field">
       <span class="ic">${ICON.emoji}</span>
-      <input id="text" placeholder="Message" autocomplete="off" enterkeyhint="send">
+      <textarea id="text" rows="1" placeholder="Message" autocomplete="off" enterkeyhint="send"></textarea>
       <button class="ic" id="clip" type="button" aria-label="Attach a file">${ICON.clip}</button>
       <button class="ic" id="cam" type="button" aria-label="Send a photo">${ICON.camera}</button>
       <input type="file" id="fileIn" accept="application/pdf,image/*,text/plain,text/csv,.csv,.txt,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
@@ -388,7 +388,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     fetch('/dev/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botNumber: bot, phone: phone, text: text, choice: choice, name: profile() }) })
       .then(function () { poll(); })
       .catch(function () { alertNote('Could not reach the local server. Is npm run dev running?'); });
-    $('text').value = ''; fab();
+    $('text').value = ''; $('text').style.height = 'auto'; fab();
   }
 
   function alertNote(t) { var log = $('log'); log.appendChild(el('div', 'notice', t)); log.scrollTop = log.scrollHeight; }
@@ -427,7 +427,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     reader.onload = function () {
       var data = String(reader.result).split(',')[1] || '';
       var caption = $('text').value.trim();
-      $('text').value = ''; fab();
+      $('text').value = ''; $('text').style.height = 'auto'; fab();
       post('/dev/upload', { botNumber: bot, phone: phone, name: profile(), filename: file.name, mimeType: file.type || 'application/octet-stream', data: data, caption: caption })
         .then(function (res) { if (!res.success) alertNote('Upload failed: ' + ((res.error && res.error.message) || res.status)); poll(); })
         .catch(function () { alertNote('Could not reach the local server.'); });
@@ -465,8 +465,11 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
     if (list.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); cmdSel = (cmdSel + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length; showCmds(); return; }
     if (list.length && e.key === 'Enter') { e.preventDefault(); $('cmds').classList.remove('open'); send('/' + list[cmdSel].name); return; }
     if (e.key === 'Escape') { $('cmds').classList.remove('open'); return; }
-    if (e.key === 'Enter') send($('text').value.trim());
+    // Enter sends; Shift+Enter is a new line (pasted lists keep their lines, like WhatsApp).
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send($('text').value.trim()); }
   };
+  // The box grows with its text (up to a few lines), then scrolls.
+  $('text').addEventListener('input', function () { var t = $('text'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; });
   $('fab').onclick = function () { var t = $('text').value.trim(); if (t) send(t); else $('text').focus(); };
   $('scrim').onclick = function () { closeSheet(); $('menu').classList.remove('open'); };
   $('sheetClose').onclick = closeSheet;

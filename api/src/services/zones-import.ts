@@ -42,7 +42,7 @@ const AMOUNT = /(?:₦|ngn|n)?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k)?\s*(?:
 // "Name … amount" per line; null when fewer than 2 lines read.
 export function parseZoneList(text: string): ZoneRow[] | null {
   const out = new Map<string, ZoneRow>();
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of unsquash(text).split(/\r?\n/)) {
     if (BORDER.test(raw) || PHONE.test(raw)) continue;
     const line = raw.replace(/[│┃|\t]+/g, ' | ').replace(/\s+/g, ' ').trim().replace(/^\|\s*|\s*\|$/g, '');
     if (!line) continue;
@@ -62,6 +62,16 @@ export function parseZoneList(text: string): ZoneRow[] | null {
     out.set(t.name.toLowerCase(), { name: t.name, feeKobo, was: t.was });
   }
   return out.size >= 2 ? [...out.values()] : null;
+}
+
+// A list pasted with its line breaks lost ("Abule Egba: ₦5,000 Ago Palace: ₦4,500 Ajah: ₦6,000"):
+// a new line after every amount that is introduced by ":", "-", "=" or "₦" and followed by a name.
+// ("Gbagada Phase 2: ₦1,000" keeps its 2: it isn't introduced that way.)
+export function unsquash(text: string) {
+  if (text.split(/\r?\n/).filter(l => l.trim()).length >= 3) return text;
+  const AMT = /((?:[:=–—-]\s*(?:₦|NGN|N)?|₦)\s*\d+(?:,\d{3})*(?:\.\d+)?\s*k?|[:=–—-]\s*free)\s+(?=[A-Za-z])/gi;
+  const lines = text.replace(AMT, '$1\n');
+  return lines.split('\n').length >= 3 ? lines : text;
 }
 
 // A CSV file (quoted cells, "5,000" inside quotes) → "name | fee" lines.

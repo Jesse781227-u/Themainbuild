@@ -140,3 +140,37 @@ test('signup: the delivery price step also takes the whole list, then moves on',
   const owner = await doc('ownerPhones', `+${from}`);
   assert.equal((await listZones(db, owner.businessId)).length, 66);
 });
+
+test('zones: a list pasted with its line breaks lost is split back into lines', () => {
+  const squashed = TABLE.split('\n').filter(l => l.startsWith('│') && !/Area/.test(l)).map(l => l.split('│').map(x => x.trim()).filter(Boolean)).map(([a, f]) => `${a}: ₦${f}`).join(' ');
+  assert.match(squashed, /^Abule Egba: ₦5,000 Ago Palace: ₦4,500 Ajah: ₦6,000 /);
+  const rows = parseZoneList(squashed)!;
+  assert.equal(rows.length, 66);
+  assert.equal(rows.find(r => r.name === 'Gbagada Phase 2')?.feeKobo, 100_000, '"Phase 2" stays in the name');
+  assert.deepEqual(parseZoneList('Yaba: 3000 Ikeja - 2500 Ajah: 6k')!.map(r => [r.name, r.feeKobo]), [['Yaba', 300_000], ['Ikeja', 250_000], ['Ajah', 600_000]]);
+});
+
+test('signup: the full list also works at "elsewhere in the city?", even squashed into one line', async () => {
+  const bot = new Bot();
+  const from = '2348036660002';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
+  await say('hi'); await say('City Zones Shop');
+  const card = await say('Gift box 5000');
+  const pick = card.flatMap(m => m.options).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
+  if (pick) await say('Category', pick);
+  await say("That's all", 'prod:done');
+  let last = await say('Looks right', 'ok:yes');
+  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', 'btype:other');
+  if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
+  await say('Lagos, Ikeja'); await say('No pickup address', 'loc:nostreet'); await say('Yes', 'loc:ok');
+  await say('8am-9pm'); last = await say('Yes, every day', 'hrs:same');
+  if (last.some(m => m.options.some(id => id.startsWith('prep:')))) await say('30–60 min', 'prep:1');
+  await say('Pickup & delivery', 'dl:both');
+  const city = await say('1500');
+  assert.match(city.at(-1)!.text, /And elsewhere in Lagos\?[\s\S]*Or paste your full list/);
+  const review = await say('Abule Egba: ₦5,000 Ago Palace: ₦4,500 Ajah: ₦6,000 Yaba: ₦3,000');
+  assert.match(review[0].text, /^📍 \*4 delivery areas\*, ₦3,000 to ₦6,000:/);
+  const next = await say('Save all', 'zimp:replace');
+  assert.match(next[0].text, /^✅ Saved 4 delivery areas/);
+  assert.ok(next.some(m => m.options.includes('is:yes')));
+});

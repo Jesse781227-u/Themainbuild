@@ -349,18 +349,8 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
     case 'fee_local': {
-      // A whole list instead of one price (pasted, spreadsheet, document or photo).
-      const zones = { db: c.ctx.db, cfg: c.ctx.cfg, deps: c.deps, business: c.business!, convRef: c.ctx.db.doc(C.conversations, c.ctx.conversationId) };
-      const tapped = await answerZoneImport(zones, choiceId);
-      if (tapped) {
-        for (const o of tapped.out) await c.reply(o);
-        if (tapped.saved) { await setOb(c, { step: 'interstate' }); return prompt(c); }
-        return prompt(c);
-      }
-      if (!choiceId && (input?.document || input?.imageId || text.split(/\r?\n/).length >= 2)) {
-        const out = await startZoneImport(zones, input ?? { text, choiceId: null, imageId: null, audioId: null, document: null } as never, text, c.reply);
-        if (out) { for (const o of out) await c.reply(o); return; }
-      }
+      const list = await deliveryList(c, text, choiceId, input);
+      if (list) return list === 'shown' ? undefined : prompt(c);
       const fee = feeFrom(text);
       if (fee === null || choiceId) return c.reply(`How much is delivery within ${c.business!.area ?? 'your area'}? Send an amount, e.g. *1500*, or *0* if it's free.`);
       await addZone(c, c.business!.area ?? 'Nearby', c.business!.area ?? '', fee, 2);
@@ -368,6 +358,8 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       return prompt(c);
     }
     case 'fee_city': {
+      const list = await deliveryList(c, text, choiceId, input);
+      if (list) return list === 'shown' ? undefined : prompt(c);
       if (choiceId === 'fc:no' || (!choiceId && SKIP.test(text.trim()))) { await setOb(c, { step: 'interstate' }); return prompt(c); }
       const fee = feeFrom(text);
       if (fee === null || choiceId) return prompt(c);
@@ -623,6 +615,24 @@ const feeFrom = (text: string) => {
   return k !== null && k >= 0 && k <= 100_000_000 ? k : null;
 };
 
+// At the delivery price steps, a whole list (pasted, even squashed into one line, or a spreadsheet,
+// document or photo) instead of one price. 'shown': the review is up; 'moved': saved or cancelled,
+// the next step is set; null: not a list (a single price, carry on).
+async function deliveryList(c: Ctx, text: string, choiceId: string | null, input?: Input): Promise<'shown' | 'moved' | null> {
+  const zones = { db: c.ctx.db, cfg: c.ctx.cfg, deps: c.deps, business: c.business!, convRef: c.ctx.db.doc(C.conversations, c.ctx.conversationId) };
+  const tapped = await answerZoneImport(zones, choiceId);
+  if (tapped) {
+    for (const o of tapped.out) await c.reply(o);
+    if (tapped.saved) await setOb(c, { step: 'interstate' });
+    return 'moved';
+  }
+  if (choiceId || !(input?.document || input?.imageId || text.trim())) return null;
+  const out = await startZoneImport(zones, input ?? ({ text, choiceId: null, imageId: null, audioId: null, document: null } as never), text, c.reply);
+  if (!out) return null;
+  for (const o of out) await c.reply(o);
+  return 'shown';
+}
+
 async function addZone(c: Ctx, name: string, match: string, feeKobo: number, priority: number) {
   await saveZone(c.ctx.db, { id: `${c.business!.id}_${randomId(6).replace(/[^A-Za-z0-9]/g, 'x')}`, businessId: c.business!.id, name: name.slice(0, 60), match: match.slice(0, 60), feeKobo, timeframe: '', active: true, priority });
 }
@@ -749,7 +759,7 @@ async function prompt(c: Ctx): Promise<unknown> {
     case 'prep_custom': return ask('How long does an order usually take? e.g. *45 minutes*');
     case 'delivery': return ask(buttons(`How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
     case 'fee_local': return ask(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if free.\n\nHave a full list of areas and prices? Paste it or send the spreadsheet, PDF or photo.`);
-    case 'fee_city': return ask(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
+    case 'fee_city': return ask(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*\n\nOr paste your full list of areas and prices (or send the spreadsheet, PDF or photo).`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
     case 'interstate': return ask(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
     case 'interstate_pricing': return ask(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
     case 'interstate_fee': return ask('What\'s the flat price for other states? e.g. *6000*');
