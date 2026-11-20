@@ -15,7 +15,7 @@ export const adminConversationId = (ownerPhone: string) => `admin_${digits(owner
 
 // Called for every inbound message before any handler runs: keeps the 24-hour window and the
 // customer record current.
-export async function recordCustomerInbound(db: Firestore, args: { businessId: string; channel: Channel; customerKey: string; phone?: string | null; name?: string | null; at: string }) {
+export async function recordCustomerInbound(db: Firestore, args: { businessId: string; channel: Channel; customerKey: string; phone?: string | null; name?: string | null; at: string; fromAd?: boolean }) {
   const id = customerConversationId(args.businessId, args.channel, args.customerKey);
   await db.runTransaction(async tx => {
     const [conv, customer] = await tx.getAll([db.doc(C.conversations, id), db.doc(C.customers, id)]);
@@ -25,6 +25,8 @@ export async function recordCustomerInbound(db: Firestore, args: { businessId: s
     tx.set(db.doc(C.customers, id), {
       id, businessId: args.businessId, channel: args.channel, ...(args.phone ? { phone: args.phone } : {}), ...(args.name ? { name: args.name } : {}),
       lastInboundAt, updatedAt: args.at,
+      // Came from a click-to-WhatsApp ad: a free 72-hour window opens (Smart Reach uses it).
+      ...(args.fromAd ? { adReferralAt: args.at } : {}),
       ...(customer ? {} : { marketingOptIn: false, orderCount: 0, totalSpentKobo: 0, createdAt: args.at }),
     }, { merge: true });
   });

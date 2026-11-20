@@ -3,6 +3,7 @@
 // (stock reserved, unique amount) → payment instructions. It stays silent while the owner has taken
 // over the chat, and hands over when the customer asks for a person.
 import { C } from '../db';
+import { checkOffer, lookOffer, looksLikeCode, offerReason } from '../services/offers';
 import { consented, optIn, optOut, recordSignal, type ReachCustomer, type SignalType } from '../services/reach';
 import type { Firestore } from '../lib/firestore';
 import { formatKobo, feeKobo } from '../lib/money';
@@ -171,6 +172,17 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     }
     if (kind === 'testpay' && ctx.test) return testPaid(ctx, business, id, reply);
     if (kind === 'delete_no') return reply('OK, nothing was deleted.', { step: 'browse' });
+  }
+
+  // A personal offer code, typed at the confirm step (or before checking out).
+  if (looksLikeCode(text) && !choice) {
+    const cart = await loadCart(db, ctx);
+    const offer = await lookOffer(db, text);
+    const r = checkOffer(offer, { businessId, customerId: conversationId }, cart ? (await cartLines(db, cart)).subtotal : 0);
+    if (!r.ok) return reply(buttons(offerReason(r.reason), state.step === 'confirm' ? [['confirm', 'Confirm order'], ['menu', 'Keep shopping']] : [['cart', 'My cart'], ['menu', 'See the menu']]), { ...state });
+    await db.set(db.doc(C.conversations, conversationId), { offerCode: r.offer.code }, { merge: true });
+    if (state.step === 'confirm' && state.delivery) return confirmOrder(ctx, business, state.delivery, reply);
+    return reply(buttons(`✅ Code ${r.offer.code} saved: ${r.offer.percentOff ? `${r.offer.percentOff}% off` : `${formatKobo(r.offer.amountOffKobo ?? 0)} off`} at checkout.`, [['checkout', 'Checkout'], ['menu', 'See the menu']]), { ...state });
   }
 
   if (state.step === 'await_address' && text.length >= 3 && !/^(menu|cancel|cart)$/.test(lower)) {
@@ -499,12 +511,17 @@ async function startCheckout(ctx: ShopContext, business: Business, reply: Reply)
 async function confirmOrder(ctx: ShopContext, business: Business, delivery: OrderDelivery, reply: Reply) {
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
-  const { text, subtotal } = await cartLines(ctx.db, cart);
+  const { text, subtotal: goods } = await cartLines(ctx.db, cart);
+  const code = ((await ctx.db.get(ctx.db.doc(C.conversations, ctx.conversationId)))?.offerCode as string | undefined) ?? null;
+  const offer = code ? checkOffer(await lookOffer(ctx.db, code), { businessId: business.id, customerId: ctx.conversationId }, goods) : null;
+  const discount = offer?.ok ? offer.discountKobo : 0;
+  const subtotal = goods - discount;
   const policy = policyFor(business, ctx.cfg);
   const fee = customerFee(feeKobo(subtotal, policy), policy);
   const body = [
     'Please confirm your order:', text,
-    `Subtotal: ${formatKobo(subtotal)}`,
+    `Subtotal: ${formatKobo(goods)}`,
+    ...(discount ? [`Code ${code}: -${formatKobo(discount)}`] : []),
     delivery.method === 'pickup' ? `Pickup: free${business.prepTime ? `, ready in about ${business.prepTime}` : ''}${shopAddress(business) ? `\n📍 Pick up from: ${shopAddress(business)}` : ''}` : quoteLater(delivery) ? `Delivery (${delivery.address ?? ''}): ${delivery.timeframe}` : `Delivery (${delivery.address ?? ''}): ${formatKobo(delivery.feeKobo)}${delivery.timeframe ? `, ${delivery.timeframe}` : ''}`,
     ...(fee ? [`Service fee: ${formatKobo(fee)}`] : []),
     quoteLater(delivery) ? `Total: about ${formatKobo(subtotal + fee)} plus delivery (${business.name} confirms the delivery price)` : `Total: ${formatKobo(subtotal + delivery.feeKobo + fee)}`,
@@ -521,9 +538,15 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
   if (ctx.test) return testOrder(ctx, business, cart, delivery, reply);
   let order: Order;
   try {
-    order = await checkout(ctx.db, { cartId: cart.id, businessId: business.id, policy: policyFor(business, ctx.cfg), delivery });
+    const offerCode = ((await ctx.db.get(ctx.db.doc(C.conversations, ctx.conversationId)))?.offerCode as string | undefined) ?? null;
+    order = await checkout(ctx.db, { cartId: cart.id, businessId: business.id, policy: policyFor(business, ctx.cfg), delivery, offerCode });
+    if (offerCode) await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { offerCode: null }, { merge: true });
   } catch (e) {
     const code = String(e instanceof Error ? e.message : e);
+    if (code.startsWith('OFFER_')) {
+      await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { offerCode: null }, { merge: true });
+      return reply(buttons(`${offerReason(code.slice(6).toLowerCase() as 'used')} The order wasn't placed; tap Confirm to order without it.`, [['confirm', 'Confirm order'], ['menu', 'Keep shopping']]), { step: 'confirm', delivery });
+    }
     if (code.includes('INSUFFICIENT_STOCK') || code.includes('PRODUCT_UNAVAILABLE')) return reply(buttons('Sorry, something in your cart just sold out. Please check your cart.', [['cart', 'My cart'], ['menu', 'See the menu']]), { step: 'browse' });
     throw e;
   }

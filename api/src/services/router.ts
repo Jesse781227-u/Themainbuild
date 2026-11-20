@@ -48,7 +48,14 @@ export async function routeEvent(db: Firestore, cfg: Config, event: InboundEvent
   const conversationId = await recordCustomerInbound(db, {
     businessId, channel: event.source, customerKey: event.from,
     phone: event.source === 'whatsapp' ? event.from : null, name: event.contactName, at: event.sentAt,
+    fromAd: event.source === 'whatsapp' && fromAd(event.message),
   });
   await handlers.shop({ db, cfg, event, businessId, conversationId });
   return 'shop';
+}
+
+// A message sent from a click-to-WhatsApp ad carries a referral (source_type "ad", a ctwa_clid).
+export function fromAd(message: unknown) {
+  const r = (message as { referral?: { source_type?: string; ctwa_clid?: string } } | null)?.referral;
+  return !!r && (r.source_type === 'ad' || !!r.ctwa_clid);
 }

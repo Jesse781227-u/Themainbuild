@@ -5,6 +5,7 @@ import { increment } from '../lib/firestore';
 import { feeKobo, type FeePolicy } from '../lib/money';
 import { addMinutes } from '../lib/time';
 import { orderRef, randomId } from '../lib/crypto';
+import { freeOffer, redeemOffer } from './offers';
 import type { Business } from '../domain/business';
 import type { Cart, CartLine, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
 import { hasStock, lineName, priceOf, stockPatch, variantOf } from '../domain/commerce';
@@ -81,7 +82,7 @@ async function claimUniqueAmount(tx: Transaction, db: Firestore, businessId: str
 // only once), checks every product belongs to the cart's business and is in stock, reserves the stock
 // by subtracting it, prices the order (goods + delivery + Relay's fee on goods only), and claims a
 // unique pay amount. The stock comes back if the order isn't paid before holdExpiresAt.
-export async function checkout(db: Firestore, args: { cartId: string; businessId: string; policy: OrderPolicy; delivery?: OrderDelivery | null; now?: Date }): Promise<Order> {
+export async function checkout(db: Firestore, args: { cartId: string; businessId: string; policy: OrderPolicy; delivery?: OrderDelivery | null; now?: Date; offerCode?: string | null }): Promise<Order> {
   const now = args.now ?? new Date();
   return db.runTransaction(async tx => {
     const cart = (await tx.get(db.doc(C.carts, args.cartId))) as Cart | null;
@@ -107,16 +108,21 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
 
     const delivery = args.delivery ?? null;
     const deliveryFeeKobo = delivery?.feeKobo ?? 0;
-    const fee = feeKobo(subtotalKobo, args.policy);
-    const baseKobo = subtotalKobo + deliveryFeeKobo + customerFee(fee, args.policy);
+    // A personal offer code: checked (theirs, unused, not expired) and reserved by this order.
+    const orderId = randomId(12);
+    const offer = args.offerCode ? await redeemOffer(tx, db, args.offerCode, { businessId: cart.businessId, customerId: cart.customerId, orderId }, subtotalKobo, now) : null;
+    const discountKobo = offer?.discountKobo ?? 0;
+    const fee = feeKobo(subtotalKobo - discountKobo, args.policy);
+    const baseKobo = subtotalKobo - discountKobo + deliveryFeeKobo + customerFee(fee, args.policy);
     const uniqueKobo = await claimUniqueAmount(tx, db, cart.businessId, baseKobo, now);
     const payAmountKobo = baseKobo + uniqueKobo;
 
     const at = now.toISOString();
     const holdExpiresAt = addMinutes(now, args.policy.holdMinutes).toISOString();
     const order: Order = {
-      id: randomId(12), ref: orderRef(), businessId: cart.businessId, customerId: cart.customerId, channel: cart.channel,
+      id: orderId, ref: orderRef(), businessId: cart.businessId, customerId: cart.customerId, channel: cart.channel,
       items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, feePaidBy: args.policy.feePayer ?? 'customer', uniqueKobo, payAmountKobo,
+      ...(offer ? { discountKobo, offerCode: offer.offer.code } : {}),
       status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt,
       paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
     };
@@ -142,6 +148,7 @@ export async function releaseHold(db: Firestore, orderId: string, now = new Date
     const at = now.toISOString();
     moveStock(tx, db, products, order.items, 1, { businessId: order.businessId, orderId: order.id, reason: 'release', suffix: 'release', actor: 'system', at });
     tx.update(db.doc(C.orders, order.id), { status: 'expired', updatedAt: at });
+    freeOffer(tx, db, order);
     return true;
   });
 }
@@ -167,6 +174,7 @@ export async function cancelOrder(db: Firestore, orderId: string, businessId: st
       moveStock(tx, db, products, order.items, 1, { businessId, orderId: order.id, reason: 'release', suffix: 'release', actor: 'owner', at });
     }
     tx.update(db.doc(C.orders, order.id), { status: 'cancelled', updatedAt: at });
+    if (order.status === 'awaiting_payment') freeOffer(tx, db, order);
     return 'cancelled' as const;
   });
 }

@@ -23,6 +23,9 @@ import { windowOpen } from './channel';
 import { customerConversationId } from './conversations';
 import { inQuietHours, messagingRules, monthKey, quietEnds, type MessagingRules } from './messaging-costs';
 import { templateState } from './templates';
+import { createOfferCode } from './offers';
+import { pickedForYou, picksMessage, type PickSignal } from './picks';
+import { listProducts } from './catalog';
 import { chargeMessages, getWallet } from './wallet';
 
 const DAY = 86_400_000;
@@ -36,6 +39,7 @@ export type ReachCustomer = Customer & {
   marketingOptInAt?: string | null; marketingOptOutAt?: string | null; spamReportedAt?: string | null;
   marketingTimes?: string[] | null;   // when marketing reached them lately (the weekly cap)
   interestWords?: string[] | null;    // what they said they want ("only sneakers")
+  adReferralAt?: string | null;       // came from a click-to-WhatsApp ad (free entry window)
   lastMarketingAt?: string | null;
 };
 
@@ -50,6 +54,8 @@ export interface Campaign {
   id: string; businessId: string; source: 'owner' | 'trigger' | 'suggested'; name: string;
   text: string; button?: [string, string] | null; audience: string[];
   segment?: string | null;           // the group, in words
+  picks?: boolean;                   // a "picked for you" carousel per customer
+  offer?: { percentOff?: number | null; amountOffKobo?: number | null; days?: number } | null; // {code} → a personal code each
   trigger?: TriggerType | null;      // which automatic update made it (for the weekly summary)
   template?: string | null;          // the paid template, when one is approved
   reportedAt?: string | null;
@@ -92,6 +98,8 @@ const isRegular = (c: ReachCustomer, r: MessagingRules, now: Date) => (c.orderCo
 const recentMarketing = (c: ReachCustomer, now: Date) => (c.marketingTimes ?? []).filter(t => now.getTime() - new Date(t).getTime() < 7 * DAY).length;
 
 // The cheapest allowed route for each customer. usedService: free service messages this month so far.
+const inFreeEntry = (c: ReachCustomer, r: MessagingRules, at: Date) => !!c.adReferralAt && (c.channel ?? 'whatsapp') === 'whatsapp' && at.getTime() - new Date(c.adReferralAt).getTime() < r.freeEntryHours * 3_600_000;
+
 export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, string | null>, opts: { cfg: Config; usedService: number; now?: Date; ownerSentOk?: boolean; paidOk?: boolean; needs?: ('name' | 'size' | 'area')[] }): Decision[] {
   const r = messagingRules(opts.cfg);
   const now = opts.now ?? new Date();
@@ -105,7 +113,20 @@ export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, st
     if (recentMarketing(c, now) >= r.weeklyCap) return { ...base, route: null, skip: 'weekly_cap' as const };
     const vals = customerValues(c);
     if ((opts.needs ?? []).some(v => !vals[v])) return { ...base, route: null, skip: 'missing_variable' as const };
-    const open = (c.channel ?? 'whatsapp') === 'whatsapp' && windowOpen(lastInbound.get(c.id) ?? c.lastInboundAt ?? null, now);
+    const last = lastInbound.get(c.id) ?? c.lastInboundAt ?? null;
+    // Instagram: free DMs inside 24 hours; outside, Instagram has no paid route for this.
+    if (c.channel === 'instagram') {
+      if (!windowOpen(last, now)) return { ...base, route: null, skip: 'unreachable' as const };
+      const until = quiet ? quietEnds(r, now) : null;
+      if (until && !windowOpen(last, until)) return { ...base, route: null, skip: 'unreachable' as const };
+      return { ...base, route: 'instagram' as const, queuedUntil: until ? until.toISOString() : null };
+    }
+    // Free entry window: 72 hours from a click-to-WhatsApp ad (doesn't use the monthly free chats).
+    if (inFreeEntry(c, r, now)) {
+      const until = quiet ? quietEnds(r, now) : null;
+      if (!until || inFreeEntry(c, r, until)) return { ...base, route: 'free_window' as const, queuedUntil: until ? until.toISOString() : null };
+    }
+    const open = (c.channel ?? 'whatsapp') === 'whatsapp' && windowOpen(last, now);
     if (open && allowance > 0) {
       allowance--;
       // Quiet hours: wait for the morning, if the window is still open then.
@@ -130,7 +151,7 @@ export async function serviceUsed(db: Firestore, businessId: string, now = new D
 
 export function planSummary(d: Decision[]) {
   const count = (k: string) => d.filter(x => (x.route ?? x.skip) === k).length;
-  return { open: count('open'), owner_sent: count('owner_sent'), paid_template: count('paid_template'), missing_variable: count('missing_variable'), queued: d.filter(x => x.queuedUntil).length, no_consent: count('no_consent'), weekly_cap: count('weekly_cap'), reported: count('reported'), unreachable: count('unreachable'), owner_batch_full: count('owner_batch_full'), cost: d.reduce((t, x) => t + x.cost, 0) };
+  return { open: count('open') + count('free_window') + count('instagram'), owner_sent: count('owner_sent'), paid_template: count('paid_template'), missing_variable: count('missing_variable'), queued: d.filter(x => x.queuedUntil).length, no_consent: count('no_consent'), weekly_cap: count('weekly_cap'), reported: count('reported'), unreachable: count('unreachable'), owner_batch_full: count('owner_batch_full'), cost: d.reduce((t, x) => t + x.cost, 0) };
 }
 
 export function planText(s: ReturnType<typeof planSummary>, total: number) {
@@ -157,13 +178,13 @@ async function loadAudience(db: Firestore, businessId: string, ids?: string[] | 
 }
 
 // Plans a campaign (nothing is sent): the route for everyone, saved for [Send all].
-export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string; segment?: string | null; trigger?: TriggerType | null }, now = new Date()) {
+export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string; segment?: string | null; trigger?: TriggerType | null; picks?: boolean; offer?: Campaign['offer'] }, now = new Date()) {
   const { customers, lastInbound } = await loadAudience(db, business.id, input.audience ?? null);
   const paidOk = input.source === 'owner' && (await templateState(db, business.id, 'relay_update')) === 'approved';
   const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now, paidOk, needs: usedVariables(input.text) });
   const summary = planSummary(decisions);
   const id = input.id ?? `c_${randomId(9).replace(/[^A-Za-z0-9]/g, 'x')}`;
-  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), segment: input.segment ?? null, trigger: input.trigger ?? null, template: paidOk ? 'relay_update' : null, routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
+  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), segment: input.segment ?? null, trigger: input.trigger ?? null, picks: input.picks ?? false, offer: input.offer ?? null, template: paidOk ? 'relay_update' : null, routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
   const created = await db.create(db.doc(C.campaigns, id), { ...campaign });
   return { campaign, decisions, summary, created };
 }
@@ -192,22 +213,33 @@ export async function executeCampaign(db: Firestore, cfg: Config, deps: { enqueu
   await db.update(db.doc(C.campaigns, campaignId), { status: 'sending', approvedAt: now.toISOString() });
   const byId = new Map(customers.map(c => [c.id, c]));
   const at = now.toISOString();
+  // "Picked for you": what each customer wanted lately, and what they already have.
+  const shopProducts = campaign.picks ? await listProducts(db, business.id) : [];
+  const signalsOf = new Map<string, PickSignal[]>(), boughtBy = new Map<string, string[]>();
+  if (campaign.picks) for (const s of (await db.query(C.customerSignals, [['businessId', '==', business.id]], { limit: 20_000 })) as unknown as (PickSignal & { customerId: string })[]) {
+    signalsOf.set(s.customerId, [...(signalsOf.get(s.customerId) ?? []), s]);
+    if (s.type === 'bought' && s.productId) boughtBy.set(s.customerId, [...(boughtBy.get(s.customerId) ?? []), s.productId]);
+  }
   const outbox: string[] = [];
   const links: { name: string; link: string }[] = [];
   let sent = 0, queued = 0;
   for (const d of decisions) {
     if (!d.route) continue;
     const c = byId.get(d.customerId)!;
-    const text = personal(campaign.text, { name: d.name });
+    const code = campaign.offer && /\{code\}/i.test(campaign.text) ? (await createOfferCode(db, { businessId: business.id, customerId: d.customerId, name: d.name, percentOff: campaign.offer.percentOff ?? null, amountOffKobo: campaign.offer.amountOffKobo ?? null, days: campaign.offer.days ?? 7 }, now)).code : null;
+    const text = personal(campaign.text, { name: d.name }).replace(/\{code\}/gi, code ?? '');
     const sendId = `${campaignId}_${d.customerId}`.replace(/[^A-Za-z0-9_-]/g, '_');
-    const content: OutboundContent = { type: 'interactive', interactive: { type: 'button', body: { text: text.slice(0, 1024) }, action: { buttons: [...(campaign.button ? [campaign.button] : []), ['stopupd', 'Stop updates']].map(([id, title]) => ({ type: 'reply', reply: { id, title } })) } } };
+    const picks = campaign.picks ? picksMessage(text, pickedForYou(shopProducts, signalsOf.get(d.customerId) ?? [], boughtBy.get(d.customerId) ?? [], 5, now)) : null;
+    if (campaign.picks && !picks && d.route !== 'owner_sent') continue; // not enough to pick for them
+    const content: OutboundContent = picks ?? { type: 'interactive', interactive: { type: 'button', body: { text: text.slice(0, 1024) }, action: { buttons: [...(campaign.button ? [campaign.button] : []), ['stopupd', 'Stop updates']].map(([id, title]) => ({ type: 'reply', reply: { id, title } })) } } };
     const record: Send = { id: sendId, businessId: business.id, campaignId, customerId: d.customerId, route: d.route, cost: d.cost, status: d.route === 'owner_sent' ? 'owner_pending' : d.queuedUntil ? 'queued' : 'sent', text, link: d.route === 'owner_sent' ? waLink(c.phone, text) : null, sendAfter: d.queuedUntil ?? null, sentAt: d.route !== 'owner_sent' && !d.queuedUntil ? at : null, createdAt: at };
     if (!(await db.create(db.doc(C.sends, sendId), { ...record }))) continue; // already sent once
     if (d.route === 'owner_sent') { links.push({ name: d.name, link: record.link! }); continue; }
     const paidTemplate = d.route === 'paid_template' ? { name: campaign.template!, params: [customerValues(c).name || 'there', business.name, text.slice(0, 900)] } : null;
     if (d.queuedUntil) { queued++; await db.set(db.doc(C.sends, sendId), { content, ...(paidTemplate ? { paidTemplate } : {}) }, { merge: true }); continue; }
     const mid = `reach_${sendId}`;
-    await db.create(db.doc(C.outbox, mid), { id: mid, businessId: business.id, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: customerConversationId(business.id, c.channel ?? 'whatsapp', c.phone), kind: 'reach', text, content, ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: at });
+    const to = addressOf(c);
+    await db.create(db.doc(C.outbox, mid), { id: mid, businessId: business.id, audience: 'customer', channel: c.channel ?? 'whatsapp', to, conversationId: customerConversationId(business.id, c.channel ?? 'whatsapp', to), kind: 'reach', text, content, ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: at });
     outbox.push(mid);
     await noteMarketing(db, d.customerId, at);
     sent++;
@@ -240,9 +272,10 @@ export async function releaseQueuedSends(db: Firestore, cfg: Config, now = new D
     const c = (await db.get(db.doc(C.customers, s.customerId))) as ReachCustomer | null;
     const conv = await db.get(db.doc(C.conversations, s.customerId));
     const paidTemplate = (s as Send & { paidTemplate?: unknown }).paidTemplate ?? null;
-    if (!c || !consented(c, cfg) || (!paidTemplate && !windowOpen((conv?.lastInboundAt as string | null) ?? null, now))) { await db.update(db.doc(C.sends, s.id), { status: 'failed' }); continue; }
+    const stillFree = s.route === 'free_window' ? !!c?.adReferralAt && now.getTime() - new Date(c.adReferralAt).getTime() < messagingRules(cfg).freeEntryHours * 3_600_000 : windowOpen((conv?.lastInboundAt as string | null) ?? null, now);
+    if (!c || !consented(c, cfg) || (!paidTemplate && !stillFree)) { await db.update(db.doc(C.sends, s.id), { status: 'failed' }); continue; }
     const mid = `reach_${s.id}`;
-    if (await db.create(db.doc(C.outbox, mid), { id: mid, businessId: s.businessId, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: s.customerId, kind: 'reach', text: s.text, ...(s.content ? { content: s.content } : {}), ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(mid);
+    if (await db.create(db.doc(C.outbox, mid), { id: mid, businessId: s.businessId, audience: 'customer', channel: c.channel ?? 'whatsapp', to: addressOf(c), conversationId: s.customerId, kind: 'reach', text: s.text, ...(s.content ? { content: s.content } : {}), ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(mid);
     await db.update(db.doc(C.sends, s.id), { status: 'sent', sentAt: now.toISOString() });
     await noteMarketing(db, s.customerId, now.toISOString());
   }
@@ -307,4 +340,11 @@ export async function abandonedCarts(db: Firestore, cfg: Config, deps: { enqueue
     if (r?.sent || r?.queued) fired++;
   }
   return fired;
+}
+
+// Where a message goes: the phone on WhatsApp, the Instagram-scoped id on Instagram (it's in the id).
+export function addressOf(c: Pick<ReachCustomer, 'id' | 'phone' | 'channel'>) {
+  if (c.channel !== 'instagram') return c.phone;
+  const i = c.id.indexOf('_ig_');
+  return i >= 0 ? c.id.slice(i + 4) : c.phone;
 }

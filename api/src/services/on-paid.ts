@@ -73,7 +73,8 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   tx.update(db.doc(C.orders, order.id), { status: 'paid', paidAt: at, paymentId: payment.paymentId, needsAttention, receiptToken, updatedAt: at });
   tx.delete(db.doc(C.amountClaims, claimId(order.businessId, order.payAmountKobo)));
 
-  const spent = order.subtotalKobo + order.deliveryFeeKobo;
+  const goods = order.subtotalKobo - (order.discountKobo ?? 0);
+  const spent = goods + order.deliveryFeeKobo;
   tx.set(db.doc(C.customers, order.customerId), { businessId: order.businessId, orderCount: increment(1), totalSpentKobo: increment(spent), lastOrderAt: at, updatedAt: at }, { merge: true });
 
   // Smart Reach: what they bought (ids only).
@@ -84,7 +85,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
 
   tx.create(db.doc(C.ledger, order.id), {
     id: order.id, businessId: order.businessId, orderId: order.id, type: 'sale', at,
-    grossKobo: order.payAmountKobo, goodsKobo: order.subtotalKobo, deliveryKobo: order.deliveryFeeKobo,
+    grossKobo: order.payAmountKobo, goodsKobo: goods, ...(order.discountKobo ? { discountKobo: order.discountKobo, offerCode: order.offerCode } : {}), deliveryKobo: order.deliveryFeeKobo,
     relayFeeKobo: order.feeKobo, merchantNetKobo: order.payAmountKobo - order.feeKobo,
   });
 
@@ -94,7 +95,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
 
   const date = lagosDate(new Date(at));
   tx.set(db.doc(C.dailyStats, `${order.businessId}_${date}`), {
-    businessId: order.businessId, date, ordersPaid: increment(1), salesKobo: increment(order.subtotalKobo),
+    businessId: order.businessId, date, ordersPaid: increment(1), salesKobo: increment(goods),
     deliveryKobo: increment(order.deliveryFeeKobo), relayFeeKobo: increment(order.feeKobo), updatedAt: at,
   }, { merge: true });
 

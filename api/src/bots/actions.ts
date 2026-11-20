@@ -337,14 +337,23 @@ async function reachAsk(c: ActionCtx): Promise<Out> {
     list('Which one?', 'Pick wording', samples.map((_, i) => ({ id: `act:reachpick:${i + 1}`, title: `Option ${i + 1}` })), 'Wording')] as unknown as Out;
 }
 
+// "Picked for you": each customer gets a carousel of products matched to what they looked at or bought.
+async function reachPicks(c: ActionCtx): Promise<Out> {
+  return reachPlan(c, `Hi {name}, we picked these for you at ${c.business.name} 👇`, null, null, { picks: true });
+}
+
 async function segmentsView(c: ActionCtx): Promise<Out> {
   const groups = await refreshSegments(c.db, c.business.id);
   return buttons(`Your customer groups:\n${groups.map(g => `• ${g.name}: ${g.size}`).join('\n')}\n\nSend to any group with *Send to a group*, e.g. "tell my top customers about…".`.slice(0, 1000), [['act:reachgroup', 'Send to a group'], ['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
 }
 
 // The route plan, then [Send all] [Free ones only] [Edit message].
-export async function reachPlan(c: ActionCtx, text: string, audience?: string[] | null, segment?: string | null): Promise<Out> {
-  const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: segment ? `Update to ${segment}` : 'Update to everyone', text, source: 'owner', button: ['menu', 'See what we have'], audience: audience ?? null, segment: segment ?? null });
+export async function reachPlan(c: ActionCtx, text: string, audience?: string[] | null, segment?: string | null, extra: { picks?: boolean } = {}): Promise<Out> {
+  // "10% off with a code" in the news: each customer gets their own single-use code ({code}).
+  const pct = /\b(\d{1,2})\s*%\s*(?:off|discount)\b.*\bcode\b|\bcode\b.*\b(\d{1,2})\s*%/i.exec(text);
+  const offer = pct ? { percentOff: Number(pct[1] ?? pct[2]), days: 7 } : null;
+  const body = offer && !/\{code\}/i.test(text) ? `${text} Your code: {code}` : text;
+  const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: extra.picks ? 'Picked for you' : segment ? `Update to ${segment}` : 'Update to everyone', text: body, source: 'owner', button: ['menu', 'See what we have'], audience: audience ?? null, segment: segment ?? null, picks: extra.picks ?? false, offer });
   if (!decisions.length) return buttons('You have no customers yet. Once people chat or order, you can send them updates here.', [['act:menu', 'Menu']]);
   if (!summary.open && !summary.owner_sent && !summary.paid_template) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this right now: paid updates need your marketing template approved by Meta.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
   return buttons(planText(summary, decisions.length), [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:reachall', 'Edit message']]);
@@ -391,6 +400,7 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'reachgroup', hint: 'Send an update to a group of customers', run: reachGroup },
   { id: 'reachpick', hint: 'Use this wording', run: reachPick },
   { id: 'reachask', hint: 'Write an update to the people who looked', run: reachAsk },
+  { id: 'reachpicks', hint: 'Send each customer products picked for them', aliases: ['picked for you', 'personal picks', 'send picks'], run: reachPicks },
   { id: 'segments', hint: 'Your customer groups and their sizes', aliases: ['groups', 'segments', 'customer groups', 'my groups'], run: segmentsView },
   { id: 'reachtoggle', hint: 'Switch an automatic update on or off', run: reachToggle },
   { id: 'reachsend', hint: 'Send the planned update', run: c => reachSend(c, false) },

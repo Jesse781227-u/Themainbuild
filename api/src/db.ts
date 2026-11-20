@@ -57,7 +57,8 @@ export const C = {
   sends: 'sends',                       // Smart Reach: one per customer per campaign; cost and results
   serviceUsage: 'serviceUsage',
   segments: 'segments',                 // Smart Reach: customer groups (built-in and the owner's)
-  templateStatus: 'templateStatus',     // Smart Reach: each marketing template's approval, per shop         // free service messages sent per shop number per month
+  templateStatus: 'templateStatus',
+  offerCodes: 'offerCodes',             // Smart Reach: personal single-use codes     // Smart Reach: each marketing template's approval, per shop         // free service messages sent per shop number per month
   wallets: 'wallets',                   // each shop's balance (Relay holds it until withdrawn)
   payouts: 'payouts',                   // withdrawals to the owner's bank account
   kyc: 'kyc',                           // bank details + BVN (encrypted), verified once before the first withdrawal           // Status posts Relay prepared for an owner: picture, caption, who to mention, results
