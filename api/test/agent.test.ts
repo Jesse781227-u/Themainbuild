@@ -240,3 +240,92 @@ test('agent memory: chats with no message for 90 days are forgotten', async () =
   assert.ok(await forgetOldChats(db) >= 1);
   assert.equal((await doc('conversations', 'old-chat')).agent, null);
 });
+
+// ── Phase 2: ordering end to end ──
+test('shop agent: "make it 2" and "remove the slides" change the cart', async () => {
+  const llm = scripted([
+    { call: [['addToCart', { productId: slides.id }]] }, { say: 'Added *Rubber Slides* 👍' },
+    { call: [['updateCart', { productId: slides.id, quantity: 2 }]] }, { say: 'Now 2 *Rubber Slides* in your cart.' },
+    { call: [['updateCart', { productId: slides.id, quantity: 0 }]] }, { say: 'Done, I removed the *Rubber Slides*.' },
+  ]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  const id = `${fx.a.id}_wa_${phone}`;
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'please add the rubber slides for me' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'actually make it 2 abeg' });
+  assert.deepEqual((await doc('carts', id)).items, [{ productId: slides.id, qty: 2 }]);
+  const out = await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'remove the slides, i no need am again' });
+  assert.deepEqual((await doc('carts', id)).items, []);
+  assert.equal(out[0].text, 'Done, I removed the *Rubber Slides*.');
+});
+
+test('shop agent: a size change on a product with sizes uses the size in the cart', async () => {
+  const llm = scripted([
+    { call: [['addToCart', { productId: sneakers.id, option: '41' }]] }, { say: 'Added 👍' },
+    { call: [['updateCart', { productId: sneakers.id, quantity: 2 }]] }, { say: 'Now 2 👍' },
+  ]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'add the black sneakers size 41 for me' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'abeg make the sneakers two' });
+  assert.deepEqual((await doc('carts', `${fx.a.id}_wa_${phone}`)).items, [{ productId: sneakers.id, qty: 2, variantId: 'v41' }]);
+});
+
+test('shop agent: pickup checkout goes straight to the order summary (fixed flow)', async () => {
+  const llm = scripted([{ call: [['addToCart', { productId: slides.id }]] }, { call: [['goToCheckout', { pickup: true }]] }, { say: 'Sure, see your order below 👇' }]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  const out = await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'add rubber slides, i go come pick am myself' });
+  assert.equal(out[0].text, 'Sure, see your order below 👇');
+  assert.match(out[1].text, /^Please confirm your order:\n• 1 × Rubber Slides: ₦5,000[\s\S]*Pickup: free/);
+  assert.ok(out[1].options.includes('confirm'));
+});
+
+test('shop agent: order status and offer codes come from the database', async () => {
+  const { createOfferCode } = await import('../src/services/offers');
+  const phone = customer();
+  const id = `${fx.a.id}_wa_${phone}`;
+  const offer = await createOfferCode(db, { businessId: fx.a.id, customerId: id, name: 'Ada', percentOff: 10 });
+  const llm = scripted([{ call: [['orderStatus', {}], ['applyOfferCode', { code: offer.code }], ['applyOfferCode', { code: 'FAKE-0000' }]] }, { say: 'You have no orders yet. Your code is saved 👍' }]);
+  const bot = new Bot(llm);
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: `any order for me? also use my code ${offer.code} and FAKE-0000 abeg` });
+  const results = llm.seen[1].turns.filter(t => t.role === 'result') as { name: string; result: unknown }[];
+  assert.deepEqual(results[0].result, { none: true });
+  assert.deepEqual(results[1].result, { ok: true, code: offer.code, off: '10% off' });
+  assert.deepEqual(results[2].result, { ok: false, reason: "That code doesn't exist." });
+  assert.equal((await doc('conversations', id)).offerCode, offer.code);
+});
+
+test('shop agent: "stop sending me promos" switches updates off', async () => {
+  const llm = scripted([{ call: [['setUpdates', { on: false }]] }, { say: "Done, no more promos from us 👍" }]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'please abeg I no want all these promo messages again' });
+  assert.ok((await doc('customers', `${fx.a.id}_wa_${phone}`)).marketingOptOutAt);
+});
+
+test('shop agent: two misunderstood messages in a row → a person takes over', async () => {
+  const llm = scripted([{ say: '₦7,777 only' }, { say: '₦7,777 still' }, { say: '₦8,888' }, { say: '₦8,888 again' }]);
+  const bot = new Bot(llm);
+  const phone = customer();
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'hi' });
+  await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'that thing wey i talk about the other time na im i want' });
+  const out = await bot.send('shop', { from: phone, to: fx.a.pnid, text: 'you no dey understand me at all, the thing wey i talk' });
+  assert.match(out.map(m => m.text).join('\n'), /They'll reply to you here shortly/);
+  assert.equal((await doc('conversations', `${fx.a.id}_wa_${phone}`)).mode, 'owner');
+});
+
+test('eval fixtures: 60+ conversations, every expected tool exists', async () => {
+  const { FIXTURES } = await import('../scripts/eval/fixtures');
+  const { fakeHelpers } = await import('../scripts/eval/fake-shop');
+  const { shopTools } = await import('../src/bots/shop-agent');
+  const names = new Set(shopTools(fakeHelpers('fashion').h).map(t => t.spec.name));
+  assert.ok(FIXTURES.length >= 60);
+  assert.equal(new Set(FIXTURES.map(f => f.id)).size, FIXTURES.length, 'unique ids');
+  for (const f of FIXTURES) for (const t of f.turns) for (const n of [...(t.tools ?? []), ...(t.allTools ?? []), ...(t.notTools ?? [])]) assert.ok(names.has(n), `${f.id}: ${n}`);
+});

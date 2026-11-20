@@ -29,6 +29,15 @@ export interface ShopHelpers {
   askOwner: (question: string) => Promise<void>;
   shopInfo: (topic: string) => Promise<string | null>;
   quote: (area: string) => Promise<{ area: string; feeKobo: number; timeframe: string | null; later: boolean } | null>;
+  // Phase 2: ordering end to end.
+  savedAddress: string | null;
+  orders: () => Promise<{ ref: string; status: string; total: string; items: string[]; when: string }[]>;
+  orderAgain: (words: string) => Promise<void>;
+  checkoutTo: (words: string, how: { deliverTo?: string | null; pickup?: boolean }) => Promise<void>;
+  applyCode: (code: string) => Promise<{ ok: true; code: string; off: string } | { ok: false; reason: string }>;
+  setUpdates: (on: boolean) => Promise<void>;
+  pairings: (productId: string) => Promise<Product[]>;
+  canPickup: boolean;
 }
 
 const naira = (kobo: number) => formatKobo(kobo);
@@ -79,7 +88,8 @@ export function shopContext(h: ShopHelpers, cartNow: Awaited<ReturnType<ShopHelp
     b.messages?.welcome ? `The shop's own welcome message (copy its tone, not its words): "${b.messages.welcome.slice(0, 200)}"` : '',
     b.policies ? `Policies: ${policyText(b.policies)?.replace(/\n/g, ' ').slice(0, 400) ?? ''}` : '',
     `Catalogue (id | name | price | stock | section | options):\n${catalogue}`,
-    `Customer: ${name ?? 'name unknown'}; ${h.customer?.orderCount ?? 0} past orders.${h.lastOrder ? ` Last order ${h.lastOrder.ref} (${h.lastOrder.status}): ${h.lastOrder.items.join(', ')}.` : ''}`,
+    `Customer: ${name ?? 'name unknown'}; ${h.customer?.orderCount ?? 0} past orders.${h.lastOrder ? ` Last order ${h.lastOrder.ref} (${h.lastOrder.status}): ${h.lastOrder.items.join(', ')}.` : ''}${h.savedAddress ? ` Saved delivery address: ${h.savedAddress}.` : ''}`,
+    `Pickup: ${h.canPickup ? 'yes' : 'no'}. Delivery: ${b.fulfilment === 'pickup' ? 'no' : 'yes'}.`,
     cartNow.lines.length ? `Their cart: ${cartNow.lines.map(l => `${l.qty} × ${l.name} = ${naira(l.totalKobo)}`).join('; ')}. Subtotal ${naira(cartNow.subtotalKobo)}.` : 'Their cart is empty.',
     h.pidgin ? 'They write in Pidgin: reply in Pidgin.' : '',
     h.first && h.welcome ? `This is the start of the chat. The line "${h.welcome}" is sent before your reply automatically, so don't greet again.` : '',
@@ -149,6 +159,41 @@ export function shopTools(h: ShopHelpers): AgentTool<null>[] {
       },
     },
     {
+      spec: { name: 'updateCart', description: 'Change how many of an item is in their cart ("make it 2"); quantity 0 removes it.', params: { productId: { type: 'string', description: 'The product id' }, option: { type: 'string', description: 'Its size/colour, if it has options' }, quantity: { type: 'integer', description: 'The new quantity (0 removes)' } }, required: ['productId', 'quantity'] },
+      async run(a) {
+        const p = h.products.find(x => x.id === str(a.productId, 64)) ?? null;
+        if (!p) return { result: { ok: false, reason: 'not found' } };
+        const c0 = await h.cart();
+        const inCart = c0.cart?.items.filter(i => i.productId === p.id) ?? [];
+        const variantId = p.variants?.length ? (matchVariant(p, str(a.option, 40)) ?? (inCart.length === 1 ? inCart[0].variantId ?? null : null)) : null;
+        if (p.variants?.length && !variantId) return { result: { ok: false, reason: 'which option?', inCart: inCart.map(i => lineName(p, i.variantId)) } };
+        const qty = Math.max(0, Math.min(99, int(a.quantity, 1)));
+        const r = await h.put(p.id, qty, variantId, 'set');
+        const c = await h.cart();
+        return { result: r.ok ? { ok: true, item: lineName(p, variantId), nowInCart: qty, subtotal: naira(c.subtotalKobo), cartEmpty: !c.lines.length } : { ok: false, reason: r.reason === 'stock' ? (r.left ? `only ${r.left} left` : 'sold out') : r.reason } };
+      },
+    },
+    {
+      spec: { name: 'orderAgain', description: 'Same as last time: put their last paid order back in the cart and show it.', params: {} },
+      async run() { return h.lastOrder ? { result: { lastOrder: h.lastOrder.items }, takeover: words => h.orderAgain(words) } : { result: { error: 'no past order' } }; },
+    },
+    {
+      spec: { name: 'orderStatus', description: 'Their recent orders with status (paid, packed, out for delivery…).', params: {} },
+      async run() { const o = await h.orders(); return { result: o.length ? o : { none: true } }; },
+    },
+    {
+      spec: { name: 'applyOfferCode', description: 'Use a personal offer code they typed (e.g. "ADA-7KX2"). Only real codes work.', params: { code: { type: 'string', description: 'The code' } }, required: ['code'] },
+      async run(a) { return { result: await h.applyCode(str(a.code, 20)) }; },
+    },
+    {
+      spec: { name: 'setUpdates', description: 'They want (on=true) or don\'t want (on=false) news and offers from the shop.', params: { on: { type: 'boolean', description: 'true to get updates, false to stop' } }, required: ['on'] },
+      async run(a) { const on = a.on === true || a.on === 'true'; await h.setUpdates(on); return { result: { updates: on ? 'on' : 'off' } }; },
+    },
+    {
+      spec: { name: 'suggestPairings', description: 'Items that go well with a product (only after they add something, or before checkout; suggest one).', params: { productId: { type: 'string', description: 'The product they added' } }, required: ['productId'] },
+      async run(a) { const ps = await h.pairings(str(a.productId, 64)); return { result: ps.length ? ps.slice(0, 3).map(brief) : { none: true } }; },
+    },
+    {
       spec: { name: 'deliveryQuote', description: 'The delivery price to an area or address.', params: { area: { type: 'string', description: 'Area, street or landmark, e.g. "Yaba" or "Lekki Phase 1"' } }, required: ['area'] },
       async run(a) {
         if (h.business.fulfilment === 'pickup') return { result: { delivers: false, pickupOnly: true } };
@@ -165,8 +210,14 @@ export function shopTools(h: ShopHelpers): AgentTool<null>[] {
       },
     },
     {
-      spec: { name: 'goToCheckout', description: 'They want to pay / place the order: start checkout (the system sends the summary and payment details).', params: {} },
-      async run() { return { result: { started: true }, takeover: words => h.checkout(words) }; },
+      spec: { name: 'goToCheckout', description: 'They want to pay / place the order: start checkout (the system sends the summary and payment details). Give deliverTo when they said where (or "saved" for their saved address), or pickup=true.', params: { deliverTo: { type: 'string', description: 'Delivery address/area they gave, or "saved"' }, pickup: { type: 'boolean', description: 'true if they will pick it up' } } },
+      async run(a) {
+        const c = await h.cart();
+        if (!c.lines.length) return { result: { error: 'cart is empty' } };
+        const to = str(a.deliverTo, 200);
+        const deliverTo = to.toLowerCase() === 'saved' ? h.savedAddress : to || null;
+        return { result: { started: true }, takeover: words => (deliverTo || a.pickup === true ? h.checkoutTo(words, { deliverTo, pickup: a.pickup === true }) : h.checkout(words)) };
+      },
     },
     {
       spec: { name: 'askOwner', description: 'Pass a question to the shop owner (e.g. bargaining, a custom request). The bot keeps chatting.', params: { question: { type: 'string', description: 'The question for the owner, in one line' } }, required: ['question'] },

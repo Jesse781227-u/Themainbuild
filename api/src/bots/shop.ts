@@ -382,6 +382,33 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
       await notifyOwner(db, run.deps, business, 'customer_question', `💬 ${who} asks: ${q}\nReply to them in your WhatsApp Business app.`);
     },
     shopInfo: topic => shopInfo(db, business, topic, run.state.pidgin),
+    savedAddress: (customer as (Customer & { savedAddress?: string | null }) | null)?.savedAddress ?? null,
+    canPickup: business.fulfilment !== 'delivery',
+    orders: async () => orders.filter(o => o.businessId === business.id).slice(0, 3).map(o => ({ ref: o.ref, status: o.status === 'paid' ? `paid, ${o.fulfilment.replace(/_/g, ' ')}` : o.status.replace(/_/g, ' '), total: formatKobo(o.payAmountKobo), items: o.items.map(i => `${i.qty} × ${i.name}`), when: o.createdAt.slice(0, 10) })),
+    orderAgain: async words => { if (words) await reply(intro(words)); await orderAgain(ctx, run, business, reply); },
+    checkoutTo: async (words, how) => {
+      if (words) await reply(intro(words));
+      if (how.pickup && business.fulfilment !== 'delivery') return confirmOrder(ctx, business, pickup(business), reply);
+      const q = how.deliverTo ? await quoteDelivery(db, business.id, how.deliverTo, 'self_arranged') : null;
+      if (q) return confirmOrder(ctx, business, { ...q, address: how.deliverTo!.slice(0, 200) }, reply);
+      if (how.deliverTo && business.shipsInterstate && business.interstatePricing === 'quote') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: 0, address: how.deliverTo.slice(0, 200), timeframe: `delivery price to be confirmed by ${business.name}` }, reply);
+      return startCheckout(ctx, business, reply);
+    },
+    applyCode: async code => {
+      const c = await loadCart(db, ctx);
+      const r = checkOffer(await lookOffer(db, code), { businessId: business.id, customerId: conversationId }, c ? (await cartLines(db, c)).subtotal : 0);
+      if (!r.ok) return { ok: false, reason: offerReason(r.reason) };
+      await db.set(db.doc(C.conversations, conversationId), { offerCode: r.offer.code }, { merge: true });
+      return { ok: true, code: r.offer.code, off: r.offer.percentOff ? `${r.offer.percentOff}% off` : `${formatKobo(r.offer.amountOffKobo ?? 0)} off` };
+    },
+    setUpdates: async on => { if (ctx.test) return; if (on) await optIn(db, conversationId); else await optOut(db, conversationId); },
+    pairings: async id => {
+      const p = products.find(x => x.id === id);
+      if (!p) return [];
+      const c = await loadCart(db, ctx);
+      const s = await suggestFor(db, null, business, p, new Set([...(c?.items.map(i => i.productId) ?? []), p.id])).catch(() => null);
+      return s ? [...s.cross, ...(s.upsell ? [s.upsell] : [])] : [];
+    },
     quote: async area => {
       const q = await quoteDelivery(db, business.id, area, 'self_arranged');
       if (q) return { area: q.address ?? area, feeKobo: q.feeKobo, timeframe: q.timeframe ?? null, later: false };
@@ -395,10 +422,15 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
   const botNumber = await resolveSender(db, cfg, ctx.test ? { adminBot: true } : { businessId: business.id }).then(s => s.phoneNumberId).catch(() => '');
   await debugNote(db, cfg, { phone: ctx.event.from, botNumber, r }).catch(() => undefined);
   if (isFail(r)) {
-    // Something was already added: show the cart rather than lose it.
-    if (r.calls.some(c => c.ok && c.name === 'addToCart')) { await showCart(ctx, business, reply, welcome ?? ''); return true; }
+    // Something was already changed: show the cart rather than lose it.
+    if (r.calls.some(c => c.ok && (c.name === 'addToCart' || c.name === 'updateCart'))) { await showCart(ctx, business, reply, welcome ?? ''); return true; }
+    // Twice in a row the assistant couldn't answer in its own words: a person takes over.
+    const misses = Number(((await db.get(db.doc(C.conversations, conversationId)))?.agentMisses as number | undefined) ?? 0) + 1;
+    await db.set(db.doc(C.conversations, conversationId), { agentMisses: misses }, { merge: true });
+    if (misses >= 2 && r.failed === 'ungrounded') { await db.set(db.doc(C.conversations, conversationId), { agentMisses: 0 }, { merge: true }); await handOver(ctx, run.deps, business, customer, reply); return true; }
     return false;
   }
+  await db.set(db.doc(C.conversations, conversationId), { agentMisses: 0 }, { merge: true });
   await saveMemory(db, conversationId, remember(memory, text, r.text, r.calls.map(c => c.name)));
   if (r.finish) await r.finish(r.text); else await reply(intro(r.text), { ...run.state, step: run.state.step ?? 'browse' });
   return true;
@@ -657,6 +689,7 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
   } else {
     await reply(`${paymentInstructions(order, (business as Business & { paymentDetails?: string | null }).paymentDetails ?? null)}\nWe're holding your items for ${minutes} minutes.`, { step: 'browse' });
   }
+  if (delivery?.address && delivery.method !== 'pickup' && !ctx.test) await ctx.db.set(ctx.db.doc(C.customers, ctx.conversationId), { savedAddress: delivery.address.slice(0, 200) }, { merge: true });
   const placed = `New order ${order.ref}: ${formatKobo(order.payAmountKobo)} awaiting payment (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).`;
   await notifyOwner(ctx.db, deps, business, 'order_placed', placed, order.id, buttons(placed, [[`act:order:${order.ref}`, 'View order'], [`act:msgcust:${order.ref}`, 'Message customer'], ['act:menu', 'Menu']]));
 }
