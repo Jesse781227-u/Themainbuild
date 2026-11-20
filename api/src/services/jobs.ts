@@ -2,6 +2,7 @@
 import { C, getDb } from '../db';
 import { queueDailySummaries } from './summary';
 import { queueMorningBriefs } from './morning-brief';
+import { handoverSweep } from './handover';
 import type { Env, ScheduledEventLike } from '../env';
 import { log } from '../lib/logger';
 import { findStuckEvents } from './inbound';
@@ -56,7 +57,9 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   await abandonedCarts(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now);
   if (now.getUTCMinutes() === 0) await afterDelivery(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now); // hourly
   const reachReports = await dueCampaignReports(db, now);
-  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders, ...statusReports, ...reachIds, ...reachReports].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
+  // Customers waiting for the owner: reminders at 10 and 30 minutes, the chat back at 45.
+  const handovers = await handoverSweep(db, now).catch(e => { log('warn', 'handover_sweep_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return [] as string[]; });
+  await enqueue(env, [...events.map(eventId => ({ kind: 'inbound' as const, eventId })), ...[...outbox, ...reminders, ...statusReports, ...reachIds, ...reachReports, ...handovers].map(messageId => ({ kind: 'outbox' as const, messageId }))]);
   if (released || events.length || outbox.length) log('info', 'sweep', { released, requeuedEvents: events.length, requeuedOutbox: outbox.length });
   return { released, requeuedEvents: events.length, requeuedOutbox: outbox.length };
 }

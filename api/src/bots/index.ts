@@ -18,7 +18,7 @@ export function createBotHandlers(deps: BotDeps): Handlers {
       const at = new Date().toISOString();
       await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), {
         id: ctx.conversationId, businessId: ctx.businessId, channel: ctx.event.source, customerId: ctx.conversationId,
-        mode: 'owner', takeoverAt: at, takeoverReason: OWNER_TAKEOVER_REASON, updatedAt: at,
+        mode: 'owner', takeoverAt: at, takeoverReason: OWNER_TAKEOVER_REASON, ownerRepliedAt: at, updatedAt: at,
       }, { merge: true });
       log('info', 'owner_takeover', { businessId: ctx.businessId, channel: ctx.event.source });
       // Their answer becomes an example the shop assistant learns their way of answering from.

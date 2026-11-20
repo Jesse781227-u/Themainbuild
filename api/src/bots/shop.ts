@@ -20,6 +20,7 @@ import { noteInterest } from '../services/status-posts';
 import { DEFAULT_MESSAGES, fill, renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
 import { modelsResting } from '../services/ai';
+import { handoverAck, type HandoverState } from '../services/handover';
 import { byPriority, listZones, needsStreet, quoteDelivery, resolveDelivery, type DeliveryZone } from '../services/delivery';
 import { describeLocation } from '../services/location';
 import { describeHours, openNow } from '../services/hours';
@@ -85,10 +86,10 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   // Replying soon after an update counts for it (Smart Reach results).
   const c0 = customer as (Customer & { lastMarketingAt?: string | null }) | null;
   if (!ctx.test && c0?.lastMarketingAt && Date.now() - new Date(c0.lastMarketingAt).getTime() < 48 * 3_600_000) await recordSignal(db, { businessId, customerId: conversationId, type: 'replied' }).catch(() => undefined);
-  if (conv.mode === 'owner') return; // the owner is handling this chat until they hand back
+  const ownerHandling = conv.mode === 'owner'; // the owner is handling this chat until they hand back
 
   const to = ctx.event.from;
-  if (!ctx.test && ctx.event.source === 'whatsapp') await showTyping(db, cfg, deps.transport, sender, to, ctx.event.messageId);
+  if (!ctx.test && !ownerHandling && ctx.event.source === 'whatsapp') await showTyping(db, cfg, deps.transport, sender, to, ctx.event.messageId);
   const state: ShopState = conv.shop ?? { step: 'browse' };
   const setState = (s: ShopState | null) => db.set(db.doc(C.conversations, conversationId), { shop: s }, { merge: true });
   const reply = async (content: OutboundContent | string, next?: ShopState) => {
@@ -97,6 +98,21 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     const options = optionIds(c);
     if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, greetedAt: state.greetedAt ?? null, pidgin: state.pidgin ?? false, options });
   };
+
+  if (ownerHandling) {
+    // The owner is talking to them (replied from their own app): Relay stays out of the conversation.
+    const h = conv as HandoverState;
+    if (!h.handoverAt || (h.ownerRepliedAt && h.ownerRepliedAt >= h.handoverAt)) return;
+    // Waiting for the owner: tracking still works, anything else gets a short note.
+    const said = (firstInput.text ?? '').trim().toLowerCase();
+    if (PIDGIN.test(said)) state.pidgin = true; else if (said.split(/\s+/).filter(Boolean).length >= 3) state.pidgin = false;
+    const tracking = firstInput.choiceId === 'track' || ((TRACK_QUESTION.test(said) || /\b(where is my order|order status|track)\b/.test(said)) && !ORDER_CHANGE.test(said));
+    if (tracking) return orderStatus(db, conversationId, reply, business);
+    const note = handoverAck(business, conv as HandoverState, state.pidgin);
+    if (!note) return;
+    await db.set(db.doc(C.conversations, conversationId), { handoverAckAt: new Date().toISOString() }, { merge: true });
+    return reply(note);
+  }
 
   const run: Run = { deps, state, agent: !!deps.llm?.converse && cfg.AGENT_ENABLED !== 'false' };
   const input = readInput(ctx.event);
@@ -185,7 +201,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'more') return showCategory(ctx, business, id, reply, Number(choice.split(':')[2]) || 0);
     if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
     if (kind === 'buy') return buy(ctx, run, business, id, reply);
-    if (kind === 'add') return addToCart(ctx, run, business, id, 1, reply);
+    if (kind === 'add') return addToCart(ctx, run, business, id, Math.max(1, Math.min(20, Number(choice.split(':')[2]) || 1)), reply);
     if (kind === 'swap') {
       const to = choice.split(':')[2] ?? '';
       const cart = await loadCart(db, ctx);
@@ -286,7 +302,9 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
         const what = `*${p.name}* ${state.pidgin ? 'na' : 'is'} ${prices.some(x => x !== from) ? 'from ' : ''}${formatKobo(from)}.`;
         await interest(ctx, [`p_${p.id}`], 'asked');
         const soldOut = state.pidgin ? 'E don finish for now.' : "It's sold out right now.";
-        return reply(buttons(hasStock(p) ? what : `${what} ${soldOut}`, [...(hasStock(p) ? [[`add:${p.id}`, 'Add to cart'] as [string, string]] : []), ['menu', 'See the menu']]));
+        const want = Number(/\b(?:i want|i wan|i need|give me|make i get|i go take|send|add)\s+(\d{1,2})\b|\b(\d{1,2})\s*(?:plates?|packs?|pieces?|pcs|bottles?|portions?|pairs?)\b/.exec(lower)?.slice(1).find(Boolean) ?? 1);
+        const qty = Math.max(1, Math.min(20, want));
+        return reply(buttons(hasStock(p) ? what : `${what} ${soldOut}`, [...(hasStock(p) ? [[qty > 1 ? `add:${p.id}:${qty}` : `add:${p.id}`, qty > 1 ? `Add ${qty} to cart` : 'Add to cart'] as [string, string]] : []), ['menu', 'See the menu']]));
       }
       if (ranked.list.length) return sendAll(reply, productCarousel(ctx.cfg, business, ranked.list.slice(0, 10), { title: state.pidgin ? 'See wetin we get' : "Here's what we have", key: 'all' }));
       return reply(buttons("Sorry, I couldn't find that. Here's the menu.", [['menu', 'See the menu']]));
@@ -773,7 +791,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
   const zone = delivery.method !== 'pickup' && delivery.zoneId ? (await listZones(ctx.db, business.id)).find(z => z.id === delivery.zoneId) ?? null : null;
   if (zone && zone.match && needsStreet(delivery.address, zone)) {
     const pidgin = ((await ctx.db.get(ctx.db.doc(C.conversations, ctx.conversationId)))?.shop as ShopState | undefined)?.pidgin;
-    return reply(buttons(pidgin ? `Which street for *${zone.name}*? Send the street and house number, or a landmark, make the rider fit find you.` : `Which street in *${zone.name}*? Send the street and house number, or a landmark, so the rider can find you.`, [['cart', 'My cart'], ['menu', 'Keep shopping']]), { step: 'await_street', delivery });
+    return reply(buttons(pidgin ? `Na which street for *${zone.name}*? Send the street and house number, or one landmark, make the rider fit find you.` : `Which street in *${zone.name}*? Send the street and house number, or a landmark, so the rider can find you.`, [['cart', 'My cart'], ['menu', 'Keep shopping']]), { step: 'await_street', delivery });
   }
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
@@ -841,7 +859,8 @@ const TRACK_QUESTION = /\b(rider|dispatch rider|delivery (man|guy|person)|where 
 
 async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, customer: Customer | null, reply: Reply, request?: string) {
   if (ctx.test) return reply(`🧪 In your real shop, this tells the customer you'll reply, alerts you here, and the assistant goes quiet in that chat until you send HANDBACK. (Test mode: nothing was sent.)`);
-  await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { mode: 'owner', takeoverAt: new Date().toISOString(), takeoverReason: 'customer_request' }, { merge: true });
+  const at = new Date().toISOString();
+  await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { mode: 'owner', takeoverAt: at, takeoverReason: 'customer_request', handoverAt: at, handoverAckAt: at, handoverReminders: 0, handoverRequest: (request ?? ctx.event.text ?? '').slice(0, 300) || null }, { merge: true });
   await reply(request ? `I can't change an order here, so I've passed this to ${business.name}. They'll reply to you here shortly.` : `I've let ${business.name} know. They'll reply to you here shortly.`);
   // The owner sees the full number (it's their customer); logs never do.
   const where = ctx.event.source === 'whatsapp' ? ctx.event.from : 'Instagram';
