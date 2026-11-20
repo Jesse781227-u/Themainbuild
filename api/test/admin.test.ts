@@ -70,10 +70,14 @@ test('admin: owner commands manage stock, orders and payment details', async () 
   const o = fx.a.ownerPhone.slice(1);
   assert.match((await bot.send('admin', { from: o, text: `restock Product ${fx.a.id} 7` }))[0].text, /\+7, now 12 in stock/);
   assert.match((await bot.send('admin', { from: o, text: `sold 2 Product ${fx.a.id}` }))[0].text, /-2, now 10 in stock/);
-  assert.match((await bot.send('admin', { from: o, text: `price Product ${fx.a.id} 1,200` }))[0].text, /now ₦1,200 \(was ₦1,000\)/);
-  assert.match((await bot.send('admin', { from: o, text: 'payment details GTBank 0123456789 Business A' }))[0].text, /GTBank 0123456789/);
+  // Prices and bank details wait for the owner's Confirm.
+  assert.match((await bot.send('admin', { from: o, text: `price Product ${fx.a.id} 1,200` }))[0].text, /^Change the price of \*Product biz-a\* to ₦1,200\?/);
+  assert.match((await bot.send('admin', { from: o, choice: 'yes', text: 'Yes, change it' }))[0].text, /now ₦1,200 \(was ₦1,000\)/);
+  assert.match((await bot.send('admin', { from: o, text: 'payment details GTBank 0123456789 Business A' }))[0].text, /GTBank 0123456789 Business A\. Save this\?/);
+  assert.match((await bot.send('admin', { from: o, choice: 'yes', text: 'Yes, save it' }))[0].text, /GTBank 0123456789/);
   assert.equal((await doc('businesses', fx.a.id)).paymentDetails, 'GTBank 0123456789 Business A');
-  assert.match((await bot.send('admin', { from: o, text: 'delivery zone Lekki, 1500, same day' }))[0].text, /Delivery to Lekki: ₦1,500, same day/);
+  assert.match((await bot.send('admin', { from: o, text: 'delivery zone Lekki, 1500, same day' }))[0].text, /^Deliver to \*Lekki\* for ₦1,500 \(same day\)\?/);
+  assert.match((await bot.send('admin', { from: o, choice: 'yes', text: 'Yes, add it' }))[0].text, /Delivery to Lekki: ₦1,500, same day/);
   assert.match((await bot.send('admin', { from: o, text: 'sales today' }))[0].text, /^📊 Sales for Business biz-a\nToday: ₦0 from 0 paid orders\nLast 7 days: ₦0 from 0 paid orders\nThis month: ₦0/);
 });
 

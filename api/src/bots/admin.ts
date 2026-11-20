@@ -7,7 +7,7 @@ import { C } from '../db';
 import type { Business } from '../domain/business';
 import { log } from '../lib/logger';
 import { nairaToKobo } from '../lib/money';
-import { send, type OutboundContent } from '../services/channel';
+import { resolveSender, send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, listProducts, moveCategoryProducts } from '../services/catalog';
 import { prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
@@ -20,7 +20,11 @@ import { answerHours, hoursQuestion, readHoursText, type HoursDraft } from './ho
 import { describeHours } from '../services/hours';
 import { example } from '../services/shop-type';
 import { buttons, list, NO, readInput, storeProductImage, transcribeVoice, YES, type BotDeps } from './common';
-import { chooseAdminTool } from './intent';
+import { chooseAdminTool, parseAdminCommand } from './intent';
+import { conversational, isFail, runAgent } from './agent';
+import { loadMemory, remember, saveMemory } from './agent-memory';
+import { debugNote, recordAgentTurn } from './agent-stats';
+import { ACTION_TOOLS, adminContext, adminSystem, adminTools2, applyUndo, confirmPrompt, mustConfirm, type AdminHelpers, type Undo } from './admin-agent';
 import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
@@ -46,9 +50,12 @@ const CONFIRM_LABELS: Record<string, [string, string][]> = {
   cancelOrder: [['yes', 'Yes, cancel order'], ['no', 'No, keep order']],
   deleteMyData: [['yes', 'Yes, delete account'], ['no', 'No, keep account']],
   broadcast: [['yes', 'Yes, send it'], ['no', "No, don't send"]],
+  setPrice: [['yes', 'Yes, change it'], ['no', 'No, keep it']],
+  addDeliveryZone: [['yes', 'Yes, add it'], ['no', 'No, leave it']],
+  setPaymentDetails: [['yes', 'Yes, save it'], ['no', 'No, leave it']],
 };
 
-interface AdminConversation extends ProductFlowState { onboarding?: unknown; pendingAction?: { tool: string; args: Record<string, unknown>; expiresAt: string } | null }
+interface AdminConversation extends ProductFlowState { onboarding?: unknown; pendingAction?: { tool: string; args: Record<string, unknown>; expiresAt: string } | null; undo?: (Undo & { expiresAt: string }) | null }
 
 export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const { db, cfg } = ctx;
@@ -247,6 +254,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     return reply(`Moved ${moved} product${moved === 1 ? '' : 's'} to ${b.name} and deleted ${a.name}.`);
   }
 
+  // ── Undo (the button under a change the assistant just made) ──
+  if (choiceId === 'undo' || (!choiceId && /^undo( that| it)?[.!]*$/i.test(text.trim()))) {
+    await db.set(convRef, { undo: null }, { merge: true });
+    return reply(withFollowUps(await applyUndo(db, toolBase, conv.undo), undefined));
+  }
+
   // ── Confirmation of a destructive action ──
   const pending = conv.pendingAction;
   if (pending) {
@@ -263,6 +276,11 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   }
 
   if (!text && !input.imageId) return runAction(actionById('menu')!, { ...actionCtx, arg: null });
+  // Plain words go to the conversation agent; exact commands stay instant. If the agent can't
+  // answer, the old routing does.
+  if (deps.llm?.converse && cfg.AGENT_ENABLED !== 'false' && text.trim() && !input.imageId && (conversational(text.trim().toLowerCase()) || !parseAdminCommand(text))) {
+    if (await ownerAgent(text)) return;
+  }
   const choice = await chooseAdminTool(text, deps.llm).catch(e => { log('warn', 'llm_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
   if (!choice) return reply(buttons("Sorry, I didn't get that. Tap *Menu* to see what I can do, or type it another way.", [['act:menu', 'Menu'], ['act:help', 'All commands']]));
   // The AI understood an action from the menu ("how much have I sold?"): the same reply and buttons.
@@ -283,14 +301,44 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
 
   return askOrRun(choice.tool, choice.args);
 
+  async function ownerAgent(message: string): Promise<boolean> {
+    const memory = await loadMemory(db, ctx.conversationId);
+    const helpers: AdminHelpers = {
+      ctx: toolBase, llm: deps.llm, reply,
+      askConfirm: async (tool, args, prompt, words) => {
+        await db.set(convRef, { pendingAction: { tool, args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
+        held = true;
+        await reply(buttons(`${words ? `${words}\n\n` : ''}${prompt}`.slice(0, 1024), CONFIRM_LABELS[tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
+      },
+      setUndo: async u => { await db.set(convRef, { undo: u ? { ...u, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } : null }, { merge: true }); },
+      addProduct: async (words, p) => {
+        if (words) await reply(words);
+        const priceKobo = nairaToKobo(p.price);
+        if (!priceKobo || priceKobo <= 0) { await reply(`What's the price of *${p.name}*?`); return; }
+        for (const o of await addProduct(flow, { name: p.name, priceKobo, stock: p.stock ?? null, imageUrl: await photo() })) await reply(o);
+      },
+    };
+    const tools = adminTools2(helpers);
+    const r = await runAgent({ llm: deps.llm, system: adminSystem(business), context: await adminContext(toolBase), memory, message, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.AGENT_TIMEOUT_MS, actionTools: ACTION_TOOLS });
+    await recordAgentTurn(db, cfg, business, 'admin', r).catch(() => undefined);
+    const botNumber = await resolveSender(db, cfg, { adminBot: true }).then(s => s.phoneNumberId).catch(() => '');
+    await debugNote(db, cfg, { phone: ctx.ownerPhone, botNumber, r }).catch(() => undefined);
+    if (isFail(r)) return false;
+    await saveMemory(db, ctx.conversationId, remember(memory, message, r.text, r.calls.map(c => c.name)));
+    if (r.finish) await r.finish(r.text); else await reply(r.text);
+    return true;
+  }
+
   // A tool: asked first when it's destructive (YES/NO), else run, ending with a Menu button.
   async function askOrRun(name: string, args: Record<string, unknown>) {
     const prepared = await prepare(name, args, toolBase);
     if (prepared.kind === 'reply') return reply(withFollowUps(prepared.text, undefined));
-    if (prepared.kind === 'confirm') {
+    // Prices, money and messages to customers always wait for the owner's Confirm (their rule).
+    if (prepared.kind === 'confirm' || mustConfirm(prepared.tool)) {
+      const prompt = prepared.kind === 'confirm' ? prepared.prompt : confirmPrompt(prepared.tool, prepared.args);
       await db.set(convRef, { pendingAction: { tool: prepared.tool, args: prepared.args, expiresAt: new Date(Date.now() + CONFIRM_MINUTES * 60_000).toISOString() } }, { merge: true });
       held = true;
-      return reply(buttons(prepared.prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
+      return reply(buttons(prompt, CONFIRM_LABELS[prepared.tool] ?? [['yes', 'Yes, do it'], ['no', 'No, leave it']]));
     }
     log('info', 'admin_tool', { businessId: business.id, tool: prepared.tool });
     return reply(withFollowUps(await runTool(prepared.tool, prepared.args, toolBase), undefined));

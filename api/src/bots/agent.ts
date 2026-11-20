@@ -39,6 +39,7 @@ const RULES = [
 export async function runAgent<C>(opts: {
   llm: LLMProvider | null; system: string; context: string; memory: AgentMemory; message: string;
   tools: AgentTool<C>[]; c: C; maxSteps: number; timeoutMs: number; now?: () => number;
+  actionTools?: string[];   // the tools that change something: a reply claiming a change needs one of them called
 }): Promise<AgentRun | AgentFail> {
   const clock = opts.now ?? Date.now;
   const start = clock();
@@ -97,13 +98,17 @@ export async function runAgent<C>(opts: {
     if (!text && calls.length) text = whatsappStyle((await step('text')).text);
     if (!text) return fail('empty');
     let check = checkFacts(text, known), retried = false;
-    if (!check.ok) {
+    // "I've changed the price" with no change made is never sent either.
+    const claims = (t: string) => !!opts.actionTools && CLAIM.test(t) && !calls.some(c => c.ok && opts.actionTools!.includes(c.name));
+    if (!check.ok || claims(text)) {
       retried = true;
-      turns.push({ role: 'assistant', text }, { role: 'user', text: `(System check: your reply mentioned ${check.unknown.join(', ')}, which isn't in the tool results or the context. Rewrite it using only facts you have; if you don't know, say so.)` });
+      const why = !check.ok ? `your reply mentioned ${check.unknown.join(', ')}, which isn't in the tool results or the context. Rewrite it using only facts you have; if you don't know, say so.` : 'your reply says something was done, but no action tool was called, so nothing changed. Say what you will do or ask what they want; don\'t claim it\'s done.';
+      turns.push({ role: 'assistant', text }, { role: 'user', text: `(System check: ${why})` });
       const again = await step('text');
       text = whatsappStyle(again.text);
       check = checkFacts(text, known);
       if (!text || !check.ok) return fail('ungrounded', check.unknown.join(', '));
+      if (claims(text)) return fail('ungrounded', 'claimed an action it did not take');
     }
     return { text, finish, calls, facts: { ok: true, unknown: [], retried }, usage: { ...usage, ms: clock() - start } };
   } catch (e) {
@@ -114,7 +119,18 @@ export async function runAgent<C>(opts: {
 
 export const isFail = (r: AgentRun | AgentFail): r is AgentFail => 'failed' in r;
 
+// "I've set / changed / added / removed / marked…", "it's done", "tap Confirm" (English and Pidgin).
+const CLAIM = /\b(i('ve| have| just)?|i don|we('ve| have)?)\s+(set|changed|updated|added|removed|deleted|marked|cancelled|canceled|sent|saved|moved|restocked|hidden|hid)\b|\b(it'?s|e don) (done|changed|updated)\b|\btap (on )?confirm\b/i;
+
 // Models write Markdown; WhatsApp bolds with single asterisks and has no headings.
 export function whatsappStyle(text: string) {
   return text.replace(/\*\*([^*\n]+?)\*\*/g, '*$1*').replace(/__([^_\n]+?)__/g, '_$1_').replace(/^#{1,6}\s+/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 }
+
+// Customers and owners writing in Pidgin ("where una dey?", "abeg wetin una get").
+export const PIDGIN = /\b(una|wetin|abeg|dey|abi|wahala|sabi|oya|wan|how far|na so|sef|shey|biko|make i|i go|e don|no vex|dis|dat)\b/i;
+// More than a short exact ask: several words with chat in them, a question plus something else, Pidgin.
+export const conversational = (lower: string) => {
+  const words = lower.split(/\s+/).filter(Boolean);
+  return words.length > 5 || (words.length > 3 && /[?,]/.test(lower)) || PIDGIN.test(lower);
+};

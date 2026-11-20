@@ -31,7 +31,7 @@ import type { LLMProvider, ToolChoice, ToolSpec } from '../services/ai';
 import { buttons, findProducts, list, notifyOwner, NO, readInput, transcribeVoice, YES, type BotDeps } from './common';
 import { deleteShopperData, deletionCode } from './deletion';
 import { react, showTyping, slowJob } from '../services/presence';
-import { isFail, runAgent } from './agent';
+import { conversational, isFail, PIDGIN, runAgent } from './agent';
 import { loadMemory, remember, saveMemory } from './agent-memory';
 import { debugNote, recordAgentTurn } from './agent-stats';
 import { shopContext, shopSystem, shopTools, type ShopHelpers } from './shop-agent';
@@ -253,7 +253,6 @@ async function welcomeOnly(ctx: ShopContext, run: Run, business: Business, custo
 }
 
 // Customers writing in Pidgin ("where una dey?", "abeg wetin una get").
-const PIDGIN = /\b(una|wetin|abeg|dey|abi|wahala|sabi|oya|wan|how far|na so|sef|shey|biko|make i|i go|e don|no vex|dis|dat)\b/i;
 const GREETING = /^(hi+|hello+|hey+|hiya|helo|good (morning|afternoon|evening|day)|howdy|how far|how you dey|how una dey|hi there|hello there|morning|evening|afternoon)[\s!.,🙂👋😊]*(there|o|oo)?[\s!.]*$/i;
 const MENU_ASK = /\b(menu|catalog(ue)?|price ?list|prices|what do you (sell|have)|what (do )?you have|wetin (una|you) (dey )?(sell|get|have)|wetin una get|show me (what you have|your (products|items|stuff))|send (me )?(your )?(menu|catalog(ue)?|list|prices)|see (your|what you have)|your products)\b/i;
 const ASK_PREFIX = /^(please\s+|abeg\s+|hi,?\s+|hello,?\s+)*(do you (have|sell|stock)|have you got|you get|una get|una dey sell|you dey sell|is there|are there|any|how much (is|are|be|for|na)|what'?s the price of|price of|price for|i (want|need|would like)( to buy)?|i wan( buy)?|can i (get|buy|order)|looking for)\s+/i;
@@ -340,10 +339,6 @@ async function orderAgain(ctx: ShopContext, run: Run, business: Business, reply:
 type Reply = (content: OutboundContent | string, next?: ShopState) => Promise<void>;
 
 // More than a short ask: several words with chat in them, a question plus something else, Pidgin.
-export const conversational = (lower: string) => {
-  const words = lower.split(/\s+/).filter(Boolean);
-  return words.length > 5 || (words.length > 3 && /[?,]/.test(lower)) || PIDGIN.test(lower);
-};
 
 // ── The conversation agent (bots/agent.ts, shop-agent.ts) ──
 // True when it answered; false sends the message to the fixed flow (also after a fallback).

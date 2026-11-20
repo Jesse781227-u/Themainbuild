@@ -31,7 +31,7 @@ export async function recordAgentTurn(db: Firestore, cfg: Config, business: Pick
   const mid = `${business.id}_agentfallback_${date}`;
   await db.create(db.doc(C.outbox, mid), {
     id: mid, businessId: business.id, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone, conversationId: adminConversationId(business.ownerPhone), kind: 'agent_fallback',
-    text: `ℹ️ Today Relay's assistant couldn't answer ${stats?.fallbacks} customer messages in its own words, so it used the menus and buttons instead. Nothing was lost; this is just so you know.`,
+    text: `ℹ️ Today Relay's assistant couldn't answer ${stats?.fallbacks} messages in its own words, so it used the menus and buttons instead. Nothing was lost; this is just so you know.`,
     status: 'pending', attempts: 0, createdAt: now.toISOString(),
   }).catch(() => false);
 }
