@@ -14,6 +14,7 @@ import { abandonedCarts, releaseQueuedSends } from './reach';
 import { dueCampaignReports } from './reach-results';
 import { refreshSegments } from './segments';
 import { activeShops } from './active-shops';
+import { forgetOldChats } from '../bots/agent-memory';
 import { afterDelivery, dailyReach, weeklySummaries } from './reach-triggers';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
@@ -30,6 +31,8 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
     const reach = [...(await dailyReach(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now)), ...(await weeklySummaries(db, now))];
     // Smart Reach: every live shop's group sizes, fresh each night.
     for await (const b of activeShops(db)) await refreshSegments(db, b.id, now).catch(() => undefined);
+    // Chat memory is kept 90 days after the last message, then forgotten.
+    await forgetOldChats(db, now).catch(() => 0);
     await enqueue(env, [...ids, ...nudges, ...reach].map(messageId => ({ kind: 'outbox' as const, messageId })));
     log('info', 'daily_summaries_queued', { count: ids.length, nudges: nudges.length });
     return { summaries: ids.length, nudges: nudges.length };

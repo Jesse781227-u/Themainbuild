@@ -16,6 +16,16 @@ export interface CatalogItem { name: string; price: number | null; category: str
 
 export interface PairItem { id: string; name: string; category: string; priceNaira: number }
 
+// ── The conversation agent (bots/agent.ts) ──
+// One step of a conversation: the model either calls tools or writes the reply. The agent runs the
+// loop (tools, step limit, time limit, fact check); the provider only translates.
+export type AgentTurn =
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; text: string }
+  | { role: 'call'; name: string; args: Record<string, unknown>; raw?: unknown } // raw: the provider's own part (e.g. Gemini's thought signature), sent back as is
+  | { role: 'result'; name: string; result: unknown };
+export interface ConverseStep { calls: { name: string; args: Record<string, unknown>; raw?: unknown }[]; text: string; usage: { inTokens: number; outTokens: number } }
+
 export interface LLMProvider {
   // imageUrl: a public product photo (our R2 media URL) the model may look at, e.g. to pick a category.
   chooseTool(input: { system: string; message: string; tools: ToolSpec[]; imageUrl?: string }): Promise<ToolChoice | null>;
@@ -28,12 +38,18 @@ export interface LLMProvider {
   readCatalog?(input: { file?: { mimeType: string; bytes: ArrayBuffer }; text?: string; businessType?: string; categories?: string[]; images?: { mimeType: string; bytes: Uint8Array }[] }): Promise<CatalogItem[]>;
   // Which product each photo shows: returns, per photo (in order), a 1-based index into names, or null.
   matchPhotos?(input: { names: string[]; photos: { mimeType: string; bytes: Uint8Array }[] }): Promise<(number | null)[]>;
+  // One conversation step (see AgentTurn). mode "text" forbids tool calls (the final reply).
+  converse?(input: { system: string; turns: AgentTurn[]; tools: ToolSpec[]; mode: 'auto' | 'text'; timeoutMs: number }): Promise<ConverseStep>;
 }
 
 export const CATALOG_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif)|text\/(plain|csv))$/;
 export const MAX_CATALOG_BYTES = 15_000_000;
 // Quick replies (choosing what an owner meant) vs reading a whole catalogue.
 const CHAT_TIMEOUT_MS = 30_000;
+// Models that said "quota exceeded" are skipped for 5 minutes (per worker), so each message doesn't
+// lose time asking them again.
+const QUOTA_PAUSE_MS = 5 * 60_000;
+const quotaUntil = new Map<string, number>();
 // Catalogues: models race. The main model starts; if it hasn't answered after HEDGE_MS (or fails),
 // the next one starts too, and the first good answer wins. Nothing waits longer than the total.
 const CATALOG_HEDGE_MS = 8_000;
@@ -68,13 +84,16 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
   const gemini = async (init: RequestInit, timeoutMs = CHAT_TIMEOUT_MS) => {
     const models = [...new Set([cfg.GEMINI_MODEL, ...String(cfg.GEMINI_FALLBACK_MODEL ?? '').split(',')].map(m => m.trim()).filter(Boolean))];
     let last: Response | null = null;
-    for (const [i, model] of models.entries()) {
+    const usable = models.filter(m => !((quotaUntil.get(m) ?? 0) > Date.now()));
+    for (const [i, model] of (usable.length ? usable : models).entries()) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       for (let attempt = 0; attempt < (i === 0 ? 2 : 1); attempt++) {
         if (attempt) await new Promise(r => setTimeout(r, 800));
         try {
           last = await doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
           if (![429, 500, 503].includes(last.status)) return last;
+          // Out of quota (not just busy): skip this model for a while instead of retrying it.
+          if (last.status === 429 && /quota/i.test(await last.clone().text().catch(() => ''))) { quotaUntil.set(model, Date.now() + QUOTA_PAUSE_MS); break; }
         } catch (e) {
           if (!(e instanceof Error && /abort|timeout/i.test(`${e.name} ${e.message}`))) throw e; // timed out: try again / next model
         }
@@ -139,6 +158,43 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
       const json = (await res.json()) as { candidates?: { content?: { parts?: { functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[] };
       const call = json.candidates?.[0]?.content?.parts?.find(p => p.functionCall)?.functionCall;
       return call ? { tool: call.name, args: call.args ?? {} } : null;
+    },
+
+    async converse({ system, turns, tools, mode, timeoutMs }) {
+      const functionDeclarations = tools.map(t => ({
+        name: t.name, description: t.description,
+        ...(Object.keys(t.params).length ? { parameters: { type: 'OBJECT', properties: Object.fromEntries(Object.entries(t.params).map(([k, p]) => [k, { type: geminiType[p.type], description: p.description, ...(p.enum ? { enum: p.enum } : {}) }])), required: t.required ?? [] } } : {}),
+      }));
+      // Gemini's roles: user / model; tool results go back as a user part.
+      const contents: { role: 'user' | 'model'; parts: unknown[] }[] = [];
+      const push = (role: 'user' | 'model', part: unknown) => {
+        const last = contents[contents.length - 1];
+        if (last && last.role === role) last.parts.push(part); else contents.push({ role, parts: [part] });
+      };
+      for (const t of turns) {
+        if (t.role === 'user') push('user', { text: t.text });
+        else if (t.role === 'assistant') push('model', { text: t.text });
+        else if (t.role === 'call') push('model', t.raw ?? { functionCall: { name: t.name, args: t.args } });
+        else push('user', { functionResponse: { name: t.name, response: { result: t.result } } });
+      }
+      const res = await gemini({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.GEMINI_API_KEY! },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents,
+          ...(functionDeclarations.length ? { tools: [{ functionDeclarations }], toolConfig: { functionCallingConfig: { mode: mode === 'text' ? 'NONE' : 'AUTO' } } } : {}),
+          generationConfig: { temperature: 0.5, maxOutputTokens: 800 },
+        }),
+      }, timeoutMs);
+      if (!res.ok) throw new Error(`GEMINI_FAILED: ${res.status}`);
+      const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string; thought?: boolean; functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[]; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } };
+      const parts = json.candidates?.[0]?.content?.parts ?? [];
+      return {
+        calls: parts.filter(p => p.functionCall).map(p => ({ name: p.functionCall!.name, args: p.functionCall!.args ?? {}, raw: p })),
+        text: parts.filter(p => typeof p.text === 'string' && !p.thought).map(p => p.text).join('').trim(),
+        usage: { inTokens: json.usageMetadata?.promptTokenCount ?? 0, outTokens: (json.usageMetadata?.candidatesTokenCount ?? 0) + (json.usageMetadata?.thoughtsTokenCount ?? 0) },
+      };
     },
 
     async writeTexts({ prompt, keys }) {

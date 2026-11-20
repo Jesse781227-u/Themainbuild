@@ -56,6 +56,7 @@ export const C = {
   campaigns: 'campaigns',               // Smart Reach: a message to a group, with its route plan
   sends: 'sends',                       // Smart Reach: one per customer per campaign; cost and results
   serviceUsage: 'serviceUsage',
+  agentStats: 'agentStats',             // conversation agent: per shop per day (messages, fallbacks, tokens, cost)
   segments: 'segments',                 // Smart Reach: customer groups (built-in and the owner's)
   templateStatus: 'templateStatus',
   offerCodes: 'offerCodes',             // Smart Reach: personal single-use codes     // Smart Reach: each marketing template's approval, per shop         // free service messages sent per shop number per month

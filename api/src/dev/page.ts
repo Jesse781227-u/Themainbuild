@@ -110,6 +110,7 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
 .cmds button b { color: var(--green); font-weight: 500; }
 .cmds button small { display: block; color: var(--meta); font-size: 13px; margin-top: 2px; }
 .cmds button.on, .cmds button:hover { background: var(--sep); }
+.debug { align-self: center; max-width: 92%; margin: 6px 0; padding: 6px 10px; border-radius: 8px; background: rgba(120,120,120,.12); color: #667; font: 11px/1.4 ui-monospace, monospace; white-space: pre-wrap; }
 .ice { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 12px; }
 .ice button { border: 1px solid var(--green); color: var(--green); background: var(--sheet); border-radius: 18px; padding: 8px 16px; font: inherit; font-size: 14px; cursor: pointer; }
 .doc { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; background: var(--sep); color: var(--ink); text-decoration: none; font-size: 14px; }
@@ -234,6 +235,8 @@ footer { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 8px; p
   }
 
   function bubble(m, first) {
+    // The agent's debug note (development only): small and grey, between the messages.
+    if (m.direction === 'debug') { var dbg = el('div', 'debug'); dbg.textContent = (m.content && m.content.text) || ''; return dbg; }
     var mine = m.direction === 'in', c = m.content || {};
     var g = el('div', 'group ' + (mine ? 'me' : 'them') + (first ? ' first' : ''));
     var b = el('div', 'bubble');

@@ -31,6 +31,10 @@ import type { LLMProvider, ToolChoice, ToolSpec } from '../services/ai';
 import { buttons, findProducts, list, notifyOwner, NO, readInput, transcribeVoice, YES, type BotDeps } from './common';
 import { deleteShopperData, deletionCode } from './deletion';
 import { react, showTyping, slowJob } from '../services/presence';
+import { isFail, runAgent } from './agent';
+import { loadMemory, remember, saveMemory } from './agent-memory';
+import { debugNote, recordAgentTurn } from './agent-stats';
+import { shopContext, shopSystem, shopTools, type ShopHelpers } from './shop-agent';
 
 const CART_HOURS = 24;
 // A new conversation (welcome first) after this long without a message.
@@ -40,10 +44,11 @@ type Step = 'browse' | 'await_address' | 'confirm' | 'confirm_delete';
 interface ShopState {
   step: Step; options?: string[]; delivery?: OrderDelivery | null;
   suggested?: string[];      // products we've already suggested pairings for
+  sayOptions?: string[] | null; // the agent's quick answers (say:1…3), so a tap comes back as its words
   greetedAt?: string | null; // when this conversation's welcome was sent
   pidgin?: boolean;          // the customer writes in Pidgin: the bot's own words follow
 }
-interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */ }
+interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */; agent?: boolean /* the conversation agent is on */ }
 type ShopConversation = Conversation & { shop?: ShopState | null };
 
 const SHOP_TOOLS: ToolSpec[] = [
@@ -89,7 +94,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, greetedAt: state.greetedAt ?? null, pidgin: state.pidgin ?? false, options });
   };
 
-  const run: Run = { deps, state };
+  const run: Run = { deps, state, agent: !!deps.llm?.converse && cfg.AGENT_ENABLED !== 'false' };
   const input = readInput(ctx.event);
   let text = input.text;
   if (input.audioId) {
@@ -99,9 +104,12 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (!heard) return reply("Sorry, I couldn't play that voice note. Please type your message.");
     text = heard;
   }
+  // A quick answer the agent offered ("say:<n>"): it comes back as the words on the button.
+  const agentChoice = input.choiceId?.startsWith('say:') || (/^\d{1,2}$/.test(text.trim()) && state.options?.[Number(text.trim()) - 1]?.startsWith('say:'));
+  if (agentChoice) text = (input.choiceId?.startsWith('say:') ? text : state.sayOptions?.[Number(text.trim()) - 1]) || text;
   const lower = text.trim().toLowerCase();
   // A tapped option, or its number typed back (Instagram, or anyone who prefers typing).
-  const choice = input.choiceId ?? (/^\d{1,2}$/.test(lower) ? state.options?.[Number(lower) - 1] ?? null : null);
+  const choice = agentChoice ? null : input.choiceId ?? (/^\d{1,2}$/.test(lower) ? state.options?.[Number(lower) - 1] ?? null : null);
 
   // ── Data deletion (Data Deletion page) ──
   if (state.step === 'confirm_delete') {
@@ -195,7 +203,13 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (state.step === 'confirm' && NO.test(lower)) return reply(buttons('No problem. Your cart is saved.', [['menu', 'See the menu'], ['cart', 'My cart']]), { step: 'browse' });
 
   // ── Free text ──
-  const intent = await shopIntent(lower, text, deps.llm, db, businessId);
+  // Exact things answer at once (free); anything conversational goes to the agent; if the agent
+  // can't answer, the old routing and menus do.
+  let intent = await shopIntent(lower, text, run.agent ? null : deps.llm, db, businessId, { fuzzy: !(run.agent && conversational(lower)) });
+  if (!intent && run.agent) {
+    if (await shopAgent(ctx, run, business, customer, text, reply)) return;
+    intent = await shopIntent(lower, text, deps.llm, db, businessId, { fuzzy: true });
+  }
   switch (intent?.tool) {
     case 'viewCart': return showCart(ctx, business, reply);
     case 'checkout': return startCheckout(ctx, business, reply);
@@ -278,6 +292,9 @@ async function firstMessage(ctx: ShopContext, run: Run, business: Business, cust
     return true;
   }
 
+  // A conversational message ("how far, you get that black sneakers for 42? how much last?"): the
+  // agent answers it (after the welcome line); short product asks stay instant below.
+  if (run.agent && conversational(lower)) return false;
   // A specific product ("do you have boots?", "how much is the hoodie"): just the matching ones.
   const wanted = lower.replace(ASK_PREFIX, '').replace(/^(the|a|an|some|una|your)\s+/, '').replace(/[?.!]+$/, '').replace(/\s+(abeg|please|o)$/, '').trim();
   if (wanted && wanted !== lower.replace(/[?.!]+$/, '') || ASK_PREFIX.test(lower)) {
@@ -322,8 +339,73 @@ async function orderAgain(ctx: ShopContext, run: Run, business: Business, reply:
 
 type Reply = (content: OutboundContent | string, next?: ShopState) => Promise<void>;
 
-async function shopIntent(lower: string, text: string, llm: LLMProvider | null, db: Firestore, businessId: string): Promise<ToolChoice | null> {
-  if (/^(hi|hello|hey|good (morning|afternoon|evening)|menu|start|catalog(ue)?|price ?list|what do you (have|sell)\??)\b/.test(lower)) return { tool: 'showMenu', args: {} };
+// More than a short ask: several words with chat in them, a question plus something else, Pidgin.
+export const conversational = (lower: string) => {
+  const words = lower.split(/\s+/).filter(Boolean);
+  return words.length > 5 || (words.length > 3 && /[?,]/.test(lower)) || PIDGIN.test(lower);
+};
+
+// ── The conversation agent (bots/agent.ts, shop-agent.ts) ──
+// True when it answered; false sends the message to the fixed flow (also after a fallback).
+async function shopAgent(ctx: ShopContext, run: Run, business: Business, customer: Customer | null, text: string, reply: Reply): Promise<boolean> {
+  const { db, cfg, conversationId } = ctx;
+  const [products, categories, memory, orders] = await Promise.all([listProducts(db, business.id), listCategories(db, business.id), loadMemory(db, conversationId), recentOrders(db, [['customerId', '==', conversationId]], 5)]);
+  const last = orders.find(o => o.businessId === business.id) ?? null;
+  const welcome = run.first ? shortWelcome(business, customer) : null;
+  const closed = run.first ? closedNote(business, customer) : null;
+  const intro = (words: string) => [welcome, closed, words].filter(Boolean).join('\n\n');
+  const cart = async () => {
+    const c = await loadCart(db, ctx);
+    if (!c?.items.length) return { cart: c, lines: [], subtotalKobo: 0 };
+    const { lines, subtotal } = await cartLines(db, c);
+    return { cart: c, lines: lines.map(l => ({ name: lineName(l.product!, l.variantId), qty: l.qty, totalKobo: priceOf(l.product!, l.variantId) * l.qty })), subtotalKobo: subtotal };
+  };
+  const helpers: ShopHelpers = {
+    business, customer, first: !!run.first, welcome, pidgin: !!run.state.pidgin, products: products.filter(p => p.available && !p.deletedAt), categories,
+    lastOrder: last ? { ref: last.ref, items: last.items.map(i => `${i.qty} × ${i.name}`), status: last.status === 'paid' ? `paid, ${last.fulfilment.replace(/_/g, ' ')}` : last.status } : null,
+    cart,
+    search: q => search(db, business.id, q),
+    put: async (id, qty, variantId, mode) => { const r = await putInCart(ctx, business, id, qty, variantId, mode); return r.ok ? { ok: true, name: r.name, qty: r.qty } : { ok: false, reason: r.reason, name: r.name, left: r.left }; },
+    noteInterest: (ids, type) => interest(ctx, ids.map(id => `p_${id}`), type),
+    sendText: words => reply(intro(words)),
+    sendProducts: (list, words) => sendAll(reply, productCarousel(ctx.cfg, business, list, { title: list.length === 1 ? list[0].name : 'For you', key: 'all', intro: intro(words) })),
+    sendCart: words => showCart(ctx, business, reply, intro(words)),
+    sendChoices: async (words, options) => {
+      const ids = options.map((_, i) => `say:${i + 1}`);
+      await reply(buttons(intro(words), options.map((o, i) => [ids[i], o] as [string, string])), { ...run.state, step: 'browse', sayOptions: options });
+    },
+    checkout: async words => { if (words) await reply(intro(words)); await startCheckout(ctx, business, reply); },
+    handToOwner: async () => handOver(ctx, run.deps, business, customer, reply),
+    askOwner: async q => {
+      if (ctx.test) return;
+      const who = customer?.name ? `${customer.name} (${ctx.event.source === 'whatsapp' ? ctx.event.from : 'Instagram'})` : ctx.event.source === 'whatsapp' ? ctx.event.from : 'An Instagram customer';
+      await notifyOwner(db, run.deps, business, 'customer_question', `💬 ${who} asks: ${q}\nReply to them in your WhatsApp Business app.`);
+    },
+    shopInfo: topic => shopInfo(db, business, topic, run.state.pidgin),
+    quote: async area => {
+      const q = await quoteDelivery(db, business.id, area, 'self_arranged');
+      if (q) return { area: q.address ?? area, feeKobo: q.feeKobo, timeframe: q.timeframe ?? null, later: false };
+      if (business.shipsInterstate && business.interstatePricing === 'quote') return { area, feeKobo: 0, timeframe: null, later: true };
+      return null;
+    },
+  };
+  const cartNow = await cart();
+  const r = await runAgent({ llm: run.deps.llm, system: shopSystem(helpers), context: shopContext(helpers, cartNow), memory, message: text, tools: shopTools(helpers), c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.AGENT_TIMEOUT_MS });
+  await recordAgentTurn(db, cfg, business, 'shop', r).catch(() => undefined);
+  const botNumber = await resolveSender(db, cfg, ctx.test ? { adminBot: true } : { businessId: business.id }).then(s => s.phoneNumberId).catch(() => '');
+  await debugNote(db, cfg, { phone: ctx.event.from, botNumber, r }).catch(() => undefined);
+  if (isFail(r)) {
+    // Something was already added: show the cart rather than lose it.
+    if (r.calls.some(c => c.ok && c.name === 'addToCart')) { await showCart(ctx, business, reply, welcome ?? ''); return true; }
+    return false;
+  }
+  await saveMemory(db, conversationId, remember(memory, text, r.text, r.calls.map(c => c.name)));
+  if (r.finish) await r.finish(r.text); else await reply(intro(r.text), { ...run.state, step: run.state.step ?? 'browse' });
+  return true;
+}
+
+async function shopIntent(lower: string, text: string, llm: LLMProvider | null, db: Firestore, businessId: string, opts: { fuzzy?: boolean } = {}): Promise<ToolChoice | null> {
+  if (opts.fuzzy !== false && /^(hi|hello|hey|good (morning|afternoon|evening)|menu|start|catalog(ue)?|price ?list|what do you (have|sell)\??)\b/.test(lower)) return { tool: 'showMenu', args: {} };
   if (/^(cart|my cart|view cart|basket)$/.test(lower)) return { tool: 'viewCart', args: {} };
   if (/^(checkout|check out|pay|place order|order now)$/.test(lower)) return { tool: 'checkout', args: {} };
   if (/\b(where is my order|order status|my order|track)\b/.test(lower)) return { tool: 'orderStatus', args: {} };
@@ -334,8 +416,8 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   // "2 jollof rice" / "jollof rice x2" / "jollof rice"
   const m = /^(\d{1,2})\s*x?\s+(.+)$/.exec(lower) ?? /^(.+?)\s*x\s*(\d{1,2})$/.exec(lower);
   const [q, n] = m ? (/^\d/.test(m[1]) ? [m[2], Number(m[1])] : [m[1], Number(m[2])]) : [lower, 1];
-  if ((await findProducts(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } };
-  if ((await search(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } }; // shows the matches
+  if (opts.fuzzy !== false && (await findProducts(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } };
+  if (opts.fuzzy !== false && (await search(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } }; // shows the matches
   if (!llm) return null;
   try {
     const choice = await llm.chooseTool({ system: 'You route a customer message for a small shop in Nigeria to the shop assistant. Choose exactly one tool. Use offTopic for anything not about shopping at this business.', message: text.slice(0, 500), tools: SHOP_TOOLS });
@@ -445,25 +527,42 @@ const interest = (ctx: ShopContext, keys: string[], type: SignalType = 'viewed',
   ...keys.map(k => recordSignal(ctx.db, { businessId: ctx.businessId, customerId: ctx.conversationId, type, productId: k.startsWith('p_') ? k.slice(2) : null, categoryId: k.startsWith('c_') ? k.slice(2) : null, variant })),
 ]).then(() => noteInterest(ctx.db, ctx.conversationId, ctx.businessId, keys)).catch(e => log('warn', 'interest_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 80) })));
 
-async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply, variantId: string | null = null) {
-  if (variantId || !((await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null)?.variants?.length) await interest(ctx, [`p_${productId}`], 'carted', variantId);
+// The cart write itself (also used by the conversation agent): checks the product, the option and
+// the stock, then adds qty (or sets it, with mode "set"; 0 removes the line).
+export type PutResult =
+  | { ok: true; product: Product; name: string; qty: number; cart: Cart | null; items: CartLine[] }
+  | { ok: false; reason: 'unavailable' | 'needs_option' | 'stock'; product: Product | null; name: string; left: number | null };
+async function putInCart(ctx: ShopContext, business: Business, productId: string, qty: number, variantId: string | null, mode: 'add' | 'set' = 'add'): Promise<PutResult> {
   const { db } = ctx;
   const p = (await db.get(db.doc(C.products, productId))) as Product | null;
-  if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
+  if (!p || p.businessId !== business.id || p.deletedAt || !p.available) return { ok: false, reason: 'unavailable', product: null, name: '', left: null };
   // A product with sizes/colours needs one picked first.
   const v = variantOf(p, variantId);
-  if (p.variants?.length && !v) return pickVariant(ctx, business, p.id, reply);
+  if (p.variants?.length && !v) return { ok: false, reason: 'needs_option', product: p, name: p.name, left: null };
   if (!p.variants?.length) variantId = null;
   const name = lineName(p, variantId);
   const cart = await loadCart(db, ctx);
   const same = (i: CartLine) => i.productId === p.id && (i.variantId ?? null) === variantId;
   const items = cart?.items.filter(i => !same(i)) ?? [];
   const already = cart?.items.find(same)?.qty ?? 0;
-  const want = already + qty;
+  const want = mode === 'set' ? qty : already + qty;
   const left = v ? v.stock : p.stock;
-  if (left !== null && want > left) return reply(buttons(left ? `Sorry, only ${left} ${name} left.` : `Sorry, ${name} is sold out right now.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
+  if (left !== null && want > left) return { ok: false, reason: 'stock', product: p, name, left };
   const now = new Date();
-  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: [...items, { productId: p.id, qty: want, ...(variantId ? { variantId } : {}) }], expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: cart?.suggestedAt ?? null });
+  const next = want > 0 ? [...items, { productId: p.id, qty: want, ...(variantId ? { variantId } : {}) }] : items;
+  await db.set(db.doc(C.carts, ctx.conversationId), { id: ctx.conversationId, businessId: business.id, customerId: ctx.conversationId, channel: ctx.event.source, items: next, expiresAt: new Date(now.getTime() + CART_HOURS * 3600_000).toISOString(), updatedAt: now.toISOString(), suggestedAt: cart?.suggestedAt ?? null });
+  return { ok: true, product: p, name, qty: want, cart, items };
+}
+
+async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply, variantId: string | null = null) {
+  if (variantId || !((await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null)?.variants?.length) await interest(ctx, [`p_${productId}`], 'carted', variantId);
+  const { db } = ctx;
+  const put = await putInCart(ctx, business, productId, qty, variantId);
+  if (!put.ok && put.reason === 'unavailable') return reply(buttons('Sorry, that item is no longer available.', [['menu', 'Back to menu']]));
+  if (!put.ok && put.reason === 'needs_option') return pickVariant(ctx, business, productId, reply);
+  if (!put.ok) return reply(buttons(put.left ? `Sorry, only ${put.left} ${put.name} left.` : `Sorry, ${put.name} is sold out right now.`, [['cart', 'My cart'], ['menu', 'See the menu']]));
+  const { product: p, name, cart, items } = put;
+  variantId = p.variants?.length ? variantId : null;
   // Then what goes with it: one suggestion per cart (adding from a suggestion doesn't bring another),
   // and never twice for the same item in a chat.
   const suggest = business.suggestions !== false && !cart?.suggestedAt && !run.state.suggested?.includes(p.id);
