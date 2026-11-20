@@ -51,6 +51,16 @@ const CHAT_TIMEOUT_MS = 30_000;
 // (RetryInfo: "37s" for a per-minute limit, ~24h for a daily one; at most an hour, then asked
 // again), so each message doesn't lose time asking them again.
 const quotaUntil = new Map<string, number>();
+// When every model keeps failing (out of quota, down, timing out), stop calling for a minute so
+// customers get the instant answers straight away instead of waiting out each timeout.
+const breaker = { fails: 0, restUntil: 0 };
+export const REST_MS = 60_000;
+export const modelsResting = (now = Date.now()) => breaker.restUntil > now;
+export function resetBreaker() { breaker.fails = 0; breaker.restUntil = 0; quotaUntil.clear(); }
+const noteResult = (ok: boolean) => {
+  if (ok) { breaker.fails = 0; return; }
+  if (++breaker.fails >= 2) { breaker.restUntil = Date.now() + REST_MS; breaker.fails = 0; }
+};
 export function quotaWait(body: string): number | null {
   if (!/quota|RESOURCE_EXHAUSTED/i.test(body)) return null;
   const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
@@ -91,14 +101,16 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
   const gemini = async (init: RequestInit, timeoutMs = CHAT_TIMEOUT_MS) => {
     const models = [...new Set([cfg.GEMINI_MODEL, ...String(cfg.GEMINI_FALLBACK_MODEL ?? '').split(',')].map(m => m.trim()).filter(Boolean))];
     let last: Response | null = null;
+    if (modelsResting()) throw new Error('GEMINI_FAILED: resting after repeated failures');
     const usable = models.filter(m => !((quotaUntil.get(m) ?? 0) > Date.now()));
-    for (const [i, model] of (usable.length ? usable : models).entries()) {
+    if (!usable.length) { noteResult(false); throw new Error('GEMINI_FAILED: every model is out of quota'); }
+    for (const [i, model] of usable.entries()) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       for (let attempt = 0; attempt < (i === 0 ? 2 : 1); attempt++) {
         if (attempt) await new Promise(r => setTimeout(r, 800));
         try {
           last = await doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-          if (![429, 500, 503].includes(last.status)) return last;
+          if (![429, 500, 503].includes(last.status)) { noteResult(true); return last; }
           // Out of quota (not just busy): skip this model for a while instead of retrying it.
           if (last.status === 429) {
             const wait = quotaWait(await last.clone().text().catch(() => ''));
@@ -109,6 +121,7 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         }
       }
     }
+    noteResult(false);
     if (last) return last;
     throw new Error('GEMINI_FAILED: timeout');
   };

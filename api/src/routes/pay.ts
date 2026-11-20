@@ -32,12 +32,15 @@ main { max-width: 440px; margin: 0 auto; padding: 24px 16px 40px; }
 button { width: 100%; margin-top: 18px; border: 0; border-radius: 12px; padding: 15px; font: inherit; font-weight: 700; font-size: 17px; background: var(--brand); color: var(--brand-ink); cursor: pointer; }
 button:disabled { opacity: .6; cursor: default; }
 .done { text-align: center; padding: 20px 0 4px; } .done .big { font-size: 48px; } .done h1 { font-size: 22px; margin: 8px 0; }
+.back { display: block; margin-top: 16px; border-radius: 12px; padding: 14px; background: #25d366; color: #fff; font-weight: 700; text-decoration: none; }
 .foot { text-align: center; color: var(--muted); font-size: 13px; margin-top: 18px; }
 </style></head><body><main>${body}<p class="foot">Payments by Relay</p></main>${script}</body></html>`;
 }
 
 const shopHeader = (b: Business) => `<div class="shop"><div class="logo">${b.profilePhotoUrl ? `<img src="${esc(b.profilePhotoUrl)}" alt="">` : esc(b.name.charAt(0).toUpperCase())}</div><div><b>${esc(b.name)}</b><small>${esc([b.area, b.city].filter(Boolean).join(', '))}</small></div></div>`;
-const success = (o: Order) => `<div class="card done"><div class="big">✅</div><h1>Payment successful</h1><p class="muted">${esc(formatKobo(o.payAmountKobo))} for order ${esc(o.ref)}.<br>You can go back to WhatsApp now.</p></div>`;
+// Back to the shop's own WhatsApp chat when we know its number; WhatsApp's home otherwise.
+const backLink = (b: Business) => { const n = String((b as { whatsappDisplayNumber?: string | null }).whatsappDisplayNumber ?? '').replace(/D/g, ''); return n.length >= 10 ? `https://wa.me/${n}` : 'https://wa.me/'; };
+const success = (o: Order, b: Business) => `<div class="card done"><div class="big">✅</div><h1>Payment successful</h1><p class="muted">${esc(formatKobo(o.payAmountKobo))} for order ${esc(o.ref)}.<br>Your receipt is in the chat.</p><a class="back" href="${esc(backLink(b))}">Back to WhatsApp</a></div>`;
 
 export function payRoutes() {
   const r = new Hono<{ Bindings: Env }>();
@@ -53,14 +56,15 @@ export function payRoutes() {
     const order = link ? ((await db.get(db.doc(C.orders, link.orderId))) as Order | null) : null;
     const business = order ? ((await db.get(db.doc(C.businesses, order.businessId))) as Business | null) : null;
     if (!link || !order || !business) return c.html(page('Link not found', '<div class="card"><h1>Link not found</h1><p class="muted">This payment link doesn\'t exist. Check the link in your WhatsApp chat.</p></div>'), 404);
-    if (order.status === 'paid') return c.html(page('Paid', shopHeader(business) + success(order)));
+    if (order.status === 'paid') return c.html(page('Paid', shopHeader(business) + success(order, business)));
     if (order.status !== 'awaiting_payment' || link.expiresAt <= new Date().toISOString()) {
       return c.html(page('Link expired', `${shopHeader(business)}<div class="card"><h1>This order has expired</h1><p class="muted">We held your items for a while, but the time ran out. Go back to WhatsApp and check out again.</p></div>`));
     }
     const lines = order.items.map(l => `<div class="row"><span>${l.qty} × ${esc(l.name)}</span><span>${esc(formatKobo(l.priceKobo * l.qty))}</span></div>`).join('');
     const extra = [
       order.deliveryFeeKobo ? `<div class="row muted"><span>Delivery</span><span>${esc(formatKobo(order.deliveryFeeKobo))}</span></div>` : '',
-      order.feeKobo ? `<div class="row muted"><span>Service fee</span><span>${esc(formatKobo(order.feeKobo))}</span></div>` : '',
+      order.delivery?.method === 'pickup' ? '<div class="row muted"><span>Pickup at the shop</span><span></span></div>' : order.delivery?.address ? `<div class="row muted"><span>Deliver to</span><span style="white-space:normal;text-align:right">${esc(order.delivery.address)}</span></div>` : '',
+      order.feeKobo && order.feePaidBy !== 'owner' ? `<div class="row muted"><span>Service fee</span><span>${esc(formatKobo(order.feeKobo))}</span></div>` : '',
     ].join('');
     const body = `${shopHeader(business)}<div class="test"><b>Test payment.</b> No real money moves. Tapping Pay marks the order paid, like a real payment would.</div>
 <div class="card"><div class="muted">Order ${esc(order.ref)}</div>${lines}${extra}<div class="row total"><span>Total</span><span>${esc(formatKobo(order.payAmountKobo))}</span></div>

@@ -90,7 +90,7 @@ test('shop: customers browse categories as carousels, Buy adds to the cart, sear
   assert.match((await bot.send('shop', { ...c, choice: `det:${black._id}`, text: 'Details' }))[0].text, /\*Black AF1\*\n₦25,000/);
 
   const found = await bot.send('shop', { ...c, text: 'af1 sneakers' });
-  assert.match(found[0].text, /Results for "af1 sneakers"[\s\S]*Black AF1[\s\S]*White AF1/);
+  assert.match(found[0].text, /^Here's what we have[\s\S]*Black AF1[\s\S]*White AF1/);
 });
 
 test('carousel: categories page at 10 cards, with cover photos from their products', () => {

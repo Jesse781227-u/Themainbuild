@@ -85,14 +85,23 @@ export function categoryCarousel(cfg: Pick<Config, 'API_BASE_URL'>, categories: 
 }
 
 // After "Added to cart": what goes with it, then (at the end) a slightly better version of it.
-export function suggestionMessage(cfg: Pick<Config, 'API_BASE_URL'>, anchor: Pick<Product, 'name'>, s: { cross: Product[]; upsell: Product | null }): OutboundContent | null {
+// "Upgrade to this" (swap:<anchor>:<upgrade>) replaces the item in the cart; it doesn't add a second one.
+export function suggestionMessage(cfg: Pick<Config, 'API_BASE_URL'>, anchor: Pick<Product, 'id' | 'name'>, s: { cross: Product[]; upsell: Product | null }): OutboundContent | null {
   const cards = s.cross.map(p => cardFor(cfg, p));
+  const swap: [string, string] | null = s.upsell ? [`swap:${anchor.id}:${s.upsell.id}`, 'Upgrade to this'] : null;
   if (s.upsell) {
     const up = cardFor(cfg, s.upsell);
-    cards.push({ ...up, body: clip(`⬆️ Upgrade\n${up.body}`, CAROUSEL.cardBodyMax) });
+    cards.push({ ...up, body: clip(`⬆️ Instead of your ${anchor.name}\n${up.body}`, CAROUSEL.cardBodyMax), buttons: [swap!, [`det:${s.upsell.id}`, 'See details']] });
   }
   if (!cards.length) return null;
   const intro = s.cross.length ? `Goes well with your ${anchor.name} 👇` : `Want to upgrade your ${anchor.name}?`;
-  if (cards.length === 1) return productDetails(cfg, s.cross[0] ?? s.upsell!, intro)[0];
+  if (cards.length === 1 && !s.cross.length && s.upsell) {
+    const [one] = productDetails(cfg, s.upsell, intro);
+    const header = (one as { interactive: { header?: unknown } }).interactive.header;
+    const b = buttons(clip(`${intro}\n\n*${s.upsell.name}*\n${formatKobo(s.upsell.priceKobo)}`, 1000), [swap!, ['cart', 'Keep mine']]);
+    (b.interactive as Record<string, unknown>).header = header;
+    return b;
+  }
+  if (cards.length === 1) return productDetails(cfg, s.cross[0], intro)[0];
   return carousel(intro, cards);
 }

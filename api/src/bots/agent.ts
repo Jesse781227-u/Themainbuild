@@ -26,7 +26,9 @@ export interface AgentRun {
   facts: { ok: boolean; unknown: string[]; retried: boolean };
   usage: { inTokens: number; outTokens: number; steps: number; ms: number };
 }
-export type AgentFail = { failed: 'no_model' | 'timeout' | 'error' | 'ungrounded' | 'empty'; calls: AgentRun['calls']; usage: AgentRun['usage']; detail?: string };
+// finish: a tool that already ran and has something to show (checkout started, products picked) —
+// the caller carries on from it instead of starting over.
+export type AgentFail = { failed: 'no_model' | 'timeout' | 'error' | 'ungrounded' | 'empty'; calls: AgentRun['calls']; usage: AgentRun['usage']; detail?: string; finish?: AgentRun['finish'] };
 
 const RULES = [
   'You are chatting on WhatsApp. Write 1–3 short sentences. No headings, no lists unless asked, *bold* only for product names, emojis sparingly.',
@@ -45,7 +47,8 @@ export async function runAgent<C>(opts: {
   const start = clock();
   const usage = { inTokens: 0, outTokens: 0, steps: 0, ms: 0 };
   const calls: AgentRun['calls'] = [];
-  const fail = (failed: AgentFail['failed'], detail?: string): AgentFail => ({ failed, calls, usage: { ...usage, ms: clock() - start }, detail });
+  let finish: AgentRun['finish'] = null;
+  const fail = (failed: AgentFail['failed'], detail?: string): AgentFail => ({ failed, calls, usage: { ...usage, ms: clock() - start }, detail, finish });
   if (!opts.llm?.converse) return fail('no_model');
   const converse = opts.llm.converse.bind(opts.llm);
   const system = `${opts.system}\n\n${RULES}\n\n${opts.context}`;
@@ -56,7 +59,6 @@ export async function runAgent<C>(opts: {
     { role: 'user', text: opts.message.slice(0, 1500) },
   ];
   const known: string[] = [opts.context, opts.message];
-  let finish: AgentRun['finish'] = null;
 
   const left = () => opts.timeoutMs - (clock() - start);
   const step = async (mode: 'auto' | 'text') => {

@@ -37,8 +37,8 @@ test('suggestions: owner pairings come first, then the upgrade; sold out and in-
   await shop(bot, me, `add:${ids['Plantain']}`);
   const r = await shop(bot, me, `add:${ids['Jollof rice']}`);
   assert.equal(ia(r[0]).type, 'carousel');
-  assert.match(r[0].text, /^Goes well with your Jollof rice 👇\n1\. Zobo · ₦500\n2\. ⬆️ Upgrade/, 'Chapman is sold out, Plantain is already in the cart');
-  assert.deepEqual(r[0].options, [`buy:${ids['Zobo']}`, `buy:${ids['Jollof special']}`]);
+  assert.match(r[0].text, /^Goes well with your Jollof rice 👇\n1\. Zobo · ₦500\n2\. ⬆️ Instead of your Jollof rice/, 'Chapman is sold out, Plantain is already in the cart');
+  assert.deepEqual(r[0].options, [`buy:${ids['Zobo']}`, `swap:${ids['Jollof rice']}:${ids['Jollof special']}`], 'the upgrade swaps, it does not add a second dish');
   assert.equal((await shop(bot, me, `add:${ids['Jollof rice']}`)).length, 1, 'adding it again: no repeat suggestions');
   const fromSuggestion = await shop(bot, me, `buy:${ids['Zobo']}`);
   assert.equal(fromSuggestion.length, 1, 'adding the suggested Zobo: just the cart, no second suggestion');

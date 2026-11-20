@@ -19,7 +19,8 @@ import { suggestFor } from '../services/suggestions';
 import { noteInterest } from '../services/status-posts';
 import { DEFAULT_MESSAGES, fill, renderMessage } from '../services/shop-messages';
 import { createPayLink, payMessage } from '../services/paylinks';
-import { byPriority, listZones, quoteDelivery } from '../services/delivery';
+import { modelsResting } from '../services/ai';
+import { byPriority, listZones, quoteDelivery, resolveDelivery, type DeliveryZone } from '../services/delivery';
 import { describeLocation } from '../services/location';
 import { describeHours, openNow } from '../services/hours';
 import { policyText, POLICY_QUESTION } from '../services/policies';
@@ -48,6 +49,8 @@ interface ShopState {
   sayOptions?: string[] | null; // the agent's quick answers (say:1…3), so a tap comes back as its words
   greetedAt?: string | null; // when this conversation's welcome was sent
   pidgin?: boolean;          // the customer writes in Pidgin: the bot's own words follow
+  address?: string | null;   // the address they typed, while they pick which of several areas it is
+  askArea?: boolean;         // we asked which area they're in, for the delivery price
 }
 interface Run { deps: BotDeps; state: ShopState; first?: boolean /* the first message of this conversation */; agent?: boolean /* the conversation agent is on */; voice?: boolean /* this message was a voice note */ }
 type ShopConversation = Conversation & { shop?: ShopState | null };
@@ -167,6 +170,12 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     const [kind, id] = choice.split(':');
     if (kind === 'ask') return reply(state.pidgin ? 'Sure! Wetin you wan know? Ask about anything: prices, delivery, opening hours… 🙂' : 'Sure! What would you like to know? You can ask about prices, delivery, opening hours or anything else. 🙂');
     if (kind === 'track') return orderStatus(db, conversationId, reply, business);
+    if (kind === 'zone') {
+      const z = (await listZones(db, businessId)).find(x => x.id === id);
+      if (!z) return reply(buttons('That area is gone. Please type your address again.', [['menu', 'See the menu']]));
+      if (state.step === 'await_address') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: z.feeKobo, zoneId: z.id, timeframe: z.timeframe, address: state.address ? `${state.address} (${z.name})` : z.name }, reply);
+      return reply(buttons(`Delivery to *${z.name}* ${state.pidgin ? 'na' : 'is'} ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}.`, [['menu', 'See the menu'], ['cart', 'My cart']]), { ...state, askArea: false });
+    }
     if (kind === 'again') return orderAgain(ctx, run, business, reply);
     if (kind === 'menu') return greet(ctx, business, customer, reply, { again: true });
     if (kind === 'cats') return greet(ctx, business, customer, reply, { again: true, page: Number(id) || 0 });
@@ -175,6 +184,17 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     if (kind === 'prod' || kind === 'det') return showProduct(ctx, business, id, reply);
     if (kind === 'buy') return buy(ctx, run, business, id, reply);
     if (kind === 'add') return addToCart(ctx, run, business, id, 1, reply);
+    if (kind === 'swap') {
+      const to = choice.split(':')[2] ?? '';
+      const cart = await loadCart(db, ctx);
+      const was = cart?.items.find(i => i.productId === id);
+      if (!cart || !was) return addToCart(ctx, run, business, to, 1, reply);
+      await db.update(db.doc(C.carts, conversationId), { items: cart.items.filter(i => i.productId !== id), updatedAt: new Date().toISOString() });
+      const put = await putInCart(ctx, business, to, was.qty, null);
+      if (!put.ok && put.reason === 'needs_option') return pickVariant(ctx, business, to, reply);
+      if (!put.ok) { await db.update(db.doc(C.carts, conversationId), { items: cart.items, updatedAt: new Date().toISOString() }); return showCart(ctx, business, reply, `Sorry, ${put.name ?? 'that'} isn't available, so your cart stays as it was.`); }
+      return showCart(ctx, business, reply, `⬆️ Upgraded to ${was.qty} × ${put.name} ✅`);
+    }
     // A size/colour picked from the list ("addv:<product>:<option>"), or the first of two options.
     if (kind === 'addv') return addToCart(ctx, run, business, id, 1, reply, choice.split(':')[2] ?? null);
     if (kind === 'opt1') return pickVariant(ctx, business, id, reply, choice.split(':').slice(2).join(':'));
@@ -205,13 +225,26 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   }
 
   if (state.step === 'await_address' && text.length >= 3 && !/^(menu|cancel|cart)$/.test(lower)) {
-    const quote = await quoteDelivery(db, businessId, text, 'self_arranged');
+    const resolved = await resolveDelivery(db, businessId, text);
+    if (resolved && 'choices' in resolved) return reply(areaPicker(resolved.choices, text, state.pidgin), { ...state, address: text.slice(0, 200) });
+    const quote = resolved && 'quote' in resolved ? resolved.quote : null;
     if (!quote && business.shipsInterstate && business.interstatePricing === 'quote') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: 0, address: text.slice(0, 200), timeframe: `delivery price to be confirmed by ${business.name}` }, reply);
     if (!quote) return reply(buttons(`Sorry, ${business.name} doesn't deliver to "${text.slice(0, 60)}" yet.`, [...(business.fulfilment !== 'delivery' ? [['pickup', "I'll pick it up"] as [string, string]] : []), ['menu', 'Back to menu']]), { step: 'browse' });
     return confirmOrder(ctx, business, quote, reply);
   }
   if (state.step === 'confirm' && YES.test(lower)) return placeOrder(ctx, deps, business, state.delivery ?? null, reply);
   if (state.step === 'confirm' && NO.test(lower)) return reply(buttons('No problem. Your cart is saved.', [['menu', 'See the menu'], ['cart', 'My cart']]), { step: 'browse' });
+
+  // The answer to "Which area are you in?": the delivery price there (only a real area on the list).
+  if (state.askArea && !choice) {
+    const zones = await listZones(db, businessId);
+    const resolved = text.length >= 3 ? await resolveDelivery(db, businessId, text) : null;
+    const named = resolved && 'quote' in resolved ? zones.find(z => z.id === resolved.quote.zoneId && z.match) : null;
+    if (resolved && 'choices' in resolved) return reply(areaPicker(resolved.choices, text, state.pidgin), { ...state, askArea: false });
+    if (named) return reply(buttons(`Delivery to *${named.name}* ${state.pidgin ? 'na' : 'is'} ${named.feeKobo ? formatKobo(named.feeKobo) : 'free'}.`, [['menu', 'See the menu'], ['cart', 'My cart']]), { ...state, askArea: false });
+    state.askArea = false;
+    await setState({ ...state });
+  }
 
   // ── Free text ──
   // Exact things answer at once (free); anything conversational goes to the agent; if the agent
@@ -226,11 +259,28 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     case 'checkout': return startCheckout(ctx, business, reply);
     case 'orderStatus': return orderStatus(db, conversationId, reply, business);
     case 'shopInfo': {
-      const info = await shopInfo(db, business, String(intent.args.topic ?? ''));
-      if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'My cart']]));
+      const info = await shopInfo(db, business, String(intent.args.topic ?? ''), state.pidgin);
+      if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'My cart']]), /exact price/.test(info) ? { ...state, askArea: true } : undefined);
       return handOver(ctx, deps, business, customer, reply);
     }
     case 'talkToHuman': return handOver(ctx, deps, business, customer, reply);
+    // "Add one zobo to my order", "cancel my order", "change my address": the owner decides.
+    case 'orderChange': return handOver(ctx, deps, business, customer, reply, text);
+    // "How much is the fried rice?": the price, in words, when one product clearly matches.
+    case 'price': {
+      const ranked = await rankProducts(db, businessId, String(intent.args.product ?? ''));
+      if (ranked.clear) {
+        const p = ranked.list[0];
+        const prices = p.variants?.length ? p.variants.map(v => priceOf(p, v.id)) : [priceOf(p, null)];
+        const from = Math.min(...prices);
+        const what = `*${p.name}* ${state.pidgin ? 'na' : 'is'} ${prices.some(x => x !== from) ? 'from ' : ''}${formatKobo(from)}.`;
+        await interest(ctx, [`p_${p.id}`], 'asked');
+        const soldOut = state.pidgin ? 'E don finish for now.' : "It's sold out right now.";
+        return reply(buttons(hasStock(p) ? what : `${what} ${soldOut}`, [...(hasStock(p) ? [[`add:${p.id}`, 'Add to cart'] as [string, string]] : []), ['menu', 'See the menu']]));
+      }
+      if (ranked.list.length) return sendAll(reply, productCarousel(ctx.cfg, business, ranked.list.slice(0, 10), { title: state.pidgin ? 'See wetin we get' : "Here's what we have", key: 'all' }));
+      return reply(buttons("Sorry, I couldn't find that. Here's the menu.", [['menu', 'See the menu']]));
+    }
     case 'offTopic': return reply(buttons(`I'm ${business.name}'s shop assistant, so I can only help with our products and your orders.`, [['menu', 'See the menu'], ['cart', 'My cart']]));
     case 'addToCart': {
       const asked = String(intent.args.product ?? '');
@@ -239,7 +289,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
       if (available.length === 1) return addToCart(ctx, run, business, available[0].id, Math.max(1, Math.min(99, Number(intent.args.quantity) || 1)), reply);
       const matches = available.length > 1 ? available : await search(db, businessId, asked);
       if (matches.length) { await interest(ctx, matches.slice(0, 5).map(p => `p_${p.id}`), 'asked'); }
-      if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: `Results for "${asked.slice(0, 30)}"`, key: 'all' }));
+      if (matches.length) return sendAll(reply, productCarousel(ctx.cfg, business, matches, { title: matches.length === 1 ? matches[0].name : (state.pidgin ? 'See wetin we get' : "Here's what we have"), key: 'all' }));
       return reply(buttons(`Sorry, we don't have "${asked.slice(0, 40)}" right now.`, [['menu', 'See the menu']]));
     }
     // Nothing more specific: the welcome on a first message (never the whole menu unasked).
@@ -409,7 +459,9 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
     checkoutTo: async (words, how) => {
       if (words) await reply(intro(words));
       if (how.pickup && business.fulfilment !== 'delivery') return confirmOrder(ctx, business, pickup(business), reply);
-      const q = how.deliverTo ? await quoteDelivery(db, business.id, how.deliverTo, 'self_arranged') : null;
+      const resolved = how.deliverTo ? await resolveDelivery(db, business.id, how.deliverTo) : null;
+      if (resolved && 'choices' in resolved) return reply(areaPicker(resolved.choices, how.deliverTo!, run.state.pidgin), { ...run.state, step: 'await_address', address: how.deliverTo!.slice(0, 200) });
+      const q = resolved && 'quote' in resolved ? resolved.quote : null;
       if (q) return confirmOrder(ctx, business, { ...q, address: how.deliverTo!.slice(0, 200) }, reply);
       if (how.deliverTo && business.shipsInterstate && business.interstatePricing === 'quote') return confirmOrder(ctx, business, { method: 'self_arranged', feeKobo: 0, address: how.deliverTo.slice(0, 200), timeframe: `delivery price to be confirmed by ${business.name}` }, reply);
       return startCheckout(ctx, business, reply);
@@ -430,7 +482,9 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
       return s ? [...s.cross, ...(s.upsell ? [s.upsell] : [])] : [];
     },
     quote: async area => {
-      const q = await quoteDelivery(db, business.id, area, 'self_arranged');
+      const resolved = await resolveDelivery(db, business.id, area);
+      if (resolved && 'choices' in resolved) return { area, choices: resolved.choices.map(z => ({ area: z.name, feeKobo: z.feeKobo })), feeKobo: 0, timeframe: null, later: false };
+      const q = resolved && 'quote' in resolved ? resolved.quote : null;
       if (q) return { area: q.address ?? area, feeKobo: q.feeKobo, timeframe: q.timeframe ?? null, later: false };
       if (business.shipsInterstate && business.interstatePricing === 'quote') return { area, feeKobo: 0, timeframe: null, later: true };
       return null;
@@ -442,6 +496,8 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
   const botNumber = await resolveSender(db, cfg, ctx.test ? { adminBot: true } : { businessId: business.id }).then(s => s.phoneNumberId).catch(() => '');
   await debugNote(db, cfg, { phone: ctx.event.from, botNumber, r }).catch(() => undefined);
   if (isFail(r)) {
+    // A tool already did its part (checkout started, products found): carry on from it, never start over.
+    if (r.finish) { await r.finish(''); return true; }
     // Something was already changed: show the cart rather than lose it.
     if (r.calls.some(c => c.ok && (c.name === 'addToCart' || c.name === 'updateCart'))) { await showCart(ctx, business, reply, welcome ?? ''); return true; }
     // Twice in a row the assistant couldn't answer in its own words: a person takes over.
@@ -460,6 +516,7 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   if (opts.fuzzy !== false && /^(hi|hello|hey|good (morning|afternoon|evening)|menu|start|catalog(ue)?|price ?list|what do you (have|sell)\??)\b/.test(lower)) return { tool: 'showMenu', args: {} };
   if (/^(cart|my cart|view cart|basket)$/.test(lower)) return { tool: 'viewCart', args: {} };
   if (/^(checkout|check out|pay|place order|order now)$/.test(lower)) return { tool: 'checkout', args: {} };
+  if (ORDER_CHANGE.test(lower)) return { tool: 'orderChange', args: {} };
   if (/\b(where is my order|order status|my order|track)\b/.test(lower) || TRACK_QUESTION.test(lower)) return { tool: 'orderStatus', args: {} };
   if (POLICY_QUESTION.test(lower)) return { tool: 'shopInfo', args: { topic: 'policy' } };
   if (/\b(what time|opening hours|are you open|open today|open now|when do you (open|close)|closing time|close today)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'hours' } };
@@ -468,8 +525,10 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   // "2 jollof rice" / "jollof rice x2" / "jollof rice"
   const m = /^(\d{1,2})\s*x?\s+(.+)$/.exec(lower) ?? /^(.+?)\s*x\s*(\d{1,2})$/.exec(lower);
   const [q, n] = m ? (/^\d/.test(m[1]) ? [m[2], Number(m[1])] : [m[1], Number(m[2])]) : [lower, 1];
-  if (opts.fuzzy !== false && (await findProducts(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } };
-  if (opts.fuzzy !== false && (await search(db, businessId, q)).length) return { tool: 'addToCart', args: { product: q, quantity: n } }; // shows the matches
+  const cleaned = productWords(q);
+  if (opts.fuzzy !== false && PRICE_Q.test(lower) && cleaned && (await search(db, businessId, cleaned)).length) return { tool: 'price', args: { product: cleaned } };
+  if (opts.fuzzy !== false && cleaned && (await findProducts(db, businessId, cleaned)).length) return { tool: 'addToCart', args: { product: cleaned, quantity: n } };
+  if (opts.fuzzy !== false && cleaned && (await search(db, businessId, cleaned)).length) return { tool: 'addToCart', args: { product: cleaned, quantity: n } }; // shows the matches
   if (!llm) return null;
   try {
     const choice = await llm.chooseTool({ system: 'You route a customer message for a small shop in Nigeria to the shop assistant. Choose exactly one tool. Use offTopic for anything not about shopping at this business.', message: text.slice(0, 500), tools: SHOP_TOOLS });
@@ -548,19 +607,43 @@ async function pickVariant(ctx: ShopContext, business: Business, productId: stri
 }
 
 // Free-text search across product names and their categories: "black sneakers", "zobo".
-async function search(db: Firestore, businessId: string, query: string) {
-  // Plurals to their singular: "boots" → boot, "watches" → watch, "shoes" → shoe (not "sho", which
-  // would find "Shoulder bag").
+// The product words in a customer's message: "abeg how much be the fried rice?" → "fried rice".
+const FILLER = /\b(abeg|pls|plz|please|biko|sir|ma|madam|bros|boss|oga|how much|wetin be|what is|what's|whats|is the|is it|price of|price|prices|cost of|cost|i want|i wan|i need|i go take|i'd like|i would like|give me|send me|make i get|make i buy|can i get|can i have|you get|una get|una dey sell|una sell|do you have|do you sell|have you got|is there|any|the|a|an|some|for me|dey|na|be|is|are|o|oh|ehn|abi)\b/g;
+export const productWords = (text: string) => text.toLowerCase().replace(/[?!.,"'’]/g, ' ').replace(FILLER, ' ').replace(/\s+/g, ' ').trim();
+const PRICE_Q = /\b(how much|price|prices|cost|wetin be (the )?price)\b/;
+// "Cancel my order", "add one zobo to my order", "change my address to Ifako".
+const ORDER_CHANGE = /\b(cancel|change|edit|modify|update|add|remove|swap|reduce|increase)\b[^.?!]{0,40}\b(my order|the order|this order)\b|\b(change|update|new|different|wrong)\b[^.?!]{0,15}\b(my )?(delivery )?(address|location)\b|\b(change|update) (the )?address\b/;
+
+// Products ranked by how much of their name the words match (category names count less).
+// clear: one product stands out (all the words are in its name, and nothing else matches as well).
+async function rankProducts(db: Firestore, businessId: string, query: string) {
   const singular = (w: string) => (/(sh|ch|x|ss|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
-  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w) && !/^(see|show|the|and|for|you|have|any|some|your)$/.test(w)).map(singular);
-  if (!words.length) return [];
+  const words = productWords(query).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w) && !/^(see|show|and|you|have|your|with)$/.test(w)).map(singular);
+  if (!words.length) return { list: [] as Product[], clear: false };
   const [products, cats] = await Promise.all([visible(db, businessId), listCategories(db, businessId)]);
   const catName = new Map(cats.map(c => [c.id, c.name.toLowerCase()]));
-  return products
-    .map(p => ({ p, score: words.filter(w => p.name.toLowerCase().includes(w) || (catName.get(p.categoryId ?? '') ?? '').includes(w)).length }))
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map(x => x.p);
+  const hit = (w: string, name: string) => name.split(/[^a-z0-9]+/).some(n => n.startsWith(w) || (n.length >= 3 && w.startsWith(n)));
+  const scored = products.map(p => {
+    const name = p.name.toLowerCase();
+    const nameHits = words.filter(w => hit(w, name)).length;
+    const catHits = words.filter(w => !hit(w, name) && hit(w, catName.get(p.categoryId ?? '') ?? '')).length;
+    const nameWords = name.split(/[^a-z0-9]+/).filter(Boolean).length || 1;
+    return { p, nameHits, score: nameHits * 2 + catHits, cover: nameHits / nameWords };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.cover - a.cover);
+  // Products named in the words come first; ones that only share a section drop out then.
+  const named = scored.some(x => x.nameHits) ? scored.filter(x => x.nameHits) : scored;
+  const [top, second] = named;
+  const clear = !!top && top.nameHits === words.length && (!second || second.score < top.score || second.cover < top.cover);
+  return { list: named.map(x => x.p), clear };
+}
+
+async function search(db: Firestore, businessId: string, query: string) {
+  return (await rankProducts(db, businessId, query)).list;
+}
+
+// "Gbagada" could be Gbagada Phase 1 or Phase 2: the customer picks (a list, prices included).
+function areaPicker(choices: DeliveryZone[], typed: string, pidgin?: boolean): OutboundContent {
+  return list(pidgin ? `Which part of "${typed.slice(0, 40)}" you dey?` : `Which of these is "${typed.slice(0, 40)}"?`, 'Choose area', choices.slice(0, 10).map(z => ({ id: `zone:${z.id}`, title: z.name.slice(0, 24), description: z.feeKobo ? `Delivery ${formatKobo(z.feeKobo)}` : 'Free delivery' })));
 }
 
 // Sends several messages; an optional intro goes first.
@@ -606,6 +689,7 @@ async function putInCart(ctx: ShopContext, business: Business, productId: string
   return { ok: true, product: p, name, qty: want, cart, items };
 }
 
+const SUGGEST_MS = 2500;
 async function addToCart(ctx: ShopContext, run: Run, business: Business, productId: string, qty: number, reply: Reply, variantId: string | null = null) {
   if (variantId || !((await ctx.db.get(ctx.db.doc(C.products, productId))) as Product | null)?.variants?.length) await interest(ctx, [`p_${productId}`], 'carted', variantId);
   const { db } = ctx;
@@ -622,7 +706,12 @@ async function addToCart(ctx: ShopContext, run: Run, business: Business, product
   const added = renderMessage(business, 'addedToCart', { customer: (await db.get(db.doc(C.customers, ctx.conversationId)) as Customer | null)?.name, item: `${qty} × ${name}` });
   // The suggestion goes first and the cart last, so the cart's Checkout button is at the bottom and
   // nothing arrives under it a moment later.
-  const picks = suggest ? await suggestFor(db, run.deps.llm, business, p, new Set([...items.map(i => i.productId), p.id])).catch(e => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; }) : null;
+  // At most 2.5 s: after that (or while the AI is resting) the pairings come from the shop's own data.
+  const inCart = new Set([...items.map(i => i.productId), p.id]);
+  const noted = (e: unknown) => { log('warn', 'suggestions_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; };
+  const quick = () => suggestFor(db, null, business, p, inCart).catch(noted);
+  const picks = !suggest ? null : modelsResting() || !run.deps.llm ? await quick()
+    : await Promise.race([suggestFor(db, run.deps.llm, business, p, inCart).catch(noted), new Promise<null>(r => setTimeout(() => r(null), SUGGEST_MS))]) ?? await quick();
   const out = picks ? suggestionMessage(ctx.cfg, p, picks) : null;
   if (out) {
     await db.update(db.doc(C.carts, ctx.conversationId), { suggestedAt: new Date().toISOString() });
@@ -642,7 +731,11 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons(`${prefix ? prefix + '\n' : ''}Your cart is empty.`, [['menu', 'See the menu']]));
   const { text, subtotal } = await cartLines(ctx.db, cart);
-  return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Empty my cart']]), { step: 'browse' });
+  // The 1% service fee, when the shop has the customer pay it: shown from the cart on, never a surprise.
+  const policy = policyFor(business, ctx.cfg);
+  const fee = customerFee(feeKobo(subtotal, policy), policy);
+  const feeLine = fee ? `\nService fee: ${formatKobo(fee)}` : '';
+  return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}${feeLine}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Empty my cart']]), { step: 'browse' });
 }
 
 async function startCheckout(ctx: ShopContext, business: Business, reply: Reply) {
@@ -724,15 +817,15 @@ async function orderStatus(db: Firestore, customerId: string, reply: Reply, busi
 // "Where is the rider?", "when e go reach?", "has my food left?"
 const TRACK_QUESTION = /\b(rider|dispatch rider|delivery (man|guy|person)|where (is|be|dey) (the |my )?(rider|food|package|parcel|delivery|order)|when (will|e go|go) (it|e|my order|my food|the rider)? ?(reach|arrive|come)|e don (reach|comot|leave)|has (it|my order|my food) left|how far (with )?my order)\b/;
 
-async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, customer: Customer | null, reply: Reply) {
+async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, customer: Customer | null, reply: Reply, request?: string) {
   if (ctx.test) return reply(`🧪 In your real shop, this tells the customer you'll reply, alerts you here, and the assistant goes quiet in that chat until you send HANDBACK. (Test mode: nothing was sent.)`);
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { mode: 'owner', takeoverAt: new Date().toISOString(), takeoverReason: 'customer_request' }, { merge: true });
-  await reply(`I've let ${business.name} know. They'll reply to you here shortly.`);
+  await reply(request ? `I can't change an order here, so I've passed this to ${business.name}. They'll reply to you here shortly.` : `I've let ${business.name} know. They'll reply to you here shortly.`);
   // The owner sees the full number (it's their customer); logs never do.
   const where = ctx.event.source === 'whatsapp' ? ctx.event.from : 'Instagram';
   const who = customer?.name ? `${customer.name} (${where})` : ctx.event.source === 'whatsapp' ? ctx.event.from : 'An Instagram customer';
   log('info', 'handover_requested', { businessId: business.id, from: ctx.event.source === 'whatsapp' ? maskPhone(ctx.event.from) : 'instagram' });
-  await notifyOwner(ctx.db, deps, business, 'handover', `${who} wants to talk to you. Reply to them in your WhatsApp Business app${ctx.event.source === 'instagram' ? ' or Instagram' : ''}. The bot stays quiet in that chat until you send HANDBACK here.`);
+  await notifyOwner(ctx.db, deps, business, 'handover', `${who} ${request ? `wants to change their order: "${request.slice(0, 200)}".` : 'wants to talk to you.'} Reply to them in your WhatsApp Business app${ctx.event.source === 'instagram' ? ' or Instagram' : ''}. The bot stays quiet in that chat until you send HANDBACK here.`);
 }
 
 // Pickup, with the shop's preparation time when it has one (food), at the shop's address.
@@ -786,7 +879,14 @@ async function shopInfo(db: Firestore, business: Business, topic: string, pidgin
   if (topic === 'delivery') {
     const zones = await listZones(db, business.id);
     if (business.fulfilment === 'pickup' || (!zones.length && !business.shipsInterstate)) return `${business.name} does pickup only for now.`;
-    const lines = zones.sort(byPriority).map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}`);
+    if (zones.length > 12) {
+      const fees = zones.map(z => z.feeKobo);
+      const lo = Math.min(...fees), hi = Math.max(...fees);
+      return pidgin
+        ? `We dey deliver go ${zones.length} areas, from ${lo ? formatKobo(lo) : 'free'} to ${formatKobo(hi)}. Which area you dey? I go tell you the exact price.`
+        : `We deliver to ${zones.length} areas, from ${lo ? formatKobo(lo) : 'free'} to ${formatKobo(hi)}. Which area are you in? I'll tell you the exact price.`;
+    }
+    const lines = zones.sort((a, b) => a.feeKobo - b.feeKobo || a.name.localeCompare(b.name)).map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}`);
     if (business.shipsInterstate && business.interstatePricing === 'quote') lines.push('• Other states: price confirmed per order');
     return `Delivery from ${business.name}:\n${lines.join('\n')}${business.fulfilment === 'both' ? '\nPickup is free.' : ''}`;
   }
