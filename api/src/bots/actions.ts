@@ -15,6 +15,7 @@ import type { OutboundContent } from '../services/channel';
 import { listProducts } from '../services/catalog';
 import { listZones, byPriority } from '../services/delivery';
 import { recentOrders } from '../services/orders';
+import { exportFilename, exportToken } from '../services/export';
 import { getOwner } from '../services/owners';
 import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
@@ -155,6 +156,23 @@ async function soldOut(c: ActionCtx): Promise<Out> {
   }
   await c.db.update(c.db.doc(C.products, p.id), { stock: 0, ...(p.variants?.length ? { variants: p.variants.map(v => ({ ...v, stock: 0 })) } : {}), updatedAt: new Date().toISOString() });
   return `✅ *${p.name}* is marked sold out. Customers still see it, marked *Sold out*. When it's back, send *restock ${p.name} 10*.`;
+}
+
+// EXPORT: the Excel file (Orders + Customers) and the Google Sheets formulas, on a private link.
+async function exportScreen(c: ActionCtx, fresh: boolean): Promise<Out[]> {
+  const token = await exportToken(c.db, c.business.id, fresh);
+  const base = `${c.cfg.API_BASE_URL}/export/${token}`;
+  return [
+    { type: 'document', link: `${base}/relay-export.xlsx`, filename: exportFilename(c.business.name), caption: fresh ? 'New links made: the old ones no longer work. Your orders and customers, 2 sheets.' : 'Your orders and customers, 2 sheets.' },
+    buttons(`📊 *Live in Google Sheets*: paste into cell A1 of an empty sheet:
+
+=IMPORTDATA("${base}/orders.csv")
+
+Customers:
+=IMPORTDATA("${base}/customers.csv")
+
+It updates by itself. Keep these private: anyone with the link can see your orders.`, [['act:exportnew', 'New private link'], ['act:menu', 'Menu']]),
+  ];
 }
 
 async function receipt(c: ActionCtx): Promise<Out> {
@@ -450,6 +468,8 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'bcpick', hint: 'Send the broadcast to this group', run: broadcastToGroup },
   { id: 'cancel', hint: 'Stop what you were doing', async run() { return buttons('Cancelled. Nothing was sent or saved.', [['act:menu', 'Menu']]); } },
   { id: 'policyedit', hint: 'Change your shop policies', async run(c) { await c.setAwaiting('policies'); return waiting('Type your policies in your own words: returns, exchanges and refunds, e.g. *Exchange within 3 days. No refunds.*'); } },
+  { id: 'export', command: 'export', hint: 'Your orders and customers as a spreadsheet, and a live Google Sheets link', aliases: ['export', 'export orders', 'download orders', 'spreadsheet', 'excel', 'google sheets', 'google sheet', 'sheets', 'export customers'], run: c => exportScreen(c, false) },
+  { id: 'exportnew', hint: 'Make new private export links (the old ones stop working)', run: c => exportScreen(c, true) },
   { id: 'receipt', command: 'receipt', hint: 'Send the PDF receipt of a paid order again', menu: { section: 'Orders', title: 'Resend a receipt' }, aliases: ['receipt', 'receipts', 'resend receipt'], next: [['orders', "Today's orders"], ['menu', 'Menu']], run: receipt },
   // Money
   { id: 'sales', command: 'sales', hint: 'Sales today, this week and this month',  aliases: ['sales', 'sales today', 'sales report', 'report', 'today', 'how much did i make', 'how much did i make today', 'how much have i made', 'how much did i sell today', 'how much have i sold today', 'how much i make today'], tool: { name: 'salesToday' }, run: moneyScreen },

@@ -11,6 +11,7 @@ import { signupRoutes } from './routes/signup';
 import { devRoutes } from './routes/dev';
 import { payRoutes } from './routes/pay';
 import { receiptRoutes } from './routes/receipts';
+import { exportRoutes } from './routes/export';
 import { goLiveRoutes, placeholderRoutes } from './routes/placeholder';
 import type { BachsAdapter } from './services/bachs';
 
@@ -40,6 +41,7 @@ export function createApp(deps: { bachs?: BachsAdapter; fetch?: typeof fetch } =
   app.route('/dev', devRoutes(() => app)); // 404s unless RELAY_ENV=development with META_SEND_MODE=log
   app.route('/pay', payRoutes()); // simulated payment page; 404s unless PAYMENTS_MODE=simulated
   app.route('/receipts', receiptRoutes()); // PDF receipts for paid orders (private link)
+  app.route('/export', exportRoutes()); // a shop's orders and customers: Excel + Google Sheets CSV (private link)
   app.route('/ph', placeholderRoutes()); // pictures for products without a photo
   app.route('/golive', goLiveRoutes()); // the shop's WhatsApp Status image
   app.route('/', signupRoutes(deps));
