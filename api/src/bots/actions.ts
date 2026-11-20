@@ -542,7 +542,9 @@ export function helpText(business: Pick<Business, 'name' | 'category'>, products
 
 // ── WhatsApp's own command list and ice breakers (npm run sync:commands) ──
 
-export const ICE_BREAKERS = ['Set up my shop', 'See how Relay works', 'Talk to a person', 'Open my menu'];
+// Shown on a brand-new chat with the Relay number, which is almost always a new owner: no
+// "Open my menu" (they have no shop yet; owners already have MENU and the / commands).
+export const ICE_BREAKERS = ['Set up my shop', 'See how Relay works', 'Talk to a person'];
 
 const EMOJI = /\p{Extended_Pictographic}/u;
 export function commandsPayload() {

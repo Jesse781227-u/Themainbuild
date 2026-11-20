@@ -1,7 +1,7 @@
 import { Bot, clearFirestore, db, doc, env, fakeLLM, seed } from './helpers';
 import { getConfig } from '../src/config';
 import { saveWhatsAppConnection } from '../src/services/whatsapp';
-import { ACTIONS, commandsPayload, followUps, matchAction } from '../src/bots/actions';
+import { ACTIONS, commandsPayload, followUps, ICE_BREAKERS, matchAction } from '../src/bots/actions';
 import { addShop, switchShop } from '../src/services/owners';
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -109,7 +109,7 @@ test('actions: sold out, receipt, add product with its follow-ups, pause stops c
   assert.equal((await doc('businesses', fx.a.id)).pausedUntil, null);
 });
 
-test('ice breakers: "See how Relay works" explains before signup; "Talk to a person" reaches a person; "Open my menu" opens it', async () => {
+test('ice breakers: "See how Relay works" explains before signup; "Talk to a person" reaches a person; no "Open my menu" for people without a shop', async () => {
   const bot = new Bot();
   const fresh = '2348035551212';
   const how = await bot.send('admin', { from: fresh, text: 'See how Relay works', name: 'Bayo' });
@@ -117,17 +117,17 @@ test('ice breakers: "See how Relay works" explains before signup; "Talk to a per
   assert.deepEqual(how[0].options, ['ob:begin', 'ob:call']);
   assert.match((await bot.send('admin', { from: fresh, choice: 'ob:begin', text: 'Set up my shop', name: 'Bayo' }))[0].text, /^Welcome to Relay, Bayo[\s\S]*Step 1 of 6/);
   assert.match((await bot.send('admin', { from: '2348035551313', text: 'Talk to a person' }))[0].text, /A real person from Relay/);
-  assert.deepEqual((await bot.send('admin', { from: owner(), text: 'Open my menu' }))[0].options[0], 'menu:Shop');
+  assert.ok(!ICE_BREAKERS.includes('Open my menu'));
 });
 
 test('sync: the command list goes to the Admin Bot number; Meta errors are reported without the token', async () => {
   const { syncCommands } = await import('../src/services/automation');
   const calls: { url: string; body: any; auth: string }[] = [];
   const ok = (async (url: string, init: RequestInit) => { calls.push({ url, body: JSON.parse(String(init.body)), auth: String((init.headers as Record<string, string>).authorization) }); return Response.json({ success: true }); }) as unknown as typeof fetch;
-  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 21, prompts: 4 });
+  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 21, prompts: 3 });
   assert.equal(calls[0].url, 'https://graph.facebook.com/v21.0/123/conversational_automation');
   assert.equal(calls[0].body.commands[0].command_name, 'menu');
-  assert.deepEqual(calls[0].body.prompts, ['Set up my shop', 'See how Relay works', 'Talk to a person', 'Open my menu']);
+  assert.deepEqual(calls[0].body.prompts, ['Set up my shop', 'See how Relay works', 'Talk to a person']);
   const bad = (async () => Response.json({ error: { code: 100, message: 'Invalid parameter' } }, { status: 400 })) as unknown as typeof fetch;
   await assert.rejects(syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, bad), (e: Error) => /META_SYNC_FAILED: 400 100 Invalid parameter/.test(e.message) && !e.message.includes('secret-token'));
 });
@@ -136,7 +136,7 @@ test('test chat: the owner page carries the / commands and the ice breakers, and
   const { api, testEnv } = await import('./helpers');
   const page = (await api('GET', '/dev/owner', { env: testEnv({ META_SEND_MODE: 'log' }) })).body as string;
   assert.match(page, /"commands":\[\{"name":"menu","hint":"Everything Relay can do for your shop, to tap"\}/);
-  assert.match(page, /"iceBreakers":\["Set up my shop","See how Relay works","Talk to a person","Open my menu"\]/);
+  assert.match(page, /"iceBreakers":\["Set up my shop","See how Relay works","Talk to a person"\]/);
   const script = /<script>([\s\S]*?)<\/script>/.exec(page)![1];
   assert.doesNotThrow(() => new Function(script));
 });
