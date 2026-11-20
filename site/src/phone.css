@@ -34,7 +34,6 @@
 .av { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex-shrink: 0; background: #DFE5E7; display: grid; place-items: center; }
 .hd-ios .av { width: 36px; height: 36px; }
 .av img { width: 100%; height: 100%; object-fit: cover; }
-.av-shop { width: 100%; height: 100%; display: grid; place-items: center; background: linear-gradient(135deg, #F59E0B, #B45309); color: #fff; font-weight: 700; font-size: 15px; }
 .who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 .who b { font-weight: 500; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hd-ios .who b { font-weight: 600; font-size: 16.5px; }

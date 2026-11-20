@@ -37,7 +37,7 @@ export function Receipt({ capNaira = 2000, rate = 0.03, processing = 0.015 }: { 
         <div className="rc-line big"><span>You keep</span><em>{naira(order - fee)}</em></div>
       </div>
       <div className="rc-rule dashed" />
-      <p className="rc-foot">Charged only on paid orders · max ₦4,000<br />No sale, no fee · free withdrawals</p>
+      <p className="rc-foot">You pay only on paid orders, at most ₦4,000<br />Withdrawals to your bank are free</p>
       <div className="rc-barcode" aria-hidden>{Array.from({ length: 46 }, (_, i) => <i key={i} style={{ width: [1, 2, 3, 1, 2][i % 5] }} />)}</div>
     </motion.div>
   );
@@ -50,14 +50,14 @@ export function PaymentMatch() {
   const step = (d: number) => ({ initial: { opacity: 0, y: 16 }, animate: inView ? { opacity: 1, y: 0 } : {}, transition: { duration: 0.6, delay: d, ease } });
   return (
     <div className="match" ref={ref}>
-      <motion.div className="m-card" {...step(0)}><small>Order RLY-9QX4T asks for</small><b>₦12,500<span>.37</span></b><p>Every order gets its own exact amount.</p></motion.div>
+      <motion.div className="m-card" {...step(0)}><small>Order RLY-9QX4T asks for</small><b>₦12,500<span>.37</span></b><p>Each order gets its own exact amount.</p></motion.div>
       <motion.div className="m-arrow" {...step(0.25)}><span>→</span></motion.div>
-      <motion.div className="m-card" {...step(0.4)}><small>The bank reports</small><b>₦12,500<span>.37</span> arrived</b><p>Straight from the payment partner, not from the customer.</p></motion.div>
+      <motion.div className="m-card" {...step(0.4)}><small>Your account receives</small><b>₦12,500<span>.37</span> arrived</b><p>Confirmed by the bank, not by the customer.</p></motion.div>
       <motion.div className="m-arrow" {...step(0.65)}><span>→</span></motion.div>
-      <motion.div className="m-card ok" {...step(0.8)}><small>Relay</small><b>Paid ✓</b><p>Receipt to the customer, alert to you, money in your wallet.</p></motion.div>
+      <motion.div className="m-card ok" {...step(0.8)}><small>Relay</small><b>Paid ✓</b><p>Your customer gets a receipt. You get the money.</p></motion.div>
       <motion.div className="m-fake" {...step(1.1)}>
         <span className="m-x">✕</span>
-        <div><b>A screenshot, a forwarded alert or an “I’ve paid” message</b><p>None of these mark an order paid. Nothing ships until the money arrives.</p></div>
+        <div><b>Screenshots and “I’ve paid” messages</b><p>They never mark your order paid.</p></div>
       </motion.div>
     </div>
   );
