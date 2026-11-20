@@ -11,7 +11,7 @@ import { resolveSender, send, type OutboundContent } from '../services/channel';
 import type { AdminContext } from '../services/router';
 import { deleteCategory, listCategories, listProducts, moveCategoryProducts } from '../services/catalog';
 import { prepare, runTool, isAdminTool, type ToolCtx } from './admin-tools';
-import { actionById, actionForTool, followUps, handleActionTap, matchAction, reachFromWords, reachPlan, runAction, withFollowUps } from './actions';
+import { actionById, actionForTool, followUps, handleActionTap, markOutForDelivery, matchAction, reachFromWords, reachPlan, runAction, withFollowUps } from './actions';
 import type { Product } from '../domain/commerce';
 import { readFlowReply } from '../services/flows';
 import { handleFlowAnswer } from './flow-answers';
@@ -239,6 +239,10 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     await setAwaiting(null);
     const out = await runTool('restock', { product: m[1] ? `${p.name} ${m[1]}` : p.name, quantity: Number(m[2]) }, toolBase);
     return reply(typeof out === 'string' ? buttons(`✅ ${out}`, [['act:soldout', 'Sold out / restock'], ['act:menu', 'Menu']]) : out);
+  }
+  // The rider and arrival time for an order going out ("Musa 0803 123 4567, 1 hour").
+  if (state.awaiting?.startsWith('rider:') && !choiceId && text.trim() && !matchAction(text)) {
+    return reply(await markOutForDelivery({ ...actionCtx, arg: state.awaiting.slice(6) }, text.trim()));
   }
   if (state.awaiting === 'policies' && !choiceId && text.trim()) {
     await setAwaiting(null);

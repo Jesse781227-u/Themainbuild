@@ -72,9 +72,11 @@ export function parseAdminCommand(input: string): ToolChoice | null {
   if ((m = /^(?:delete|remove)\s+(?:product\s+)?(.+)$/i.exec(text)) && !/^delete my/i.test(text)) return { tool: 'deleteProduct', args: { product: m[1] } };
   if ((m = /^(?:mark\s+)?(rly-[a-z0-9]{5})\s+(?:as\s+)?paid$/i.exec(text))) return { tool: 'markPaid', args: { order: m[1] } };
   if ((m = /^cancel\s+(?:order\s+)?(rly-[a-z0-9]{5})$/i.exec(text))) return { tool: 'cancelOrder', args: { order: m[1] } };
-  if ((m = /^(rly-[a-z0-9]{5})\s+(ready|out for delivery|shipped|delivered|picked up|collected)$/i.exec(text))) {
-    const status = ({ ready: 'ready', 'out for delivery': 'out_for_delivery', shipped: 'out_for_delivery', delivered: 'delivered', 'picked up': 'picked_up', collected: 'picked_up' } as Record<string, string>)[m[2].toLowerCase()];
-    return { tool: 'updateFulfilment', args: { order: m[1], status } };
+  // "RLY-7PL2M out for delivery" · "RLY-7PL2M don leave with Musa 0803 123 4567, 1 hour"
+  if ((m = /^(rly-[a-z0-9]{5})\s+(?:is\s+)?(ready|out for delivery|shipped|dispatched|on the way|don leave|has left|left|delivered|picked up|collected)(?:\s*[,:-]?\s+(.+))?$/i.exec(text))) {
+    const status = ({ ready: 'ready', 'out for delivery': 'out_for_delivery', shipped: 'out_for_delivery', dispatched: 'out_for_delivery', 'on the way': 'out_for_delivery', 'don leave': 'out_for_delivery', 'has left': 'out_for_delivery', left: 'out_for_delivery', delivered: 'delivered', 'picked up': 'picked_up', collected: 'picked_up' } as Record<string, string>)[m[2].toLowerCase()];
+    if (m[3] && status !== 'out_for_delivery') return null;
+    return { tool: 'updateFulfilment', args: { order: m[1], status, ...(m[3] ? { rider: m[3] } : {}) } };
   }
   if ((m = /^delivery zone\s+(.+?),\s*([^,]+?)(?:,\s*(.+))?$/i.exec(text))) return { tool: 'addDeliveryZone', args: { area: m[1], fee: toNaira(m[2]), ...(m[3] ? { timeframe: m[3] } : {}) } };
   if ((m = /^broadcast\s*:?\s+([\s\S]+)$/i.exec(input.trim()))) return { tool: 'broadcast', args: { message: m[1].trim() } };

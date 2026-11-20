@@ -57,7 +57,7 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   assert.equal((await doc('products', fx.a.product)).stock, stockBefore - 3, 'stock is reserved');
   assert.equal(await doc('carts', convId(me)), null, 'the cart became the order');
   assert.ok(await doc('outbox', `${fx.a.id}_order_placed_${order.id}`), 'the owner is told');
-  assert.match((await shop(bot, me, { text: 'where is my order' }))[0].text, new RegExp(`Order ${order.ref}: waiting for payment`));
+  assert.match((await shop(bot, me, { text: 'where is my order' }))[0].text, new RegExp(`💸 \\*${order.ref}\\* · 3 × Product biz-a\\nWaiting for payment of`));
 });
 
 test('shop: delivery is quoted from the merchant zones', async () => {

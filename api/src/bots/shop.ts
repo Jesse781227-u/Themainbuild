@@ -24,6 +24,7 @@ import { describeLocation } from '../services/location';
 import { describeHours, openNow } from '../services/hours';
 import { policyText, POLICY_QUESTION } from '../services/policies';
 import { checkout, customerFee, policyFor, recentOrders } from '../services/orders';
+import { customerOrders, trackingCard, trackingDetail, type Tracked } from '../services/tracking';
 import { testOrder, testPaid } from './test-mode';
 import { paymentInstructions } from '../services/bachs';
 import type { ShopContext } from '../services/router';
@@ -165,7 +166,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   if (choice) {
     const [kind, id] = choice.split(':');
     if (kind === 'ask') return reply(state.pidgin ? 'Sure! Wetin you wan know? Ask about anything: prices, delivery, opening hours… 🙂' : 'Sure! What would you like to know? You can ask about prices, delivery, opening hours or anything else. 🙂');
-    if (kind === 'track') return orderStatus(db, conversationId, reply);
+    if (kind === 'track') return orderStatus(db, conversationId, reply, business);
     if (kind === 'again') return orderAgain(ctx, run, business, reply);
     if (kind === 'menu') return greet(ctx, business, customer, reply, { again: true });
     if (kind === 'cats') return greet(ctx, business, customer, reply, { again: true, page: Number(id) || 0 });
@@ -223,7 +224,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   switch (intent?.tool) {
     case 'viewCart': return showCart(ctx, business, reply);
     case 'checkout': return startCheckout(ctx, business, reply);
-    case 'orderStatus': return orderStatus(db, conversationId, reply);
+    case 'orderStatus': return orderStatus(db, conversationId, reply, business);
     case 'shopInfo': {
       const info = await shopInfo(db, business, String(intent.args.topic ?? ''));
       if (info) return reply(buttons(info, [['menu', 'See the menu'], ['cart', 'My cart']]));
@@ -403,7 +404,7 @@ async function shopAgent(ctx: ShopContext, run: Run, business: Business, custome
     shopInfo: topic => shopInfo(db, business, topic, run.state.pidgin),
     savedAddress: (customer as (Customer & { savedAddress?: string | null }) | null)?.savedAddress ?? null,
     canPickup: business.fulfilment !== 'delivery',
-    orders: async () => orders.filter(o => o.businessId === business.id).slice(0, 3).map(o => ({ ref: o.ref, status: o.status === 'paid' ? `paid, ${o.fulfilment.replace(/_/g, ' ')}` : o.status.replace(/_/g, ' '), total: formatKobo(o.payAmountKobo), items: o.items.map(i => `${i.qty} × ${i.name}`), when: o.createdAt.slice(0, 10) })),
+    orders: async () => orders.filter(o => o.businessId === business.id).slice(0, 3).map(o => { const t = o as Tracked; return { ref: o.ref, status: o.status === 'paid' ? `paid, ${o.fulfilment.replace(/_/g, ' ')}` : o.status.replace(/_/g, ' '), total: formatKobo(o.payAmountKobo), items: o.items.map(i => `${i.qty} × ${i.name}`), when: o.createdAt.slice(0, 10), ...(o.status === 'paid' ? { tracking: trackingDetail(t, shopAddress(business)) } : {}), ...(t.rider ? { rider: t.rider } : {}), ...(t.eta ? { arriving: t.eta } : {}) }; }),
     orderAgain: async words => { if (words) await reply(intro(words)); await orderAgain(ctx, run, business, reply); },
     checkoutTo: async (words, how) => {
       if (words) await reply(intro(words));
@@ -459,7 +460,7 @@ async function shopIntent(lower: string, text: string, llm: LLMProvider | null, 
   if (opts.fuzzy !== false && /^(hi|hello|hey|good (morning|afternoon|evening)|menu|start|catalog(ue)?|price ?list|what do you (have|sell)\??)\b/.test(lower)) return { tool: 'showMenu', args: {} };
   if (/^(cart|my cart|view cart|basket)$/.test(lower)) return { tool: 'viewCart', args: {} };
   if (/^(checkout|check out|pay|place order|order now)$/.test(lower)) return { tool: 'checkout', args: {} };
-  if (/\b(where is my order|order status|my order|track)\b/.test(lower)) return { tool: 'orderStatus', args: {} };
+  if (/\b(where is my order|order status|my order|track)\b/.test(lower) || TRACK_QUESTION.test(lower)) return { tool: 'orderStatus', args: {} };
   if (POLICY_QUESTION.test(lower)) return { tool: 'shopInfo', args: { topic: 'policy' } };
   if (/\b(what time|opening hours|are you open|open today|open now|when do you (open|close)|closing time|close today)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'hours' } };
   if (/\b(where are you|where is (the )?(shop|store)|your (address|location)|located)\b/.test(lower)) return { tool: 'shopInfo', args: { topic: 'location' } };
@@ -713,12 +714,15 @@ async function placeOrder(ctx: ShopContext, deps: BotDeps, business: Business, d
   await notifyOwner(ctx.db, deps, business, 'order_placed', placed, order.id, buttons(placed, [[`act:order:${order.ref}`, 'View order'], [`act:msgcust:${order.ref}`, 'Message customer'], ['act:menu', 'Menu']]));
 }
 
-async function orderStatus(db: Firestore, customerId: string, reply: Reply) {
-  const [o] = await recentOrders(db, [['customerId', '==', customerId]], 1);
-  if (!o) return reply(buttons("You don't have any orders with us yet.", [['menu', 'See the menu']]));
-  const status = o.status === 'awaiting_payment' ? `waiting for payment of ${formatKobo(o.payAmountKobo)}` : o.status === 'paid' ? `paid, ${o.fulfilment.replace(/_/g, ' ')}` : o.status;
-  return reply(`Order ${o.ref}: ${status}.`);
+// "Where is my order?": a tracker for each open order (or the last one), with the rider and arrival time.
+async function orderStatus(db: Firestore, customerId: string, reply: Reply, business?: Business | null) {
+  const orders = await customerOrders(db, customerId);
+  if (!orders.length) return reply(buttons("You don't have any orders with us yet.", [['menu', 'See the menu']]));
+  const address = business ? shopAddress(business) : null;
+  return reply(buttons(orders.map(o => trackingCard(o, address)).join('\n\n').slice(0, 1000), [['track', 'Check again'], ['menu', 'See the menu']]));
 }
+// "Where is the rider?", "when e go reach?", "has my food left?"
+const TRACK_QUESTION = /\b(rider|dispatch rider|delivery (man|guy|person)|where (is|be|dey) (the |my )?(rider|food|package|parcel|delivery|order)|when (will|e go|go) (it|e|my order|my food|the rider)? ?(reach|arrive|come)|e don (reach|comot|leave)|has (it|my order|my food) left|how far (with )?my order)\b/;
 
 async function handOver(ctx: ShopContext, deps: BotDeps, business: Business, customer: Customer | null, reply: Reply) {
   if (ctx.test) return reply(`🧪 In your real shop, this tells the customer you'll reply, alerts you here, and the assistant goes quiet in that chat until you send HANDBACK. (Test mode: nothing was sent.)`);

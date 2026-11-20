@@ -21,6 +21,7 @@ import { adjustInventory, createCategories, deleteCategory, deleteProduct, findC
 import { saveZone } from '../services/delivery';
 import { markOrderPaid } from '../services/on-paid';
 import { cancelOrder, findOrderByRef, recentOrders } from '../services/orders';
+import { parseRider, trackingDetail, type Tracked } from '../services/tracking';
 import { createSignupSession } from '../services/signup';
 import { createBroadcast, quoteBroadcast, quoteText, shopLink } from '../services/broadcasts';
 import { customerConversationId } from '../services/conversations';
@@ -419,13 +420,17 @@ export const adminTools = {
     },
   }),
   updateFulfilment: def({
-    spec: { name: 'updateFulfilment', description: 'Update delivery/pickup progress of a paid order.', params: { order: { type: 'string', description: 'Order number' }, status: { type: 'string', description: 'New status', enum: ['ready', 'out_for_delivery', 'delivered', 'picked_up'] } }, required: ['order', 'status'] },
-    schema: z.object({ order: ref, status: z.enum(['ready', 'out_for_delivery', 'delivered', 'picked_up']) }),
+    spec: { name: 'updateFulfilment', description: 'Update delivery/pickup progress of a paid order. For out_for_delivery, pass who is delivering and when it should arrive if the owner said (e.g. "Musa 0803 123 4567, 1 hour").', params: { order: { type: 'string', description: 'Order number' }, status: { type: 'string', description: 'New status', enum: ['ready', 'out_for_delivery', 'delivered', 'picked_up'] }, rider: { type: 'string', description: 'Out for delivery only: rider name and/or phone, and arrival time, in the owner words' } }, required: ['order', 'status'] },
+    schema: z.object({ order: ref, status: z.enum(['ready', 'out_for_delivery', 'delivered', 'picked_up']), rider: z.string().trim().max(160).optional() }),
     async run(a, ctx) {
       const o = await oneOrder(ctx, a.order);
       if (o.status !== 'paid') return `${o.ref} isn't paid yet.`;
       const at = new Date().toISOString();
-      await ctx.db.update(ctx.db.doc(C.orders, o.id), { fulfilment: a.status, updatedAt: at });
+      const given = a.status === 'out_for_delivery' && a.rider ? parseRider(a.rider) : null;
+      const stamp = ({ ready: 'readyAt', out_for_delivery: 'outAt', delivered: 'deliveredAt', picked_up: 'deliveredAt' } as const)[a.status];
+      const patch = { fulfilment: a.status, [stamp]: at, updatedAt: at, ...(given?.rider ? { rider: given.rider } : {}), ...(given?.eta ? { eta: given.eta } : {}) };
+      await ctx.db.update(ctx.db.doc(C.orders, o.id), patch);
+      const tracked = { ...o, ...patch } as Tracked;
       // Tell the customer, in the shop's own words (MESSAGES). Once per status; inside the 24-hour window only.
       const key = ({ ready: 'orderReady', out_for_delivery: 'outForDelivery', delivered: 'delivered', picked_up: 'delivered' } as const)[a.status];
       const customer = (await ctx.db.get(ctx.db.doc(C.customers, o.customerId))) as { phone?: string; name?: string } | null;
@@ -435,11 +440,12 @@ export const adminTools = {
         told = await ctx.db.create(ctx.db.doc(C.outbox, id), {
           id, businessId: o.businessId, audience: 'customer', channel: o.channel, to: customer.phone,
           conversationId: customerConversationId(o.businessId, o.channel, customer.phone), kind: `order_${a.status}`,
-          text: renderMessage(ctx.business, key, { customer: customer.name, order: o.ref }), status: 'pending', attempts: 0, createdAt: at,
+          text: [renderMessage(ctx.business, key, { customer: customer.name, order: o.ref }), a.status === 'out_for_delivery' ? trackingDetail(tracked) : ''].filter(Boolean).join('\n\n'), status: 'pending', attempts: 0, createdAt: at,
         });
         if (told) await ctx.deps.enqueue([{ kind: 'outbox', messageId: id }]);
       }
-      return `${o.ref}: ${a.status.replace(/_/g, ' ')}.${told ? ' The customer has been told.' : ''}`;
+      const extra = a.status === 'out_for_delivery' && (tracked.rider || tracked.eta) ? ` ${[tracked.rider ? `Rider: ${[tracked.rider.name, tracked.rider.phone].filter(Boolean).join(', ')}` : '', tracked.eta ? `arriving ${tracked.eta}` : ''].filter(Boolean).join(', ')}.` : '';
+      return `${o.ref}: ${a.status.replace(/_/g, ' ')}.${extra}${told ? ' The customer has been told.' : ''}`;
     },
   }),
   addDeliveryZone: def({

@@ -192,6 +192,31 @@ async function restockAsk(c: ActionCtx): Promise<Out> {
     : `How many *${p.name}* are back in stock? Send a number, e.g. *10*.`);
 }
 
+// The one button that moves a paid order on: Mark ready → Out for delivery (or Picked up) → Delivered.
+function nextStep(o: Pick<Order, 'ref' | 'status' | 'fulfilment' | 'delivery'>): [string, string] | null {
+  if (o.status !== 'paid') return null;
+  const pickup = o.delivery?.method === 'pickup';
+  if (o.fulfilment === 'pending') return [`act:ready:${o.ref}`, 'Mark ready'];
+  if (o.fulfilment === 'ready') return pickup ? [`act:delivered:${o.ref}`, 'Picked up'] : [`act:out:${o.ref}`, 'Out for delivery'];
+  if (o.fulfilment === 'out_for_delivery') return [`act:delivered:${o.ref}`, 'Mark delivered'];
+  return null;
+}
+
+// Out for delivery: who's taking it and when it should arrive (one line), or Skip.
+async function outAsk(c: ActionCtx): Promise<Out> {
+  const o = await findOrder(c, c.arg);
+  if (!o || o.status !== 'paid') return buttons("I couldn't find that paid order.", [['act:orders', 'Orders'], ['act:menu', 'Menu']]);
+  await c.setAwaiting(`rider:${o.ref}`);
+  return buttons(`🛵 Who's taking *${o.ref}*, and when should it arrive?\nSend e.g. *Musa 0803 123 4567, 1 hour*. The customer sees it.`, [[`act:outskip:${o.ref}`, 'Skip'], ['act:cancel', 'Cancel'], ['act:menu', 'Menu']]);
+}
+
+async function markOut(c: ActionCtx, rider: string | null): Promise<Out> {
+  await c.setAwaiting(null);
+  const out = await runTool('updateFulfilment', { order: c.arg ?? '', status: 'out_for_delivery', ...(rider ? { rider } : {}) }, c);
+  return typeof out === 'string' ? buttons(`🛵 ${out}`, [[`act:delivered:${c.arg}`, 'Mark delivered'], ['act:orders', 'To deliver'], ['act:menu', 'Menu']]) : out;
+}
+export const markOutForDelivery = markOut;
+
 async function viewOrder(c: ActionCtx): Promise<Out> {
   const o = await findOrder(c, c.arg);
   if (!o) return "I couldn't find that order.";
@@ -204,7 +229,7 @@ async function viewOrder(c: ActionCtx): Promise<Out> {
     customer?.name || customer?.phone ? `Customer: ${[customer.name, customer.phone].filter(Boolean).join(' · ')}` : '',
   ].filter(Boolean);
   const next: [string, string][] = o.status === 'paid'
-    ? [[`act:ready:${o.ref}`, 'Mark ready'], [`act:msgcust:${o.ref}`, 'Message customer'], ['act:menu', 'Menu']]
+    ? [nextStep(o) ?? [`act:msgcust:${o.ref}`, 'Message customer'], ...(nextStep(o) ? [[`act:msgcust:${o.ref}`, 'Message customer'] as [string, string]] : []), ['act:menu', 'Menu']]
     : [[`act:msgcust:${o.ref}`, 'Message customer'], ['act:owing', 'Who owes me'], ['act:menu', 'Menu']];
   return buttons(lines.join('\n'), next);
 }
@@ -529,7 +554,14 @@ export const ACTIONS: OwnerAction[] = [
     return `✅ All of *${p.name}* is marked sold out.`;
   } },
   { id: 'msgcust', hint: 'Open the chat with an order\'s customer', run: messageCustomer },
-  { id: 'ready', hint: 'Mark a paid order ready', next: [['orders', 'To deliver'], ['menu', 'Menu']], async run(c) { return runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c); } },
+  { id: 'ready', hint: 'Mark a paid order ready', async run(c) {
+    const out = await runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c);
+    const o = await findOrder(c, c.arg);
+    const step = o ? nextStep(o) : null;
+    return typeof out === 'string' ? buttons(out, [...(step ? [step] : []), ['act:orders', 'To deliver'], ['act:menu', 'Menu']]) : out;
+  } },
+  { id: 'out', hint: 'This order has left the shop: add the rider and arrival time', run: outAsk },
+  { id: 'outskip', hint: 'Out for delivery, without rider details', run: c => markOut(c, null) },
   { id: 'photo', hint: 'Add a photo to a product', async run(c) {
     const p = c.arg ? ((await c.db.get(c.db.doc(C.products, c.arg))) as Product | null) : null;
     if (!p || p.businessId !== c.business.id || p.deletedAt) return 'That product is gone.';
