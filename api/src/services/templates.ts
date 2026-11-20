@@ -36,9 +36,10 @@ export function fillVariables(t: Pick<ReachTemplate, 'variables'>, values: Parti
   return { ok: true, params: t.variables.map(v => String(values[v]).trim().slice(0, v === 'message' ? 900 : 120)) };
 }
 
-// The library in Meta's create-template format (what the submit script sends).
-export function templatePayloads() {
-  return TEMPLATES.map(t => {
+// The library in Meta's create-template format. Image headers need an upload handle (a sample
+// picture Meta reviews); without one those templates are left out.
+export function templatePayloads(opts: { headerHandle?: string | null; placeholder?: boolean } = { placeholder: true }) {
+  return TEMPLATES.filter(t => t.header !== 'image' || opts.headerHandle || opts.placeholder).map(t => {
     const problems: string[] = [];
     if (!/^[a-z0-9_]{1,512}$/.test(t.name)) problems.push('name: lower case, numbers and _ only');
     const used = [...t.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => Number(m[1]));
@@ -46,7 +47,7 @@ export function templatePayloads() {
     if (t.example.length !== t.variables.length) problems.push('one example per variable');
     if (problems.length) throw new Error(`TEMPLATE_INVALID ${t.name}: ${problems.join('; ')}`);
     const components: Record<string, unknown>[] = [];
-    if (t.header === 'image') components.push({ type: 'HEADER', format: 'IMAGE', example: { header_handle: ['<upload handle>'] } });
+    if (t.header === 'image') components.push({ type: 'HEADER', format: 'IMAGE', example: { header_handle: [opts.headerHandle ?? '<upload handle>'] } });
     components.push({ type: 'BODY', text: t.body, example: { body_text: [t.example] } });
     if (t.carousel) components.push({ type: 'CAROUSEL', cards: [] }); // cards are built from products when sent
     return { name: t.name, category: t.category, language: t.language, components };
@@ -59,4 +60,42 @@ export async function templateState(db: Firestore, businessId: string, name: str
 }
 export async function setTemplateState(db: Firestore, businessId: string, name: string, status: TemplateState, extra: Record<string, unknown> = {}) {
   await db.set(db.doc(C.templateStatus, `${businessId}_${name}`), { businessId, name, status, updatedAt: new Date().toISOString(), ...extra }, { merge: true });
+}
+
+// ── Submitting a shop's templates to its own WhatsApp Business account ──
+// Done when the shop goes live (and by ops on request). Each template's state becomes "pending"
+// until Meta's review webhook (statuses.ts) says approved or rejected. Never logs the token.
+// TODO(jesse): verify the resumable-upload steps and the "already exists" error on a real account.
+type Fetch = typeof fetch;
+const graph = (cfg: { META_GRAPH_VERSION: string }, path: string) => `https://graph.facebook.com/${cfg.META_GRAPH_VERSION}/${path}`;
+
+// Meta needs a sample picture for image-header templates: the shop's first product photo.
+async function uploadSample(doFetch: Fetch, cfg: { META_GRAPH_VERSION: string; META_APP_ID?: string }, token: string, imageUrl: string) {
+  if (!cfg.META_APP_ID) return null;
+  const img = await doFetch(imageUrl);
+  if (!img.ok) return null;
+  const bytes = await img.arrayBuffer();
+  const type = img.headers.get('content-type') ?? 'image/jpeg';
+  const start = await doFetch(`${graph(cfg, `${encodeURIComponent(cfg.META_APP_ID)}/uploads`)}?file_name=sample.jpg&file_length=${bytes.byteLength}&file_type=${encodeURIComponent(type)}`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+  const session = ((await start.json().catch(() => ({}))) as { id?: string }).id;
+  if (!start.ok || !session) return null;
+  const up = await doFetch(graph(cfg, session), { method: 'POST', headers: { authorization: `OAuth ${token}`, file_offset: '0' }, body: bytes });
+  return ((await up.json().catch(() => ({}))) as { h?: string }).h ?? null;
+}
+
+export async function submitTemplates(db: Firestore, cfg: { META_GRAPH_VERSION: string; META_APP_ID?: string }, shop: { businessId: string; wabaId: string; token: string; sampleImageUrl?: string | null }, doFetch: Fetch) {
+  const handle = shop.sampleImageUrl ? await uploadSample(doFetch, cfg, shop.token, shop.sampleImageUrl).catch(() => null) : null;
+  const results: { name: string; ok: boolean; error?: string }[] = [];
+  for (const p of templatePayloads({ headerHandle: handle })) {
+    if ((await templateState(db, shop.businessId, p.name)) !== 'not_submitted') continue;
+    const res = await doFetch(graph(cfg, `${encodeURIComponent(shop.wabaId)}/message_templates`), { method: 'POST', headers: { authorization: `Bearer ${shop.token}`, 'content-type': 'application/json' }, body: JSON.stringify(p) });
+    const body = (await res.json().catch(() => ({}))) as { id?: string; status?: string; error?: { message?: string; error_subcode?: number } };
+    const exists = /already exists/i.test(body.error?.message ?? '');
+    if (res.ok || exists) {
+      const state = String(body.status ?? 'PENDING').toUpperCase() === 'APPROVED' ? 'approved' : 'pending';
+      await setTemplateState(db, shop.businessId, p.name, state, { templateId: body.id ?? null });
+      results.push({ name: p.name, ok: true });
+    } else results.push({ name: p.name, ok: false, error: String(body.error?.message ?? res.status).slice(0, 160) });
+  }
+  return results;
 }

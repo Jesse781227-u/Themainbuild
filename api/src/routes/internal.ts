@@ -5,6 +5,7 @@
 //   POST /api/v1/internal/kyc/:businessId    { "status": "verified" } or { "status": "rejected", "reason": "..." }
 // The owner is told on WhatsApp either way. A failed payout goes back into the wallet.
 import { Hono } from 'hono';
+import { submitShopTemplates } from '../services/go-live';
 import { z } from 'zod';
 import { getConfig } from '../config';
 import { C, getDb } from '../db';
@@ -23,7 +24,8 @@ const payoutBody = z.union([
 ]);
 const kycBody = z.union([z.object({ status: z.literal('verified') }), z.object({ status: z.literal('rejected'), reason: z.string().trim().max(200).optional() })]);
 
-export function internalRoutes() {
+export function internalRoutes(deps: { fetch?: typeof fetch } = {}) {
+  const internalFetch = deps.fetch;
   const r = new Hono<{ Bindings: Env }>();
 
   r.use('*', async (c, next) => {
@@ -68,6 +70,15 @@ export function internalRoutes() {
     }
     log('info', 'payout_settled', { businessId: existing.businessId, payoutId: id, status: p.status });
     return c.json({ success: true, payout: p });
+  });
+
+  // Send (or resend) a shop's marketing templates to Meta for review.
+  r.post('/templates/:businessId', async c => {
+    const db = getDb(c.env);
+    const business = (await db.get(db.doc(C.businesses, c.req.param('businessId')))) as Business | null;
+    if (!business) return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'No such shop.' } }, 404);
+    const results = await submitShopTemplates(db, getConfig(c.env), { ...business, id: c.req.param('businessId') }, internalFetch ?? fetch);
+    return c.json({ success: true, results });
   });
 
   r.post('/kyc/:businessId', async c => {

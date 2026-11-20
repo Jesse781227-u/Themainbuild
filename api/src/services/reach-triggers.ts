@@ -18,6 +18,7 @@ import { recentOrders } from './orders';
 import { executeCampaign, planCampaign, TRIGGER_LABEL, triggerOn, type Campaign, type ReachCustomer, type TriggerType } from './reach';
 import { campaignResults } from './reach-results';
 import { monthKey } from './messaging-costs';
+import { activeShops } from './active-shops';
 
 const DAY = 86_400_000;
 type Deps = { enqueue: (jobs: { kind: 'outbox'; messageId: string }[]) => Promise<void> };
@@ -159,12 +160,12 @@ export async function weeklySummaries(db: Firestore, now = new Date()) {
   if (new Date(now.getTime() + 3_600_000).getUTCDay() !== 1) return [];
   const week = lagosDate(now);
   const ids: string[] = [];
-  for (const b of (await db.query(C.businesses, [['status', '==', 'active']], { limit: 500 })) as unknown as (Business & { _id: string })[]) {
+  for await (const b of activeShops(db)) {
     if (!b.ownerPhone) continue;
-    const s = await weeklySummary(db, b.id ?? b._id, now);
+    const s = await weeklySummary(db, b.id, now);
     if (!s.text) continue;
-    const id = `${b.id ?? b._id}_reachweek_${week}`;
-    if (await db.create(db.doc(C.outbox, id), { id, businessId: b.id ?? b._id, audience: 'owner', channel: 'whatsapp', to: b.ownerPhone, conversationId: adminConversationId(b.ownerPhone), kind: 'reach_weekly', text: s.text, buttons: [{ id: 'act:reach', title: 'Smart Reach' }], status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(id);
+    const id = `${b.id}_reachweek_${week}`;
+    if (await db.create(db.doc(C.outbox, id), { id, businessId: b.id, audience: 'owner', channel: 'whatsapp', to: b.ownerPhone, conversationId: adminConversationId(b.ownerPhone), kind: 'reach_weekly', text: s.text, buttons: [{ id: 'act:reach', title: 'Smart Reach' }], status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(id);
   }
   return ids;
 }
@@ -172,8 +173,7 @@ export async function weeklySummaries(db: Firestore, now = new Date()) {
 // Daily: Relay's suggestion and the regulars / win-back updates for every live shop.
 export async function dailyReach(db: Firestore, cfg: Config, deps: Deps, now = new Date()) {
   const ids: string[] = [];
-  for (const b of (await db.query(C.businesses, [['status', '==', 'active']], { limit: 500 })) as unknown as (Business & { _id: string })[]) {
-    const business = { ...b, id: b.id ?? b._id };
+  for await (const business of activeShops(db)) {
     const s = await suggestReach(db, business, now).catch(() => null);
     if (s) ids.push(s);
     await regularsAndWinBack(db, cfg, deps, business, now).catch(() => null);

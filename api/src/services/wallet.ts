@@ -50,6 +50,7 @@ export async function getWallet(db: Firestore, businessId: string): Promise<Wall
     if (e.type === 'payout') outKobo += Number(e.amountKobo ?? 0);
     if (e.type === 'payout_reversal') outKobo -= Number(e.amountKobo ?? 0);
     if (e.type === 'message_cost') outKobo += Number(e.amountKobo ?? 0);
+    if (e.type === 'message_refund') outKobo -= Number(e.amountKobo ?? 0);
   }
   const fresh: Wallet = { businessId, availableKobo: inKobo - outKobo, lifetimeInKobo: inKobo, lifetimeOutKobo: outKobo, payoutDay: w?.payoutDay ?? null, payoutDayKobo: w?.payoutDayKobo ?? 0, initialised: true, updatedAt: iso() };
   await db.set(ref, { ...fresh });

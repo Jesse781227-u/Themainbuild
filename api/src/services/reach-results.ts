@@ -20,7 +20,7 @@ function owner(sends: Send[], at: string) {
   return before.sort((a, b) => b.sentAt!.localeCompare(a.sentAt!))[0] ?? null;
 }
 
-export interface CampaignResult { sent: number; replied: number; ordered: number; revenueKobo: number; costKobo: number; perNaira: number | null }
+export interface CampaignResult { read: number; sent: number; replied: number; ordered: number; revenueKobo: number; costKobo: number; perNaira: number | null }
 
 export async function campaignResults(db: Firestore, campaignId: string, opts: { write?: boolean } = {}): Promise<CampaignResult> {
   const mine = ((await db.query(C.sends, [['campaignId', '==', campaignId]], { limit: 2000 })) as unknown as Send[]).filter(reached);
@@ -40,11 +40,11 @@ export async function campaignResults(db: Firestore, campaignId: string, opts: {
     }
   }
   const costKobo = mine.reduce((t, s) => t + (s.cost ?? 0), 0);
-  return { sent: mine.length, replied, ordered, revenueKobo, costKobo, perNaira: costKobo ? Math.round((revenueKobo / costKobo) * 10) / 10 : null };
+  return { read: mine.filter(s => s.status === 'read').length, sent: mine.length, replied, ordered, revenueKobo, costKobo, perNaira: costKobo ? Math.round((revenueKobo / costKobo) * 10) / 10 : null };
 }
 
 export function resultText(name: string, r: CampaignResult) {
-  return `📊 *${name}*: sent ${r.sent} → ${r.replied} replied → ${r.ordered} ordered → ${formatKobo(r.revenueKobo)}. Cost ${formatKobo(r.costKobo)}${r.perNaira !== null ? `, so ₦${r.perNaira} back for every ₦1` : ''}.`;
+  return `📊 *${name}*: sent ${r.sent}${r.read ? ` (${r.read} read)` : ''} → ${r.replied} replied → ${r.ordered} ordered → ${formatKobo(r.revenueKobo)}. Cost ${formatKobo(r.costKobo)}${r.perNaira !== null ? `, so ₦${r.perNaira} back for every ₦1` : ''}.`;
 }
 
 // Campaigns sent more than 48 hours ago and not reported yet → the owner's outbox. Returns the ids.

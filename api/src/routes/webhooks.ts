@@ -7,6 +7,7 @@ import { log } from '../lib/logger';
 import { failedStatuses, parseMetaWebhook, saveInbound } from '../services/inbound';
 import { recordBachsPayment } from '../services/payments';
 import { enqueue } from '../services/queue';
+import { applyStatuses, applyTemplateUpdates, parseStatuses, parseTemplateUpdates } from '../services/statuses';
 import { bachsAdapter, type BachsAdapter } from '../services/bachs';
 
 export function webhooks(deps: { bachs?: BachsAdapter } = {}) {
@@ -32,6 +33,11 @@ export function webhooks(deps: { bachs?: BachsAdapter } = {}) {
     try { body = JSON.parse(new TextDecoder().decode(raw)); } catch { return c.body(null, 400); }
     for (const s of failedStatuses(body)) log('warn', 'whatsapp_delivery_failed', s);
     const db = getDb(c.env);
+    // Delivery receipts and template reviews: small updates, done here (never blocks the 200).
+    try {
+      await applyStatuses(db, parseStatuses(body));
+      await applyTemplateUpdates(db, parseTemplateUpdates(body));
+    } catch (e) { log('warn', 'meta_status_update_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 160) }); }
     const ids: string[] = [];
     for (const item of parseMetaWebhook(body)) {
       const id = await saveInbound(db, item);

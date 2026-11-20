@@ -10,6 +10,7 @@ import type { Product } from '../domain/commerce';
 import { tracksStock } from '../domain/commerce';
 import { adminConversationId } from './conversations';
 import { recentOrders } from './orders';
+import { activeShops } from './active-shops';
 
 export interface DailySummary { date: string; ordersPaid: number; salesKobo: number; deliveryKobo: number; unpaid: number; lowStock: string[] }
 
@@ -37,10 +38,8 @@ export function summaryText(name: string, s: DailySummary) {
 
 // Queues one summary per business with an owner. Returns the outbox ids to enqueue.
 export async function queueDailySummaries(db: Firestore, now = new Date()) {
-  // TODO(jesse): page through businesses once there are more than a few hundred.
-  const businesses = (await db.query(C.businesses, [['status', '==', 'active']], { limit: 500 })) as unknown as Business[];
   const ids: string[] = [];
-  for (const b of businesses) {
+  for await (const b of activeShops(db)) {
     if (!b.ownerPhone) continue;
     const s = await buildSummary(db, b.id, now);
     const id = `${b.id}_summary_${s.date}`;

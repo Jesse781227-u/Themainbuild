@@ -19,6 +19,9 @@ import { trackStep } from './onboarding-events';
 import { liveQuestion, type Onboarding } from '../bots/onboarding';
 import { posterPng, shopColour, wrap } from './placeholder';
 import { resolveSender } from './channel';
+import { submitTemplates } from './templates';
+import { getWhatsAppConnection } from './whatsapp';
+import { listProducts } from './catalog';
 
 export const goLivePath = (businessId: string) => `/golive/${businessId}.png`;
 const digitsOf = (s: string | null | undefined) => String(s ?? '').replace(/\D/g, '');
@@ -66,6 +69,9 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
     if (url) { await db.update(db.doc(C.businesses, business.id), { profilePhotoUrl: url, updatedAt: at }); business.profilePhotoUrl = url; }
   }
 
+  // Smart Reach: send the shop's marketing templates to Meta for review (paid updates need them).
+  if (cfg.META_SEND_MODE === 'live' && opts.fetch) await submitShopTemplates(db, cfg, business, opts.fetch).catch(e => log('warn', 'templates_submit_failed', { businessId: business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) }));
+
   const number = business.whatsappDisplayNumber ?? '';
   const link = digitsOf(number) ? `https://wa.me/${digitsOf(number)}` : null;
   const step: Onboarding['step'] = business.profilePhotoUrl ? 'live_contacts' : 'live_photo';
@@ -94,4 +100,14 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
   // TODO(jesse): when the owner agreed (business.importContacts), add the contacts WhatsApp syncs for
   // coexistence numbers to customers. The sync webhook's format is unverified (see signup.ts).
   await opts.enqueue(ids.map(messageId => ({ kind: 'outbox' as const, messageId })));
+}
+
+export async function submitShopTemplates(db: Firestore, cfg: Config, business: Business, doFetch: typeof fetch) {
+  const conn = await getWhatsAppConnection(db, business.id);
+  if (!conn?.wabaId) return [];
+  const sender = await resolveSender(db, cfg, { businessId: business.id });
+  const sample = (await listProducts(db, business.id)).find(p => p.images?.[0])?.images[0] ?? null;
+  const results = await submitTemplates(db, cfg, { businessId: business.id, wabaId: conn.wabaId, token: sender.accessToken, sampleImageUrl: sample }, doFetch);
+  log('info', 'templates_submitted', { businessId: business.id, ok: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length });
+  return results;
 }

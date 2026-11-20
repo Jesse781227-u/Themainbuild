@@ -148,13 +148,18 @@ export class Firestore {
 
   async get(ref: DocRef, transaction?: string) { return (await this.getAll([ref], transaction))[0]; }
 
-  async query(collection: string, filters: Filter[] = [], opts: { orderBy?: [string, 'asc' | 'desc'][]; limit?: number; transaction?: string } = {}): Promise<(Doc & { _id: string })[]> {
+  async query(collection: string, filters: Filter[] = [], opts: { orderBy?: [string, 'asc' | 'desc'][]; limit?: number; transaction?: string; afterId?: string | null } = {}): Promise<(Doc & { _id: string })[]> {
     const ops: Record<Op, string> = { '==': 'EQUAL', '!=': 'NOT_EQUAL', '<': 'LESS_THAN', '<=': 'LESS_THAN_OR_EQUAL', '>': 'GREATER_THAN', '>=': 'GREATER_THAN_OR_EQUAL', in: 'IN', 'array-contains': 'ARRAY_CONTAINS' };
     const fieldFilters = filters.map(([field, op, value]) => ({ fieldFilter: { field: { fieldPath: quotePath(field) }, op: ops[op], value: encodeValue(value) } }));
     const structuredQuery: Record<string, unknown> = { from: [{ collectionId: collection }] };
     if (fieldFilters.length === 1) structuredQuery.where = fieldFilters[0];
     else if (fieldFilters.length > 1) structuredQuery.where = { compositeFilter: { op: 'AND', filters: fieldFilters } };
     if (opts.orderBy) structuredQuery.orderBy = opts.orderBy.map(([f, d]) => ({ field: { fieldPath: quotePath(f) }, direction: d === 'asc' ? 'ASCENDING' : 'DESCENDING' }));
+    // Paging by document id: ordered by id, starting after the last one seen.
+    if (opts.afterId !== undefined) {
+      structuredQuery.orderBy = [{ field: { fieldPath: '__name__' }, direction: 'ASCENDING' }];
+      if (opts.afterId) structuredQuery.startAt = { values: [{ referenceValue: this.name(this.doc(collection, opts.afterId)) }], before: false };
+    }
     if (opts.limit) structuredQuery.limit = opts.limit;
     const rows = await this.call<{ document?: { name: string; fields?: Record<string, Value> } }[]>('runQuery', { structuredQuery, ...(opts.transaction ? { transaction: opts.transaction } : {}) });
     return rows.filter(r => r.document).map(r => ({ ...decodeFields(r.document!.fields ?? {}), _id: r.document!.name.split('/').pop()! }));

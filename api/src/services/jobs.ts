@@ -13,6 +13,7 @@ import { dueStatusReports } from './status-posts';
 import { abandonedCarts, releaseQueuedSends } from './reach';
 import { dueCampaignReports } from './reach-results';
 import { refreshSegments } from './segments';
+import { activeShops } from './active-shops';
 import { afterDelivery, dailyReach, weeklySummaries } from './reach-triggers';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
@@ -28,7 +29,7 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
     const cfg = getConfig(env);
     const reach = [...(await dailyReach(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now)), ...(await weeklySummaries(db, now))];
     // Smart Reach: every live shop's group sizes, fresh each night.
-    for (const b of await db.query(C.businesses, [['status', '==', 'active']], { limit: 500 })) await refreshSegments(db, b._id as string, now).catch(() => undefined);
+    for await (const b of activeShops(db)) await refreshSegments(db, b.id, now).catch(() => undefined);
     await enqueue(env, [...ids, ...nudges, ...reach].map(messageId => ({ kind: 'outbox' as const, messageId })));
     log('info', 'daily_summaries_queued', { count: ids.length, nudges: nudges.length });
     return { summaries: ids.length, nudges: nudges.length };
