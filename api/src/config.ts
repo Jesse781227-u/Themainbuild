@@ -74,8 +74,10 @@ const schema = z.object({
   BACHS_API_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   BACHS_API_KEY: optionalString,
   BACHS_WEBHOOK_SECRET: optionalString,
-  FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(100),
-  FEE_CAP_KOBO: z.coerce.number().int().min(0).default(200_000),
+  FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(300),        // Relay's fee: 3% of the goods
+  FEE_CAP_KOBO: z.coerce.number().int().min(0).default(200_000),            // at most ₦2,000
+  PROCESSOR_FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(150), // Bachs: 1.5% of every transfer (shown to owners only as part of one total)
+  PROCESSOR_FEE_CAP_KOBO: z.coerce.number().int().min(0).default(200_000),  // at most ₦2,000
   HOLD_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(30),
   // Relay's own support line: CALL from an owner alerts this number on the Admin Bot.
   SUPPORT_PHONE: z.string().regex(/^\+\d{8,15}$/).default('+2349013406288'),

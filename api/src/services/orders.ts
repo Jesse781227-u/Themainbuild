@@ -2,7 +2,7 @@ import { C } from '../db';
 import type { Config } from '../config';
 import type { Firestore, Transaction } from '../lib/firestore';
 import { increment } from '../lib/firestore';
-import { feeKobo, type FeePolicy } from '../lib/money';
+import { formatKobo, orderFees, pct, type FeePolicy } from '../lib/money';
 import { addMinutes } from '../lib/time';
 import { orderRef, randomId } from '../lib/crypto';
 import { freeOffer, redeemOffer } from './offers';
@@ -10,16 +10,22 @@ import type { Business } from '../domain/business';
 import type { Cart, CartLine, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
 import { hasStock, lineName, priceOf, stockPatch, variantOf } from '../domain/commerce';
 
-// feePayer: who pays Relay's fee. 'owner' means customers pay the shop's prices and the fee comes out
-// of what the shop receives.
+// feePayer: who pays the fees (Relay's and Bachs's together). 'owner' means customers pay the shop's
+// prices and the fees come out of what the shop receives.
 export interface OrderPolicy extends FeePolicy { holdMinutes: number; feePayer?: 'customer' | 'owner' }
 
-// What the customer is charged on top of the goods for Relay's fee (nothing when the owner pays it).
+// What the customer is charged on top of the goods for the fees (nothing when the owner pays them).
 export const customerFee = (fee: number, policy: Pick<OrderPolicy, 'feePayer'>) => (policy.feePayer === 'owner' ? 0 : fee);
 
-export function policyFor(business: Pick<Business, 'feeBps' | 'holdMinutes' | 'feePayer'> | null, cfg: Pick<Config, 'FEE_BPS' | 'FEE_CAP_KOBO' | 'HOLD_MINUTES'>): OrderPolicy {
-  return { bps: business?.feeBps ?? cfg.FEE_BPS, capKobo: cfg.FEE_CAP_KOBO, holdMinutes: business?.holdMinutes ?? cfg.HOLD_MINUTES, feePayer: business?.feePayer ?? 'customer' };
+export function policyFor(business: Pick<Business, 'feeBps' | 'holdMinutes' | 'feePayer'> | null, cfg: Pick<Config, 'FEE_BPS' | 'FEE_CAP_KOBO' | 'PROCESSOR_FEE_BPS' | 'PROCESSOR_FEE_CAP_KOBO' | 'HOLD_MINUTES'>): OrderPolicy {
+  return { bps: business?.feeBps ?? cfg.FEE_BPS, capKobo: cfg.FEE_CAP_KOBO, processorBps: cfg.PROCESSOR_FEE_BPS, processorCapKobo: cfg.PROCESSOR_FEE_CAP_KOBO, holdMinutes: business?.holdMinutes ?? cfg.HOLD_MINUTES, feePayer: business?.feePayer ?? 'customer' };
 }
+
+// The fee as owners see it: one rate and one maximum, e.g. "4.5% of each sale, at most ₦4,000".
+// (Inside it: Relay's fee and Bachs's processing; owners never see the split.)
+export const feeRate = (cfg: Pick<Config, 'FEE_BPS' | 'PROCESSOR_FEE_BPS'>) => pct(cfg.FEE_BPS + cfg.PROCESSOR_FEE_BPS);
+export const feeTerms = (cfg: Pick<Config, 'FEE_BPS' | 'FEE_CAP_KOBO' | 'PROCESSOR_FEE_BPS' | 'PROCESSOR_FEE_CAP_KOBO'>) =>
+  `${feeRate(cfg)} of each sale, at most ${formatKobo(cfg.FEE_CAP_KOBO + (cfg.PROCESSOR_FEE_BPS ? cfg.PROCESSOR_FEE_CAP_KOBO : 0))}`;
 
 // After a hold expires its amount stays claimed for this long, so a late transfer for the old order
 // can't be matched to a new order that happens to reuse the same amount.
@@ -112,7 +118,8 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
     const orderId = randomId(12);
     const offer = args.offerCode ? await redeemOffer(tx, db, args.offerCode, { businessId: cart.businessId, customerId: cart.customerId, orderId }, subtotalKobo, now) : null;
     const discountKobo = offer?.discountKobo ?? 0;
-    const fee = feeKobo(subtotalKobo - discountKobo, args.policy);
+    const fees = orderFees(subtotalKobo - discountKobo, deliveryFeeKobo, args.policy, args.policy.feePayer !== 'owner');
+    const fee = fees.total;
     const baseKobo = subtotalKobo - discountKobo + deliveryFeeKobo + customerFee(fee, args.policy);
     const uniqueKobo = await claimUniqueAmount(tx, db, cart.businessId, baseKobo, now);
     const payAmountKobo = baseKobo + uniqueKobo;
@@ -121,7 +128,7 @@ export async function checkout(db: Firestore, args: { cartId: string; businessId
     const holdExpiresAt = addMinutes(now, args.policy.holdMinutes).toISOString();
     const order: Order = {
       id: orderId, ref: orderRef(), businessId: cart.businessId, customerId: cart.customerId, channel: cart.channel,
-      items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, feePaidBy: args.policy.feePayer ?? 'customer', uniqueKobo, payAmountKobo,
+      items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, relayFeeKobo: fees.relay, processorFeeKobo: fees.processor, feePaidBy: args.policy.feePayer ?? 'customer', uniqueKobo, payAmountKobo,
       ...(offer ? { discountKobo, offerCode: offer.offer.code } : {}),
       status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt,
       paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,

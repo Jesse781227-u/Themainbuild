@@ -4,13 +4,15 @@ import { useRef, useState } from 'react';
 const ease: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const naira = (n: number) => `₦${Math.round(n).toLocaleString('en-NG')}`;
 
-// ── A printed receipt: what a shop would otherwise pay for, struck out, then Relay's 1% ──
+// ── A printed receipt: what a shop would otherwise pay for, struck out, then Relay's 4.5% ──
 const SKIPPED = ['Website design & build', 'Hosting, domain, renewals', 'Payment plugin & setup', 'Night-shift sales rep', 'Bulk SMS / email tool', 'Order spreadsheet & admin'];
-export function Receipt({ capNaira = 2000 }: { capNaira?: number }) {
+// The fee is shown as one 4.5% line; inside it the two parts are capped separately (₦2,000 each).
+export function Receipt({ capNaira = 2000, rate = 0.03, processing = 0.015 }: { capNaira?: number; rate?: number; processing?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, amount: 0.35 });
   const [order, setOrder] = useState(15000);
-  const fee = Math.min(order * 0.01, capNaira);
+  const fee = Math.min(order * rate, capNaira) + Math.min(order * processing, capNaira);
+  const capped = order * (rate + processing) > fee;
   return (
     <motion.div className="receipt" ref={ref} initial={{ y: -40, opacity: 0 }} animate={inView ? { y: 0, opacity: 1 } : {}} transition={{ duration: 0.9, ease }}>
       <div className="rc-head"><img src="/logo.png" alt="" width={34} height={34} /><b>RELAY</b><span>What you won't be paying for</span></div>
@@ -30,12 +32,12 @@ export function Receipt({ capNaira = 2000 }: { capNaira?: number }) {
         <label htmlFor="ov">When you sell an order of</label>
         <b className="rc-amt">{naira(order)}</b>
         <input id="ov" type="range" min={1000} max={400000} step={500} value={order} onChange={e => setOrder(Number(e.target.value))} style={{ ['--p' as string]: `${((order - 1000) / 399000) * 100}%` }} />
-        <div className="rc-line"><span>Relay keeps 1%{order * 0.01 > capNaira ? ' (capped)' : ''}</span><em>{naira(fee)}</em></div>
-        <div className="rc-line"><span>Delivery fee</span><em>no fee</em></div>
+        <div className="rc-line"><span>Relay 4.5%{capped ? ' (capped)' : ''}</span><em>{naira(fee)}</em></div>
+        <div className="rc-line"><span>Payments and receipts</span><em>included</em></div>
         <div className="rc-line big"><span>You keep</span><em>{naira(order - fee)}</em></div>
       </div>
       <div className="rc-rule dashed" />
-      <p className="rc-foot">1% per paid order · max ₦2,000 · you choose who pays it<br />Free withdrawals to your bank · no sale, no fee</p>
+      <p className="rc-foot">4.5% per sale · max ₦4,000<br />You choose who pays it · free withdrawals</p>
       <div className="rc-barcode" aria-hidden>{Array.from({ length: 46 }, (_, i) => <i key={i} style={{ width: [1, 2, 3, 1, 2][i % 5] }} />)}</div>
     </motion.div>
   );

@@ -51,7 +51,7 @@ test('shop: questions about policies, hours, location and delivery are answered 
   await shop(bot, me, 'Not yet', 'menu');
   await shop(bot, me, 'Checkout', 'checkout');
   await shop(bot, me, 'Delivery', 'deliver');
-  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery to you: delivery price to be confirmed by Business biz-a\n📍 5 Ring Road, Ibadan[\s\S]*Total: about ₦[\d,]+ plus delivery/);
+  assert.match((await shop(bot, me, '5 Ring Road, Ibadan'))[0].text, /Delivery to you: delivery price to be confirmed by Business biz-a\n📍 5 Ring Road, Ibadan[\s\S]*Total: about ₦[\d,.]+ plus delivery/);
 });
 
 test('shop: pickup-only shops skip the delivery question and show the prep time', async () => {
@@ -80,7 +80,7 @@ test('admin: HOURS, AFTER HOURS, POLICIES and FEE change the settings any time',
   assert.match((await say('policies: Swaps within 2 days. No refunds.'))[0].text, /Saved ✅/);
   assert.match((await say('policies'))[0].text, /Swaps within 2 days\. No refunds\./);
   const fee = await say('fee');
-  assert.match(fee[0].text, /1% of each paid order, at most ₦2,000/);
+  assert.match(fee[0].text, /Relay's fee is 4\.5% of each sale, at most ₦4,000/);
   assert.match((await say("I'll pay it", 'fee:owner'))[0].text, /You pay Relay's fee from now on/);
   assert.equal((await doc('businesses', fx.a.id)).feePayer, 'owner');
   assert.match((await say('Relay fee', 'act:fee'))[0].text, /Who should pay it\?/, 'settings are in the MENU now, not in HELP');

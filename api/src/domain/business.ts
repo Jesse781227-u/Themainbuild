@@ -41,7 +41,7 @@ export interface Business {
   fulfilment?: 'pickup' | 'delivery' | 'both' | null;
   shipsInterstate?: boolean; interstatePricing?: 'flat' | 'quote' | null;
   policies?: import('../services/policies').Policies | null;
-  feePayer?: 'customer' | 'owner';    // who pays Relay's 1% (capped); the customer unless the owner chose to
+  feePayer?: 'customer' | 'owner';    // who pays Relay's 4.5% (capped); the customer unless the owner chose to
   acquisitionSource?: string | null;  // "How did you hear about Relay?"
   importContacts?: boolean | null;    // owner agreed to add the number's synced contacts to CUSTOMERS
   whatsappDisplayNumber?: string | null;

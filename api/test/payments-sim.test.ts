@@ -64,7 +64,7 @@ test('payments: checkout sends a pay link; paying on the page marks the order pa
 
   const ownerPaid = await doc('outbox', `${order.id}_owner_paid`);
   assert.equal(ownerPaid.document.filename, `Receipt-${order.ref}.pdf`, 'the owner alert carries the receipt too');
-  assert.match(ownerPaid.text, /Relay fee \(1%, paid by the customer\): ₦10\. You receive ₦1,0/, 'the fee is never a surprise');
+  assert.match(ownerPaid.text, /Relay fee, paid by the customer: ₦[\d.,]+\. You receive ₦1,0/, 'the fee is never a surprise');
   assert.deepEqual(ownerPaid.buttons.map((b: { id: string }) => b.id), [`act:order:${order.ref}`, `act:ready:${order.ref}`, 'act:menu'], 'View order · Mark ready · Menu');
   const alert = bot.transport.sent.find(m => m.to === fx.a.ownerPhone && (m.content as any).interactive?.header?.type === 'document');
   assert.ok(alert, 'the owner gets the receipt on top of the buttons');

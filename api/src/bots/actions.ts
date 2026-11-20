@@ -527,7 +527,7 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'zonesupload', hint: 'Upload all your delivery areas and prices at once', aliases: ['delivery list', 'upload delivery', 'delivery prices list', 'upload delivery prices', 'send delivery list'], run: zonesUpload },
   { id: 'tone', hint: 'How the shop assistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
   { id: 'settone', hint: 'Set the assistant tone', run: setTone },
-  { id: 'fee', hint: "Who pays Relay's 1% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
+  { id: 'fee', hint: "Who pays Relay's 4.5% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
   { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
     hidden: c => !!c.business.pausedUntil },
   { id: 'reopen', hint: 'Open your shop for orders again', aliases: ['reopen', 'open shop', 'reopen shop', 'unpause'], next: [['menu', 'Menu']], run: reopen, hidden: c => !c.business.pausedUntil },

@@ -43,17 +43,17 @@ test('shop: checkout flow creates order awaiting payment', async () => {
   assert.match(more[0].text, /• 3 × Product biz-a: ₦3,000/);
   // No delivery zones yet → pickup confirmation directly.
   const confirm = await shop(bot, me, { choice: 'checkout', text: 'Checkout' });
-  assert.match(confirm[0].text, /Pickup: free\nService fee: ₦30\nTotal: ₦3,030\n/);
+  assert.match(confirm[0].text, /Pickup: free\nService fee: ₦137\.06\nTotal: ₦3,137\.06\n/);
   const stockBefore = (await doc('products', fx.a.product)).stock;
   const paid = await shop(bot, me, { choice: 'confirm', text: 'Confirm order' });
   // Test environments use simulated payments: a "Pay ₦X" button to the payment page.
   assert.equal((paid[0].content as unknown as { interactive: { type: string } }).interactive.type, 'cta_url');
-  assert.match(paid[0].text, /Your order RLY-[A-Z0-9]{5} is placed\. Pay below to confirm it\.\n\n3 × Product biz-a\n\nTotal: \*₦3,0\d\d(\.\d\d)?\*[\s\S]*holding your items for 30 minutes\.\nPay ₦3,0[\d.,]*: https?:\/\/[^/]+\/pay\/[A-Za-z0-9]+/);
+  assert.match(paid[0].text, /Your order RLY-[A-Z0-9]{5} is placed\. Pay below to confirm it\.\n\n3 × Product biz-a\n\nTotal: \*₦3,1\d\d(\.\d\d)?\*[\s\S]*holding your items for 30 minutes\.\nPay ₦3,1[\d.,]*: https?:\/\/[^/]+\/pay\/[A-Za-z0-9]+/);
 
   const [order] = await recentOrders(db, [['customerId', '==', convId(me)]], 1);
   assert.equal(order.status, 'awaiting_payment');
   assert.equal(order.subtotalKobo, 300_000);
-  assert.equal(order.feeKobo, 3_000);
+  assert.equal(order.feeKobo, 13_706); // Relay 3% ₦90 + Bachs 1.5% of everything sent ₦47.06
   assert.equal((await doc('products', fx.a.product)).stock, stockBefore - 3, 'stock is reserved');
   assert.equal(await doc('carts', convId(me)), null, 'the cart became the order');
   assert.ok(await doc('outbox', `${fx.a.id}_order_placed_${order.id}`), 'the owner is told');
@@ -70,11 +70,13 @@ test('shop: delivery is quoted from the merchant zones', async () => {
   assert.match((await shop(bot, me, { text: 'Ikeja GRA' }))[0].text, /doesn't deliver to "Ikeja GRA"/);
   await shop(bot, me, { choice: 'deliver', text: 'Delivery' });
   const c = await shop(bot, me, { text: '5 Admiralty Way, Lekki Phase 1' });
-  assert.match(c[0].text, /Delivery to \*Lekki\*: ₦1,500, same day\n📍 5 Admiralty Way, Lekki Phase 1\nService fee: ₦10\n/);
+  assert.match(c[0].text, /Delivery to \*Lekki\*: ₦1,500, same day\n📍 5 Admiralty Way, Lekki Phase 1\nService fee: ₦68\.53\n/);
   await shop(bot, me, { text: 'yes' });
   const [order] = await recentOrders(db, [['customerId', '==', convId(me)]], 1);
   assert.equal(order.deliveryFeeKobo, 150_000);
-  assert.equal(order.feeKobo, 1_000, 'no Relay fee on delivery');
+  assert.equal(order.relayFeeKobo, 3_000, 'no Relay fee on delivery');
+  assert.equal(order.processorFeeKobo, 3_853, 'processing is on everything sent: goods, delivery and the fee');
+  assert.equal(order.feeKobo, 6_853);
   await db.delete(db.doc('deliveryZones', 'z-lekki'));
 });
 

@@ -62,7 +62,7 @@ function MobileCta() {
     <AnimatePresence>
       {show && (
         <motion.div className="m-cta" initial={{ y: 90 }} animate={{ y: 0 }} exit={{ y: 90 }} transition={{ duration: 0.3, ease }}>
-          <span><b>1%</b> per paid order</span>
+          <span><b>4.5%</b> per sale</span>
           <a className="btn btn-lime" href={company.ctaHref}>Open my shop</a>
         </motion.div>
       )}
@@ -101,7 +101,7 @@ function Opening() {
             <a className="btn btn-lime" href={company.ctaHref}>Open my shop free</a>
             <a className="link" href="#day">See a day of orders ↓</a>
           </div>
-          <div className="op-fee"><b>1%</b> per paid order. No setup or monthly fee.</div>
+          <div className="op-fee"><b>4.5%</b> per sale. No setup or monthly fee.</div>
         </motion.div>
         <div className="op-cards" aria-hidden>
           {cards.map((c, i) => (
@@ -267,7 +267,7 @@ function Cost() {
       <div className="wrap cost-in">
         <Rise className="cost-copy">
           <h2>Keep the month of sales a website would have eaten.</h2>
-          <p>Your customers already buy on WhatsApp. Relay adds what a website would give you there: a catalogue, a cart, payments, receipts, tracking and marketing. You pay 1% when an order is paid, and nothing before your first sale.</p>
+          <p>Your customers already buy on WhatsApp. Relay adds what a website would give you there: a catalogue, a cart, payments, receipts, tracking and marketing. You pay 4.5% when an order is paid, and nothing before your first sale.</p>
           <ul className="cost-points">
             <li><b>Set up from what you have.</b> Send your menu or price list as a photo, PDF, spreadsheet or text.</li>
             <li><b>Keep your number.</b> Customers message the WhatsApp Business number they already know.</li>
@@ -308,7 +308,7 @@ const QA: [string, string][] = [
   ['Can I keep my number and my WhatsApp Business app?', 'Yes. You connect the number your customers know through Meta\'s official signup, and keep using the app on your phone.'],
   ['How does it stop fake transfers?', 'Each order has its own exact amount, and it is marked paid only when our payment partner reports that money arriving. A screenshot or an "I\'ve paid" message never marks anything paid.'],
   ['Will Smart Reach spam my customers?', 'No. Each customer gets at most one promo a week, only about things they showed interest in, and never at night. Every message has a Stop updates button.'],
-  ['What does it cost?', '1% of each paid order, capped at ₦2,000, with nothing charged on delivery fees. There is no setup or monthly fee. Paid marketing messages are charged at Meta\'s price, after you approve them.'],
+  ['What does it cost?', '4.5% of each sale, at most ₦4,000, and payments are included. You choose whether you or your customers pay it. There is no setup or monthly fee. Paid marketing messages are charged at Meta\'s price, after you approve them.'],
   ['What if a customer wants a real person?', 'Relay hands the chat to you and stays quiet until you hand it back. It also hands over complaints and refund requests.'],
 ];
 function Questions() {

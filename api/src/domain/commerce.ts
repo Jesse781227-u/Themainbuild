@@ -107,7 +107,9 @@ export interface Order {
   items: OrderLine[];
   subtotalKobo: number;   // goods only
   deliveryFeeKobo: number;
-  feeKobo: number;        // Relay's fee, on goods only
+  feeKobo: number;        // the fee owners see ("4.5%"): Relay's (goods only) + Bachs's processing (the whole transfer)
+  relayFeeKobo?: number;  // Relay's part of feeKobo (orders before the split: all of it)
+  processorFeeKobo?: number; // Bachs's part of feeKobo
   feePaidBy?: 'customer' | 'owner'; // customer: added to payAmountKobo; owner: taken from what the shop receives
   uniqueKobo: number;     // small offset that makes payAmountKobo unique among this business's open orders
   discountKobo?: number;  // a personal offer code (Smart Reach), off the goods

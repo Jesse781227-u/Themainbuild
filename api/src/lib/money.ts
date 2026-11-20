@@ -24,12 +24,32 @@ export function formatKobo(kobo: number) {
   return `${sign}₦${naira}${rest ? '.' + String(rest).padStart(2, '0') : ''}`;
 }
 
-export interface FeePolicy { bps: number; capKobo: number }
-export const DEFAULT_FEE: FeePolicy = { bps: 100, capKobo: 200_000 }; // 1%, capped at ₦2,000
+// bps/capKobo: Relay's own fee. processorBps/processorCapKobo: what Bachs takes for processing the
+// payment, passed on as it is (Relay keeps none of it). Owners and customers only ever see the sum
+// ("4.5%"); the split is for Relay's books.
+export interface FeePolicy { bps: number; capKobo: number; processorBps?: number; processorCapKobo?: number }
+export const DEFAULT_FEE: FeePolicy = { bps: 300, capKobo: 200_000, processorBps: 150, processorCapKobo: 200_000 }; // Relay 3% + Bachs 1.5%, each capped at ₦2,000
 
-// Relay's fee: a percentage of the goods subtotal only (never the delivery fee), capped, rounded
-// half-up to the kobo. The customer pays it on top.
-export function feeKobo(subtotalKobo: number, policy: FeePolicy = DEFAULT_FEE) {
+// A percentage of an amount, capped, rounded half-up to the kobo. With a policy, Relay's fee.
+export function feeKobo(subtotalKobo: number, policy: Pick<FeePolicy, 'bps' | 'capKobo'> = DEFAULT_FEE) {
   if (!Number.isSafeInteger(subtotalKobo) || subtotalKobo <= 0) return 0;
   return Math.min(Math.floor((subtotalKobo * policy.bps + 5_000) / 10_000), policy.capKobo);
 }
+
+// An order's fees. Relay's is on the goods only (never delivery). Bachs takes its share of the whole
+// transfer: goods and delivery, and, when the customer pays the fees on top, the fees as well, so
+// its share is grossed up (fee = rate × everything the customer sends). total is what the customer
+// or the owner pays.
+export function orderFees(goodsKobo: number, deliveryKobo: number, policy: FeePolicy = DEFAULT_FEE, customerPays = false) {
+  const relay = feeKobo(goodsKobo, policy);
+  const p = policy.processorBps ?? 0;
+  const base = Math.max(0, goodsKobo) + Math.max(0, deliveryKobo) + (customerPays ? relay : 0);
+  const cap = policy.processorCapKobo ?? Number.MAX_SAFE_INTEGER;
+  const processor = !p || base <= 0 ? 0 : customerPays
+    ? Math.min(Math.floor((base * p + (10_000 - p) / 2) / (10_000 - p)), cap)
+    : feeKobo(base, { bps: p, capKobo: cap });
+  return { relay, processor, total: relay + processor };
+}
+
+// "4.5%" from basis points.
+export const pct = (bps: number) => `${bps / 100}%`;

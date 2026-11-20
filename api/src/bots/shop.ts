@@ -6,7 +6,7 @@ import { C } from '../db';
 import { checkOffer, lookOffer, looksLikeCode, offerReason } from '../services/offers';
 import { consented, optIn, optOut, recordSignal, type ReachCustomer, type SignalType } from '../services/reach';
 import type { Firestore } from '../lib/firestore';
-import { formatKobo, feeKobo } from '../lib/money';
+import { formatKobo, orderFees } from '../lib/money';
 import { log } from '../lib/logger';
 import { maskPhone } from '../lib/phone';
 import type { Business } from '../domain/business';
@@ -766,9 +766,10 @@ async function showCart(ctx: ShopContext, business: Business, reply: Reply, pref
   const cart = await loadCart(ctx.db, ctx);
   if (!cart?.items.length) return reply(buttons(`${prefix ? prefix + '\n' : ''}Your cart is empty.`, [['menu', 'See the menu']]));
   const { text, subtotal } = await cartLines(ctx.db, cart);
-  // The 1% service fee, when the shop has the customer pay it: shown from the cart on, never a surprise.
+  // The service fee, when the shop has the customer pay it: shown from the cart on, never a surprise.
+  // (It grows a little at checkout, once delivery is known.)
   const policy = policyFor(business, ctx.cfg);
-  const fee = customerFee(feeKobo(subtotal, policy), policy);
+  const fee = customerFee(orderFees(subtotal, 0, policy, true).total, policy);
   const feeLine = fee ? `\nService fee: ${formatKobo(fee)}\nTotal: *${formatKobo(subtotal + fee)}* + delivery` : '';
   return reply(buttons(`${prefix ? prefix + '\n\n' : ''}Your cart:\n${text}\nSubtotal: ${formatKobo(subtotal)}${feeLine}`, [['checkout', 'Checkout'], ['menu', 'Keep shopping'], ['clear', 'Empty my cart']]), { step: 'browse' });
 }
@@ -801,7 +802,7 @@ async function confirmOrder(ctx: ShopContext, business: Business, delivery: Orde
   const discount = offer?.ok ? offer.discountKobo : 0;
   const subtotal = goods - discount;
   const policy = policyFor(business, ctx.cfg);
-  const fee = customerFee(feeKobo(subtotal, policy), policy);
+  const fee = customerFee(orderFees(subtotal, quoteLater(delivery) ? 0 : delivery.feeKobo, policy, true).total, policy);
   const body = [
     'Please confirm your order:', text,
     `Subtotal: ${formatKobo(goods)}`,

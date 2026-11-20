@@ -7,7 +7,7 @@ import { lineName, priceOf } from '../domain/commerce';
 import type { Business } from '../domain/business';
 import type { Cart, Order, OrderDelivery, OrderLine, Product } from '../domain/commerce';
 import { randomId } from '../lib/crypto';
-import { feeKobo, formatKobo } from '../lib/money';
+import { formatKobo, orderFees } from '../lib/money';
 import type { OutboundContent } from '../services/channel';
 import { customerFee, policyFor } from '../services/orders';
 import { renderMessage } from '../services/shop-messages';
@@ -57,14 +57,15 @@ export async function testOrder(ctx: ShopContext, business: Business, cart: Cart
   if (!items.length) return reply(buttons('Your cart is empty.', [['menu', 'See the menu']]), { step: 'browse' });
   const subtotalKobo = items.reduce((s, l) => s + l.priceKobo * l.qty, 0);
   const policy = policyFor(business, ctx.cfg);
-  const fee = feeKobo(subtotalKobo, policy);
   const deliveryFeeKobo = delivery?.feeKobo ?? 0;
+  const fees = orderFees(subtotalKobo, deliveryFeeKobo, policy, policy.feePayer !== 'owner');
+  const fee = fees.total;
   const payAmountKobo = subtotalKobo + deliveryFeeKobo + customerFee(fee, policy);
   const token = randomId(20).replace(/[^A-Za-z0-9]/g, 'x');
   const at = new Date().toISOString();
   const order: Order = {
     id: token, ref: `TEST-${randomId(6).toUpperCase().replace(/[^A-Z0-9]/g, '').padEnd(4, 'X').slice(0, 4)}`, businessId: business.id, customerId: ctx.conversationId, channel: 'whatsapp',
-    items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, feePaidBy: policy.feePayer ?? 'customer', uniqueKobo: 0, payAmountKobo,
+    items, subtotalKobo, deliveryFeeKobo, feeKobo: fee, relayFeeKobo: fees.relay, processorFeeKobo: fees.processor, feePaidBy: policy.feePayer ?? 'customer', uniqueKobo: 0, payAmountKobo,
     status: 'awaiting_payment', fulfilment: 'pending', delivery, holdExpiresAt: at, paidAt: null, paymentId: null, needsAttention: null, createdAt: at, updatedAt: at,
   };
   await ctx.db.create(ctx.db.doc(C.testReceipts, token), { token, businessId: business.id, order: { ...order }, createdAt: at });
@@ -82,6 +83,6 @@ export async function testPaid(ctx: ShopContext, business: Business, token: stri
   await ctx.db.delete(ctx.db.doc(C.carts, ctx.conversationId));
   const thanks = renderMessage(business, 'paymentThanks', { order: order.ref, amount: formatKobo(order.payAmountKobo) });
   await reply({ type: 'document', link: `${ctx.cfg.API_BASE_URL}/receipts/test/${token}`, filename: receiptFilename(order), caption: thanks });
-  const fee = order.feeKobo ? `\nRelay's fee on this order: ${formatKobo(order.feeKobo)} (${order.feePaidBy === 'owner' ? 'paid by you' : 'paid by the customer'}). You'd receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : '';
+  const fee = order.feeKobo ? `\nRelay's fee on this order: ${formatKobo(order.feeKobo)}, ${order.feePaidBy === 'owner' ? 'paid by you' : 'paid by the customer'}. You'd receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : '';
   return reply(buttons(`🧪 That's what your customer gets after paying: your thank-you message and a PDF receipt. You'd also get a *Paid* alert here with the same receipt, and the money goes to your Relay wallet.${fee}\n\nKeep testing, or type *EXIT* to go back.`, [['menu', 'Shop again'], ['test:exit', 'Back to Relay']]), { step: 'browse' });
 }

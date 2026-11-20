@@ -20,16 +20,16 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   const added = await say('Buy', `buy:${(await db.query('products', [['businessId', '==', businessId]]))[0]._id}`);
   assert.match(added[0].text, /Added 1 × Chin chin[\s\S]*Subtotal: ₦1,500/);
   const confirm = await say('Checkout', 'checkout');
-  assert.match(confirm[0].text, /Please confirm your order[\s\S]*Service fee: ₦15/);
+  assert.match(confirm[0].text, /Please confirm your order[\s\S]*Service fee: ₦68\.53/);
   const pay = await say('Confirm order', 'confirm');
-  assert.match(pay[0].text, /🧪 Test order TEST-[A-Z0-9]{4}: ₦1,515/);
+  assert.match(pay[0].text, /🧪 Test order TEST-[A-Z0-9]{4}: ₦1,568\.53/);
   const token = pay[0].options[0].slice('testpay:'.length);
 
   const paid = await say('Pay (test)', `testpay:${token}`);
   const receipt = paid[0].content as { type: string; link: string; caption: string; filename: string };
   assert.equal(receipt.type, 'document');
   assert.match(receipt.filename, /^Receipt-TEST-[A-Z0-9]{4}\.pdf$/);
-  assert.match(paid[1].text, /You'd also get a \*Paid\* alert[\s\S]*Relay's fee on this order: ₦15 \(paid by the customer\)/);
+  assert.match(paid[1].text, /You'd also get a \*Paid\* alert[\s\S]*Relay's fee on this order: ₦68\.53, paid by the customer\. You'd receive ₦1,500/);
   const pdf = await createApp().request(new URL(receipt.link).pathname, {}, env);
   assert.equal(pdf.status, 200);
   assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
@@ -61,5 +61,5 @@ test('TEST: when the owner pays the fee, customers see the shop\'s prices only',
   const pay = await say('Confirm order', 'confirm');
   assert.match(pay[0].text, /₦10,000\./);
   const paid = await say('Pay (test)', pay[0].options[0]);
-  assert.match(paid[1].text, /₦100 \(paid by you\)\. You'd receive ₦9,900/);
+  assert.match(paid[1].text, /Relay's fee on this order: ₦450, paid by you\. You'd receive ₦9,550/);
 });

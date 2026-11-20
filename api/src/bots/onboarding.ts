@@ -11,6 +11,7 @@
 // A menu sent as the very first message is read straight away; the shop name is asked meanwhile.
 // One question per message, buttons or lists wherever there's a choice, everything editable later.
 // An owner who comes back after a break is asked whether to continue or start over.
+import { feeTerms } from '../services/orders';
 import { C } from '../db';
 import { BUSINESS_TYPES, type Business, type BusinessCategory } from '../domain/business';
 import type { Product } from '../domain/commerce';
@@ -777,7 +778,7 @@ async function prompt(c: Ctx): Promise<unknown> {
       return sendAll(c, rest);
     }
     case 'ready': return ask(buttons(`${biz?.name ?? 'Your shop'} is ready 🎉 Try it as a customer first (pretend payment, real receipt), then connect your number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
-    case 'fee_payer': return ask(buttons(`Relay's fee is *1% of each paid order*, at most ${formatKobo(c.ctx.cfg.FEE_CAP_KOBO)}. No monthly fee, nothing on delivery.\n\nWho pays it? You can change this with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
+    case 'fee_payer': return ask(buttons(`Relay's fee is *${feeTerms(c.ctx.cfg)}*. No monthly fee.\n\nWho pays it? You can change this with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
     case 'check_wa': return ask(buttons('Is your shop\'s number on the *WhatsApp Business* app (the one with a "B")?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
     case 'check_fb': return ask(buttons('Can you log into Facebook? Meta uses it to set up your business account.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
     case 'live_photo': case 'live_contacts': case 'live_source': return livePrompt(c);

@@ -1,7 +1,8 @@
 // Shop settings from signup that the owner can change any time by chat:
 //   HOURS · HOURS Mon–Sat 8am–9pm, Sun closed · AFTER HOURS (take orders / menu only)
-//   POLICIES · POLICIES: <their own words> · FEE (who pays Relay's 1%) · SWITCH/NEW SHOP live in admin.ts
+//   POLICIES · POLICIES: <their own words> · FEE (who pays Relay's fee) · SWITCH/NEW SHOP live in admin.ts
 // Returns the reply, or null when the message isn't a settings command.
+import { feeTerms } from '../services/orders';
 import { C } from '../db';
 import type { Business } from '../domain/business';
 import type { Firestore } from '../lib/firestore';
@@ -61,11 +62,11 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   // Who pays Relay's fee.
   if (choiceId === 'fee:customer' || choiceId === 'fee:owner') {
     await save(db, business, { feePayer: choiceId === 'fee:owner' ? 'owner' : 'customer' });
-    return buttons(choiceId === 'fee:owner' ? 'Done ✅ You pay Relay\'s fee from now on: customers pay your prices, and the fee comes out of what you receive.' : 'Done ✅ Customers pay Relay\'s fee from now on, as a small service fee on their total.', [['act:menu', 'Menu']]);
+    return buttons(choiceId === 'fee:owner' ? 'Done ✅ You pay Relay\'s fee from now on: customers pay your prices, and the fee comes out of what you receive.' : 'Done ✅ Customers pay Relay\'s fee from now on, as a service fee on their total.', [['act:menu', 'Menu']]);
   }
   if (/^(fee|fees|relay fee|service fee)$/i.test(t)) {
     const who = business.feePayer === 'owner' ? 'You pay it: it comes out of what you receive' : 'Your customers pay it, as a service fee on their total';
-    return buttons(`Relay's fee is 1% of each paid order, at most ${formatKobo(cfg.FEE_CAP_KOBO)}, and nothing on delivery. ${who}.\n\nWho should pay it?`, [['fee:customer', `My customers pay${business.feePayer === 'owner' ? '' : ' ✓'}`], ['fee:owner', `I'll pay the fee${business.feePayer === 'owner' ? ' ✓' : ''}`], ['act:menu', 'Menu']]);
+    return buttons(`Relay's fee is ${feeTerms(cfg)}. ${who}.\n\nWho should pay it?`, [['fee:customer', `My customers pay${business.feePayer === 'owner' ? '' : ' ✓'}`], ['fee:owner', `I'll pay the fee${business.feePayer === 'owner' ? ' ✓' : ''}`], ['act:menu', 'Menu']]);
   }
   return null;
 }

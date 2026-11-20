@@ -86,7 +86,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   tx.create(db.doc(C.ledger, order.id), {
     id: order.id, businessId: order.businessId, orderId: order.id, type: 'sale', at,
     grossKobo: order.payAmountKobo, goodsKobo: goods, ...(order.discountKobo ? { discountKobo: order.discountKobo, offerCode: order.offerCode } : {}), deliveryKobo: order.deliveryFeeKobo,
-    relayFeeKobo: order.feeKobo, merchantNetKobo: order.payAmountKobo - order.feeKobo,
+    relayFeeKobo: order.relayFeeKobo ?? order.feeKobo, processorFeeKobo: order.processorFeeKobo ?? 0, merchantNetKobo: order.payAmountKobo - order.feeKobo,
   });
 
   // The shop's wallet: available as soon as it's paid.
@@ -96,7 +96,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
   const date = lagosDate(new Date(at));
   tx.set(db.doc(C.dailyStats, `${order.businessId}_${date}`), {
     businessId: order.businessId, date, ordersPaid: increment(1), salesKobo: increment(goods),
-    deliveryKobo: increment(order.deliveryFeeKobo), relayFeeKobo: increment(order.feeKobo), updatedAt: at,
+    deliveryKobo: increment(order.deliveryFeeKobo), relayFeeKobo: increment(order.relayFeeKobo ?? order.feeKobo), processorFeeKobo: increment(order.processorFeeKobo ?? 0), updatedAt: at,
   }, { merge: true });
 
   const outboxIds: string[] = [];
@@ -117,7 +117,7 @@ export async function applyPaid(tx: Transaction, db: Firestore, orderId: string,
     id: `${order.id}_owner_paid`, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone,
     conversationId: adminConversationId(business.ownerPhone), kind: 'owner_order_paid', document: receipt,
     text: `Paid: order ${order.ref}, ${formatKobo(order.payAmountKobo)} (${order.items.map(l => `${l.qty}× ${l.name}`).join(', ')}).${order.feeKobo ? `
-Relay fee (1%${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}): ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
+Relay fee${order.feePaidBy === 'owner' ? ', paid by you' : ', paid by the customer'}: ${formatKobo(order.feeKobo)}. You receive ${formatKobo(order.payAmountKobo - order.feeKobo)}.` : ''}${needsAttention ? ' ⚠️ It was paid after the hold expired and some items are out of stock. Please check with the customer.' : late ? ' It was paid after the hold expired; the stock was still available and is reserved again.' : ''}`,
     buttons: [{ id: `act:order:${order.ref}`, title: 'View order' }, { id: `act:ready:${order.ref}`, title: 'Mark ready' }, { id: 'act:menu', title: 'Menu' }],
   });
 

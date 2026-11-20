@@ -139,7 +139,7 @@ test('report: the service fee shows in the cart; the pay page shows the address 
   const c = { from: phone(), to: fx.a.pnid };
   await bot.send('shop', { ...c, text: 'hi' });
   const added = await bot.send('shop', { ...c, choice: 'add:fried-rice', text: 'Add to cart' });
-  assert.match(added.at(-1)!.text, /Subtotal: ₦3,500\nService fee: ₦35/);
+  assert.match(added.at(-1)!.text, /Subtotal: ₦3,500\nService fee: ₦159\.90/);
   await bot.send('shop', { ...c, choice: 'checkout', text: 'Checkout' });
   await bot.send('shop', { ...c, text: 'Ikeja GRA, 5 Isaac John' });
   const placed = await bot.send('shop', { ...c, choice: 'confirm', text: 'Confirm order' });
@@ -188,7 +188,7 @@ test('report 2: an area with no street asks for the street; the confirmation nam
   const c = { from: phone(), to: fx.a.pnid };
   await bot.send('shop', { ...c, text: 'hi' });
   const cart = await bot.send('shop', { ...c, choice: 'add:jollof', text: 'Add to cart' });
-  assert.match(cart.at(-1)!.text, /Service fee: ₦30\nTotal: \*₦3,030\* \+ delivery/);
+  assert.match(cart.at(-1)!.text, /Service fee: ₦137\.06\nTotal: \*₦3,137\.06\* \+ delivery/);
   await bot.send('shop', { ...c, choice: 'checkout', text: 'Checkout' });
   const [ask] = await bot.send('shop', { ...c, text: 'ikeja' });
   assert.match(ask.text, /^Which street in \*Ikeja GRA\*\?/);
