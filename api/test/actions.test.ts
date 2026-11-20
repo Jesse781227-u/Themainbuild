@@ -61,7 +61,7 @@ test('menu: "hi" opens it; too many rows for one list → sections, each its own
   await addShop(db, fx.a.ownerPhone, fx.b.id, {});
   await switchShop(db, fx.a.ownerPhone, fx.a.id); // adding makes the new one active
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: 'open' });
-  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:fee', 'act:reopen', 'act:switch']);
+  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:reopen', 'act:switch']);
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: null });
   // Unknown words: a short answer and the Menu, not a wall of help.
   const huh = await bot.send('admin', { from: owner(), text: 'blorp zzz' });
