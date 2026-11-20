@@ -135,6 +135,15 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
     return reply(`You'll now get occasional updates and offers from ${business.name}. Tap *Stop updates* on any of them, or send STOP, to stop.`);
   }
 
+  // ── "Are you a bot?": an honest answer, in their language, and the way to a person (PRD: disclose when asked) ──
+  if (AI_QUESTION.test(lower)) {
+    const pidgin = PIDGIN.test(lower) || state.pidgin;
+    return reply(buttons(pidgin
+      ? `Na *${business.name}* AI assistant dey talk 🤖. I fit show you wetin we get, take your order and answer questions. If you wan talk to the owner, type *talk to the owner*.`
+      : `I'm *${business.name}*'s AI assistant 🤖. I can show you what we have, take your order and answer questions. To talk to the owner, type *talk to the owner*.`,
+    [['menu', say(pidgin, 'See what we have', 'See wetin we get')], ['cart', 'My cart']]));
+  }
+
   // ── Talk to a person ──
   if (/\b(human|agent|real person|customer (care|service)|talk to (someone|the owner|owner|a person)|speak to)\b/.test(lower)) return handOver(ctx, deps, business, customer, reply);
 
@@ -268,6 +277,9 @@ function testFooter(c: OutboundContent, test: boolean): OutboundContent {
 const GREETING = /^(hi+|hello+|hey+|hiya|helo|good (morning|afternoon|evening|day)|howdy|how far|how you dey|how una dey|hi there|hello there|morning|evening|afternoon)[\s!.,🙂👋😊]*(there|o|oo)?[\s!.]*$/i;
 const MENU_ASK = /\b(menu|catalog(ue)?|price ?list|prices|what do you (sell|have)|what (do )?you have|wetin (una|you) (dey )?(sell|get|have)|wetin una get|show me (what you have|your (products|items|stuff))|send (me )?(your )?(menu|catalog(ue)?|list|prices)|see (your|what you have)|your products)\b/i;
 const ASK_PREFIX = /^(please\s+|abeg\s+|hi,?\s+|hello,?\s+)*(do you (have|sell|stock)|have you got|you get|una get|una dey sell|you dey sell|is there|are there|any|how much (is|are|be|for|na)|what'?s the price of|price of|price for|i (want|need|would like)( to buy)?|i wan( buy)?|can i (get|buy|order)|looking for)\s+/i;
+
+// "Are you a bot / human / AI?", "is this a robot?", "na human dey reply?", "you be machine?".
+const AI_QUESTION = /\b(are|r)\s+(you|u)\s+(a\s+|an\s+)?(bot|robot|machine|ai|human|real person|real human|person)\b|\bis\s+(this|it)\s+(a\s+|an\s+)?(bot|robot|machine|ai|real person|human)\b|\b(am i|i dey)\s+(talking|chatting|talk|chat)\s+(to|with)\s+(a\s+)?(bot|robot|machine|ai|human|person)\b|\bna\s+(human|person|bot|robot|machine|ai)\s+(dey|be|i dey)\b|\b(you|u)\s+be\s+(bot|robot|machine|ai|human)\b/i;
 
 // Pidgin versions of the bot's own words (the owner's messages stay as they wrote them).
 const say = (pidgin: boolean | undefined, english: string, naija: string) => (pidgin ? naija : english);

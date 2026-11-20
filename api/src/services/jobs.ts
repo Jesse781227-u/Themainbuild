@@ -1,6 +1,7 @@
 // Cron Triggers (wrangler.toml [triggers]). Cron times are UTC; Lagos is UTC+1.
 import { C, getDb } from '../db';
 import { queueDailySummaries } from './summary';
+import { queueMorningBriefs } from './morning-brief';
 import type { Env, ScheduledEventLike } from '../env';
 import { log } from '../lib/logger';
 import { findStuckEvents } from './inbound';
@@ -19,10 +20,17 @@ import { afterDelivery, dailyReach, weeklySummaries } from './reach-triggers';
 
 export const CRON_EVERY_MINUTE = '* * * * *';
 export const CRON_DAILY_SUMMARY = '0 19 * * *'; // 20:00 Africa/Lagos
+export const CRON_MORNING_BRIEF = '0 6 * * *'; // 07:00 Africa/Lagos
 
 export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const now = new Date(event.scheduledTime);
   const db = getDb(env);
+  if (event.cron === CRON_MORNING_BRIEF) {
+    const ids = await queueMorningBriefs(db, now);
+    await enqueue(env, ids.map(messageId => ({ kind: 'outbox' as const, messageId })));
+    log('info', 'morning_briefs_queued', { count: ids.length });
+    return { briefs: ids.length };
+  }
   if (event.cron === CRON_DAILY_SUMMARY) {
     const ids = await queueDailySummaries(db, now);
     const nudges = await dayTwoNudges(db, now);
