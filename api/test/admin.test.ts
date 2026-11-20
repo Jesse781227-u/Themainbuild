@@ -78,7 +78,7 @@ test('admin: owner commands manage stock, orders and payment details', async () 
   assert.equal((await doc('businesses', fx.a.id)).paymentDetails, 'GTBank 0123456789 Business A');
   assert.match((await bot.send('admin', { from: o, text: 'delivery zone Lekki, 1500, same day' }))[0].text, /^Deliver to \*Lekki\* for ₦1,500 \(same day\)\?/);
   assert.match((await bot.send('admin', { from: o, choice: 'yes', text: 'Yes, add it' }))[0].text, /Delivery to Lekki: ₦1,500, same day/);
-  assert.match((await bot.send('admin', { from: o, text: 'sales today' }))[0].text, /^📊 Sales for Business biz-a\nToday: ₦0 from 0 paid orders\nLast 7 days: ₦0 from 0 paid orders\nThis month: ₦0/);
+  assert.match((await bot.send('admin', { from: o, text: 'sales today' }))[0].text, /^💰 \*Money\* · Business biz-a\nToday: ₦0 goods \+ ₦0 delivery = \*₦0\* \(0 paid orders\)\nLast 7 days: ₦0 goods \+ ₦0 delivery\nThis month: ₦0 goods/);
 });
 
 test('admin: delete my data removes the owner account after confirmation', async () => {

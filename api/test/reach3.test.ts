@@ -123,5 +123,5 @@ test('report: weekly summary names the best trigger', async () => {
   const s = await weeklySummary(db, fx.a.id);
   assert.equal(s.best, 'Price drop');
   assert.ok(s.sent >= 3 && s.ordered >= 1);
-  assert.match(s.text!, /^📈 Smart Reach this week: \d+ sent → \d+ ordered → ₦[\d,]+\.\nBest: \*Price drop\* \(1 order, ₦50,000\)\.\nMessage costs this month: ₦0\.$/);
+  assert.match(s.text!, /^📈 Updates this week: \d+ sent → \d+ ordered → ₦[\d,]+\.\nBest: \*Price drop\* \(1 order, ₦50,000\)\.\nMessage costs this month: ₦0\.$/);
 });

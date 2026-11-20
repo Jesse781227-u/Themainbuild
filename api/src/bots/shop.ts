@@ -88,7 +88,7 @@ export async function handleShop(ctx: ShopContext, deps: BotDeps) {
   const state: ShopState = conv.shop ?? { step: 'browse' };
   const setState = (s: ShopState | null) => db.set(db.doc(C.conversations, conversationId), { shop: s }, { merge: true });
   const reply = async (content: OutboundContent | string, next?: ShopState) => {
-    const c: OutboundContent = typeof content === 'string' ? { type: 'text', text: content } : content;
+    const c: OutboundContent = testFooter(typeof content === 'string' ? { type: 'text', text: content } : content, !!ctx.test);
     await send(db, cfg, deps.transport, { from: sender, conversationId, to, content: shopWords(c, business) });
     const options = optionIds(c);
     if (next || options.length) await setState({ ...(next ?? state), suggested: next?.suggested ?? state.suggested, greetedAt: state.greetedAt ?? null, pidgin: state.pidgin ?? false, options });
@@ -248,9 +248,20 @@ async function welcomeOnly(ctx: ShopContext, run: Run, business: Business, custo
     ...(lastPaid ? [['again', 'Order again'] as [string, string]] : []),
     ['menu', say(run.state.pidgin, 'See what we have', 'See wetin we get')],
     ...(lastPaid ? [] : [['ask', 'Ask a question'] as [string, string]]),
-    ['track', 'Track my order'],
+    // The owner trying their shop: the way back instead of tracking (they have no real orders).
+    ctx.test ? ['act:exittest', 'Back to my dashboard'] : ['track', 'Track my order'],
   ];
   return reply(buttons(closed ? `${hello}\n\n${closed}` : hello, options), { step: 'browse' });
+}
+
+// While the owner tries their own shop: every message says how to get back.
+export const TEST_FOOTER = '🧪 Test mode · type EXIT to go back';
+function testFooter(c: OutboundContent, test: boolean): OutboundContent {
+  if (!test) return c;
+  if (c.type === 'text') return { ...c, text: `${c.text}\n\n${TEST_FOOTER}` };
+  const ia = (c as { interactive?: { body?: { text?: string } } }).interactive;
+  if (c.type === 'interactive' && ia?.body?.text !== undefined) return { ...c, interactive: { ...ia, body: { text: `${ia.body.text.slice(0, 1024 - TEST_FOOTER.length - 2)}\n\n${TEST_FOOTER}` } } } as OutboundContent;
+  return c;
 }
 
 // Customers writing in Pidgin ("where una dey?", "abeg wetin una get").

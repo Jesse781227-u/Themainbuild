@@ -123,7 +123,7 @@ export async function suggestReach(db: Firestore, business: Business, now = new 
   await db.create(db.doc(C.outbox, id), {
     id, businessId: business.id, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone, conversationId: adminConversationId(business.ownerPhone), kind: 'reach_suggest',
     text: `💡 ${best[1].size} people looked at *${product.name}* this week but didn't buy. Send them an update?`,
-    buttons: [{ id: `act:reachask:${product.id}`, title: 'Write an update' }, { id: 'act:reach', title: 'Smart Reach' }], status: 'pending', attempts: 0, createdAt: now.toISOString(),
+    buttons: [{ id: `act:reachask:${product.id}`, title: 'Write an update' }, { id: 'act:reach', title: 'Automatic updates' }], status: 'pending', attempts: 0, createdAt: now.toISOString(),
   });
   return id;
 }
@@ -148,7 +148,7 @@ export async function weeklySummary(db: Firestore, businessId: string, now = new
   const month = monthKey(now);
   const costs = ((await db.query(C.ledger, [['businessId', '==', businessId], ['type', '==', 'message_cost']], { limit: 500 })) as unknown as { amountKobo: number; at: string }[]).filter(e => monthKey(new Date(e.at)) === month).reduce((t, e) => t + e.amountKobo, 0);
   const text = !sent ? null : [
-    `📈 Smart Reach this week: ${sent} sent → ${ordered} ordered → ${formatKobo(revenueKobo)}.`,
+    `📈 Updates this week: ${sent} sent → ${ordered} ordered → ${formatKobo(revenueKobo)}.`,
     best ? `Best: *${best[0]}* (${best[1].ordered} order${best[1].ordered === 1 ? '' : 's'}, ${formatKobo(best[1].revenueKobo)}).` : '',
     `Message costs this month: ${formatKobo(costs)}.`,
   ].filter(Boolean).join('\n');

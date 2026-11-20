@@ -90,7 +90,12 @@ export function whatsAppLimitProblems(content: OutboundContent): string[] {
     title(ia.action?.button, 20, 'list button');
     const rows = (ia.action?.sections ?? []).flatMap((s: { rows: unknown[] }) => s.rows);
     if (rows.length > 10) problems.push(`${rows.length} list rows`);
-    for (const r of rows) title(r.title, 24, 'list row');
+    for (const s of ia.action?.sections ?? []) if (s.title && s.title.length > 24) problems.push(`section title "${s.title}" > 24`);
+    for (const r of rows) {
+      title(r.title, 24, 'list row');
+      if (r.description && r.description.length > 72) problems.push(`row "${r.title}" description is ${r.description.length} > 72`);
+      if (/…$/.test(r.description ?? '') && !/^(•|\d)/.test(r.description)) problems.push(`row "${r.title}" description was cut short: "${r.description}"`);
+    }
   }
   if (ia.type === 'carousel') for (const c of ia.action?.cards ?? []) for (const b of c.action?.buttons ?? []) title(b.quick_reply?.title ?? b.reply?.title ?? b.parameters?.display_text, 20, 'card button');
   return problems;

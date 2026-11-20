@@ -24,9 +24,11 @@ test('wallet: older sales are counted from the ledger; a new payment is added at
 test('verify: name → BVN → bank → account → read back → verified; the numbers are stored encrypted; a command interrupts it', async () => {
   const bot = new Bot();
   const say = (text: string, choice?: string) => bot.send('admin', { from: owner(), text, choice });
-  assert.match((await say('/wallet'))[0].text, /Available: \*₦30,000\*[\s\S]*verify your account once/);
+  const money = (await say('/wallet'))[0];
+  assert.match(money.text, /Wallet: \*₦30,000\* available/);
+  assert.equal(money.options[0], 'act:verify');
   await say('Verify now', 'act:verify');
-  assert.deepEqual((await say('menu'))[0].options[0], 'menu:Shop', 'a command instead of an answer just runs');
+  assert.deepEqual((await say('menu'))[0].options[0], 'act:orders', 'MENU instead of an answer leaves the flow');
   await say('verify');
   assert.match((await say('Ada'))[0].text, /first and last name/);
   assert.match((await say('Ada Obi'))[0].text, /2 of 4[\s\S]*BVN/);

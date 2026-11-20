@@ -22,6 +22,7 @@ import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
 import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords } from '../services/segments';
 import { ZONES_ASK } from './zones-flow';
+import { deliverPick, mainMenu, moneyScreen, ordersScreen, pauseChoice, reachHub, subList, waiting } from './owner-home';
 import { ALL_TRIGGERS, executeCampaign, markOwnerSent, planCampaign, planText, TRIGGER_HINT, TRIGGER_LABEL, triggerOn } from '../services/reach';
 import { interestedIn } from '../services/reach-triggers';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
@@ -59,6 +60,13 @@ const GREETING = /^(hi+|hello+|hey+|hiya|helo|good (morning|afternoon|evening|da
 
 // The MENU itself (also the reply to "hi" from an owner who's set up).
 async function menu(c: ActionCtx, section?: Section | null): Promise<Out> {
+  if (section === 'Settings' || section === 'Help') {
+    const rows: { id: string; title: string; description?: string }[] = [];
+    for (const a of ACTIONS) if (a.menu?.section === section && !(await a.hidden?.(c))) rows.push({ id: `act:${a.id}`, title: a.menu.title, description: a.menu.description ?? a.hint });
+    if (section === 'Help') { const order = ['act:test', 'act:help', 'act:call']; rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)); }
+    return subList(section, section === 'Settings' ? 'Settings 👇' : 'Help 👇', rows);
+  }
+  if (!section) return mainMenu(c);
   const visible: OwnerAction[] = [];
   for (const a of ACTIONS) if (a.menu && !(await a.hidden?.(c))) visible.push(a);
   const first = c.business.ownerName?.split(' ')[0];
@@ -205,11 +213,8 @@ async function messageCustomer(c: ActionCtx): Promise<Out> {
 // Paused: customers see the shop and a "back on …" note, but can't order until then.
 async function pause(c: ActionCtx): Promise<Out> {
   const paused = c.business.pausedUntil;
-  const choose = buttons('Pause your shop? Customers can still look, but can\'t order until you reopen.', [['act:close:1', 'Until tomorrow'], ['act:close:3', 'For 3 days'], ['act:close:open', 'Until I reopen']]);
-  if (!c.arg) {
-    if (paused) return buttons(`Your shop is paused${paused === 'open' ? '' : ` until ${new Date(paused).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Africa/Lagos' })}`}. Reopen now?`, [['act:reopen', 'Reopen now'], ['act:menu', 'Menu']]);
-    return choose;
-  }
+  const choose = pauseChoice(null);
+  if (!c.arg) return pauseChoice(paused);
   const days = c.arg === 'open' ? null : Number(c.arg);
   if (c.arg !== 'open' && !(days && days > 0 && days <= 30)) return choose;
   // Reopens at 8am Lagos time on the day.
@@ -243,7 +248,7 @@ async function delivery(c: ActionCtx): Promise<Out | Out[]> {
 // "Send my price list": the next message (a paste, spreadsheet, document or photo) is the delivery list.
 async function zonesUpload(c: ActionCtx): Promise<Out> {
   await c.setAwaiting('zones');
-  return ZONES_ASK;
+  return waiting(ZONES_ASK);
 }
 
 // ── Status posts (services/status-posts.ts) ──
@@ -284,7 +289,7 @@ async function statusPost(c: ActionCtx, what: 'posted' | 'people' | 'skip' | 'ot
   if (what === 'people') return post.ranking.length > MENTIONS ? statusSteps(await nextMentions(c.db, post)) : 'These are the only customers I can suggest for this right now.';
   if (what === 'skip') { await c.db.update(c.db.doc(C.statusPosts, post.id), { status: 'skipped' }); return 'OK, skipped.'; }
   await c.setAwaiting(`campaign:status:${post.id}`);
-  return `Type the message for those ${post.wider.length} customers, e.g. "${post.title} is here! Reply to order." You'll see how many opted in and the cost before anything is sent.`;
+  return waiting(`Type the message for those ${post.wider.length} customers, e.g. "${post.title} is here! Reply to order." You'll see how many opted in and the cost before anything is sent.`);
 }
 
 async function tips(c: ActionCtx, on: boolean): Promise<Out> {
@@ -295,11 +300,11 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
 // ── Smart Reach (services/reach.ts) ──
 async function reachHome(c: ActionCtx): Promise<Out> {
   const rows = ALL_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: TRIGGER_HINT[t] }));
-  return list('Smart Reach sends updates to the right customers, free where it can. Tap an automatic update to switch it on or off.', 'Open Smart Reach', [...rows,
+  return list('Automatic updates go to the right customers, free where they can. Tap one to switch it on or off.', 'Choose', [...rows,
     { id: 'act:reachgroup', title: 'Send to a group', description: 'e.g. "my sneaker buyers", "people who haven\'t ordered in a month"' },
     { id: 'act:reachall', title: 'Send to everyone', description: 'All your customers who get updates' },
     { id: 'act:segments', title: 'My customer groups', description: 'Who buys what, and how many' },
-  ], 'Smart Reach');
+  ], 'Automatic updates');
 }
 async function reachToggle(c: ActionCtx): Promise<Out> {
   const t = ALL_TRIGGERS.find(x => x === c.arg);
@@ -308,16 +313,16 @@ async function reachToggle(c: ActionCtx): Promise<Out> {
   const reachTriggers = { ...(c.business.reachTriggers ?? {}), [t]: on };
   await c.db.update(c.db.doc(C.businesses, c.business.id), { reachTriggers, updatedAt: new Date().toISOString() });
   c.business.reachTriggers = reachTriggers;
-  return buttons(`${on ? '✅' : '⬜'} ${TRIGGER_LABEL[t]} is ${on ? 'on' : 'off'}.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  return buttons(`${on ? '✅' : '⬜'} ${TRIGGER_LABEL[t]} is ${on ? 'on' : 'off'}.`, [['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
 }
 async function reachEveryone(c: ActionCtx): Promise<Out> {
   await c.setAwaiting('reach:all');
-  return 'Type the update for your customers. Write *{name}* where their first name should go, e.g. "Hi {name}, new Ankara gowns just landed!"';
+  return waiting('Type your broadcast. Write *{name}* where their first name should go, e.g. "Hi {name}, new Ankara gowns just landed!" You\'ll see who gets it and the cost before anything is sent.');
 }
 // "Send to a group": who (in plain words) and what. "tell my sneaker buyers about the new Jordans".
 async function reachGroup(c: ActionCtx): Promise<Out> {
   await c.setAwaiting('reach:group');
-  return 'Who should get it, and what\'s the news? e.g. *tell my sneaker buyers about the new Jordans, 10% off this weekend*';
+  return waiting('Who should get it, and what\'s the news? e.g. *tell my sneaker buyers about the new Jordans, 10% off this weekend*');
 }
 
 export async function reachFromWords(c: ActionCtx, raw: string): Promise<Out | Out[]> {
@@ -360,7 +365,7 @@ async function reachAsk(c: ActionCtx): Promise<Out> {
   const p = (await listProducts(c.db, c.business.id)).find(x => x.id === c.arg);
   if (!p) return reachGroup(c);
   const audience = await interestedIn(c.db, c.business.id, p.id, new Date());
-  if (!audience.length) return buttons(`Nobody is waiting on *${p.name}* any more.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  if (!audience.length) return buttons(`Nobody is waiting on *${p.name}* any more.`, [['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
   const samples = await draftUpdates(c, `${p.name} is available now, ${formatKobo(p.priceKobo)}`);
   await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { reachDraft: { audience, segment: `looked at ${p.name}`, samples } }, { merge: true });
   return [`*${audience.length} people* looked at ${p.name}.\n\nPick the wording:\n\n${samples.map((x, i) => `*${i + 1}.* ${x}`).join('\n\n')}`.slice(0, 4000),
@@ -385,8 +390,9 @@ export async function reachPlan(c: ActionCtx, text: string, audience?: string[] 
   const body = offer && !/\{code\}/i.test(text) ? `${text} Your code: {code}` : text;
   const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: extra.picks ? 'Picked for you' : segment ? `Update to ${segment}` : 'Update to everyone', text: body, source: 'owner', button: ['menu', 'See what we have'], audience: audience ?? null, segment: segment ?? null, picks: extra.picks ?? false, offer });
   if (!decisions.length) return buttons('You have no customers yet. Once people chat or order, you can send them updates here.', [['act:menu', 'Menu']]);
-  if (!summary.open && !summary.owner_sent && !summary.paid_template) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this right now: paid updates need your marketing template approved by Meta.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
-  return buttons(planText(summary, decisions.length), [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:reachall', 'Edit message']]);
+  if (!summary.open && !summary.owner_sent && !summary.paid_template) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this right now: paid updates need your marketing template approved by Meta.`, [['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
+  const mixed = summary.owner_sent > 0 || summary.paid_template > 0;
+  return buttons(planText(summary, decisions.length), mixed ? [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:cancel', 'Cancel']] : [[`act:reachsend:${campaign.id}`, 'Send'], ['act:reachall', 'Edit'], ['act:cancel', 'Cancel']]);
 }
 async function reachSend(c: ActionCtx, freeOnly: boolean): Promise<Out | Out[]> {
   const r = await executeCampaign(c.db, c.cfg, c.deps, c.business, c.arg ?? '', { freeOnly });
@@ -394,38 +400,49 @@ async function reachSend(c: ActionCtx, freeOnly: boolean): Promise<Out | Out[]> 
   if ('blocked' in r && r.blocked) return buttons(`Your wallet has ${formatKobo(r.blocked.haveKobo)}, and the paid messages cost ${formatKobo(r.blocked.needKobo)}. Nothing was sent. Send the free ones only, or wait for more sales.`, [[`act:reachfree:${r.campaign.id}`, 'Free ones only'], ['act:wallet', 'My wallet'], ['act:menu', 'Menu']]);
   if (r.campaign.status !== 'planned' && !r.sent && !r.queued && !r.links.length) return 'That update was already sent.';
   const head = `✅ Sent to ${r.sent}${r.queued ? `; ${r.queued} more at 8am (it's late now)` : ''}.`;
-  if (!r.links.length) return buttons(head, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  if (!r.links.length) return buttons(head, [['act:reach', 'Automatic updates'], ['act:menu', 'Menu']]);
   const list = r.links.map((l, i) => `${i + 1}. ${l.name}: ${l.link}`).join('\n');
   return [head, `Your regulars: tap each link to send it from your own WhatsApp (free). The message is already typed.\n\n${list}`.slice(0, 4000), buttons('Sent them all?', [[`act:reachmark:${r.campaign.id}`, 'Mark all sent'], ['act:menu', 'Menu']])];
 }
 
 export const ACTIONS: OwnerAction[] = [
   { id: 'menu', command: 'menu', hint: 'Everything Relay can do for your shop, to tap', aliases: ['menu', 'main menu', 'options', 'home', 'start', 'open my menu', 'set up my shop'], run: c => menu(c) },
-  { id: 'help', hint: 'What I can do, in short', tool: { name: 'help' }, aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
+  { id: 'help', hint: 'What I can do, in short', menu: { section: 'Help', title: 'Commands', description: 'What to type, with your own products' }, tool: { name: 'help' }, aliases: ['help', 'commands', 'what can you do', 'what can you do?', '?', 'see how relay works'], next: [['menu', 'Menu']], async run(c) { return helpText(c.business, await listProducts(c.db, c.business.id)); } },
   // Shop
   { id: 'add', command: 'add', hint: 'Add a product: send its name and price, with a photo if you have one', menu: { section: 'Shop', title: 'Add product' }, aliases: ['add', 'add product', 'add a product', 'new product'],
     async run(c) {
       const form = flowId(c.cfg, 'add');
       if (form) return flowMessage('add', form, c.business.id, 'Tap below to add a product: name, price, category and stock in one form.', { categories: (await listCategories(c.db, c.business.id)).map(x => ({ id: x.id, title: x.name })) });
-      await c.setAwaiting('add'); return `Send the product's name and price, e.g. *${example(c.business, await listProducts(c.db, c.business.id))}*. Add a photo with it as the caption if you have one. Add a number at the end if you count stock.`; } },
+      await c.setAwaiting('add'); return waiting(`Send the product's name and price, e.g. *${example(c.business, await listProducts(c.db, c.business.id))}*. Add a photo with it as the caption if you have one. Add a number at the end if you count stock.`); } },
   { id: 'products', command: 'products', hint: 'See all your products and prices', menu: { section: 'Shop', title: 'My products' }, aliases: ['products', 'my products', 'product list', 'list products', 'stock', 'inventory', 'catalogue', 'catalog'], tool: { name: 'listProducts' }, next: [['add', 'Add product'], ['soldout', 'Mark sold out'], ['menu', 'Menu']], run: tool('listProducts') },
   { id: 'soldout', command: 'soldout', hint: 'Mark a product as sold out', menu: { section: 'Shop', title: 'Mark sold out' }, aliases: ['soldout', 'sold out', 'mark sold out', 'out of stock'], next: [['soldout', 'Mark another'], ['products', 'My products'], ['menu', 'Menu']], run: soldOut },
   // Orders
-  { id: 'orders', command: 'orders', hint: "Today's orders", menu: { section: 'Orders', title: "Today's orders" }, aliases: ['orders', "today's orders", 'todays orders', 'orders today', 'recent orders', 'my orders'], tool: { name: 'listOrders', args: { filter: 'today' } }, next: [['pending', 'To deliver'], ['owing', 'Who owes me'], ['menu', 'Menu']], run: tool('listOrders', { filter: 'today' }) },
-  { id: 'pending', hint: 'Paid orders still to deliver or hand over', menu: { section: 'Orders', title: 'Pending orders', description: 'Paid, still to deliver or hand over' }, aliases: ['pending', 'pending orders', 'to deliver', 'paid orders'], next: [['orders', "Today's orders"], ['owing', 'Who owes me'], ['menu', 'Menu']], run: pendingOrders },
+  { id: 'orders', command: 'orders', hint: 'Orders: what to deliver, and today\'s', aliases: ['orders', "today's orders", 'todays orders', 'orders today', 'recent orders', 'my orders'], tool: { name: 'listOrders', args: { filter: 'today' } }, run: ordersScreen },
+  { id: 'pending', hint: 'To deliver', aliases: ['pending', 'pending orders', 'to deliver', 'paid orders'], run: ordersScreen },
+  { id: 'deliverpick', hint: 'Mark an order delivered', run: deliverPick },
+  { id: 'delivered', hint: 'This order was delivered or picked up', next: [['orders', 'Orders'], ['menu', 'Menu']], async run(c) {
+    const o = await findOrder(c, c.arg);
+    if (!o) return 'That order is gone. Send *orders* to see them.';
+    return runTool('updateFulfilment', { order: o.ref, status: o.delivery?.method === 'pickup' ? 'picked_up' : 'delivered' }, c);
+  } },
+  { id: 'money', hint: 'Sales (goods and delivery) and your wallet', aliases: ['money', 'my money'], run: moneyScreen },
+  { id: 'reachhub', hint: 'Status, broadcast or automatic updates', aliases: ['message customers', 'marketing', 'promote'], run: async () => reachHub() },
+  { id: 'cancel', hint: 'Stop what you were doing', async run() { return buttons('Cancelled. Nothing was sent or saved.', [['act:menu', 'Menu']]); } },
+  { id: 'policyedit', hint: 'Change your shop policies', async run(c) { await c.setAwaiting('policies'); return waiting('Type your policies in your own words: returns, exchanges and refunds, e.g. *Exchange within 3 days. No refunds.*'); } },
   { id: 'receipt', command: 'receipt', hint: 'Send the PDF receipt of a paid order again', menu: { section: 'Orders', title: 'Resend a receipt' }, aliases: ['receipt', 'receipts', 'resend receipt'], next: [['orders', "Today's orders"], ['menu', 'Menu']], run: receipt },
   // Money
-  { id: 'sales', command: 'sales', hint: 'Sales today, this week and this month', menu: { section: 'Money', title: 'Sales report' }, aliases: ['sales', 'sales today', 'sales report', 'report', 'today', 'how much did i make', 'how much did i make today', 'how much have i made', 'how much did i sell today', 'how much have i sold today', 'how much i make today'], tool: { name: 'salesToday' }, next: [['owing', 'Who owes me'], ['orders', "Today's orders"], ['menu', 'Menu']], run: salesReport },
-  { id: 'wallet', command: 'wallet', hint: 'Your Relay wallet: balance, withdrawals and where payouts go', menu: { section: 'Money', title: 'Wallet' }, aliases: ['wallet', 'my wallet', 'balance', 'my balance'], run: walletView },
+  { id: 'sales', command: 'sales', hint: 'Sales today, this week and this month',  aliases: ['sales', 'sales today', 'sales report', 'report', 'today', 'how much did i make', 'how much did i make today', 'how much have i made', 'how much did i sell today', 'how much have i sold today', 'how much i make today'], tool: { name: 'salesToday' }, run: moneyScreen },
+  { id: 'wallet', command: 'wallet', hint: 'Your Relay wallet: balance, withdrawals and where payouts go', aliases: ['wallet', 'my wallet', 'balance', 'my balance'], run: moneyScreen },
+  { id: 'walletdetails', hint: 'Wallet details', aliases: ['wallet details', 'payout details'], run: walletView },
   { id: 'withdraw', command: 'withdraw', hint: 'Send money from your wallet to your bank account, no fee', aliases: ['withdraw', 'withdrawal', 'payout', 'cash out'], run: startWithdraw },
   { id: 'verify', hint: 'Verify your account once to withdraw', aliases: ['verify', 'verify me', 'verify account', 'kyc'], run: startVerify },
   { id: 'payouts', hint: 'Your last withdrawals', aliases: ['payouts', 'payout history', 'withdrawals'], next: [['wallet', 'My wallet'], ['menu', 'Menu']], run: payoutHistory },
-  { id: 'owing', command: 'owing', hint: 'Orders still waiting for payment', menu: { section: 'Money', title: 'Who owes me' }, aliases: ['owing', 'who owes me', 'unpaid', 'unpaid orders', 'awaiting payment', 'debtors'], tool: { name: 'listOrders', args: { filter: 'unpaid' } }, next: [['sales', 'Sales report'], ['orders', "Today's orders"], ['menu', 'Menu']], run: tool('listOrders', { filter: 'unpaid' }) },
+  { id: 'owing', command: 'owing', hint: 'Orders still waiting for payment', menu: { section: 'Money', title: 'Who owes me' }, aliases: ['owing', 'who owes me', 'unpaid', 'unpaid orders', 'awaiting payment', 'debtors'], tool: { name: 'listOrders', args: { filter: 'unpaid' } }, next: [['money', 'Money'], ['orders', 'Orders'], ['menu', 'Menu']], run: tool('listOrders', { filter: 'unpaid' }) },
   // Customers
   { id: 'customers', command: 'customers', hint: 'Your top customers: who buys most and what they like', menu: { section: 'Customers', title: 'Top customers' }, aliases: ['customers', 'my customers', 'top customers', 'customer list'], tool: { name: 'listCustomers', args: { sort: 'top' } }, next: [['campaign', 'Send a campaign'], ['menu', 'Menu']], run: tool('listCustomers', { sort: 'top' }) },
-  { id: 'status', command: 'status', hint: 'Make a WhatsApp Status for a product and see which customers to mention', menu: { section: 'Customers', title: 'Make a Status' }, aliases: ['status', 'make a status', 'make status', 'status post', 'post a status'], next: [['menu', 'Menu']], run: makeStatus },
-  { id: 'reach', command: 'reach', hint: 'Smart Reach: updates to the right customers by the cheapest route, and automatic ones', menu: { section: 'Customers', title: 'Smart Reach' }, aliases: ['reach', 'smart reach', 'marketing'], run: reachHome },
-  { id: 'campaign', command: 'campaign', hint: 'Send an update to your customers; you see who gets it and the cost first', menu: { section: 'Customers', title: 'Send an update' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign', 'send to everyone'], run: c => reachEveryone(c) },
+  { id: 'status', command: 'status', hint: 'Make a WhatsApp Status for a product and see which customers to mention', menu: { section: 'Customers', title: 'Post a Status' }, aliases: ['status', 'make a status', 'make status', 'status post', 'post a status'], next: [['menu', 'Menu']], run: makeStatus },
+  { id: 'reach', command: 'reach', hint: 'Automatic updates: back in stock, left in cart, price drops; and updates to a group', menu: { section: 'Customers', title: 'Automatic updates' }, aliases: ['reach', 'smart reach', 'automatic updates'], run: reachHome },
+  { id: 'campaign', command: 'campaign', hint: 'Send a broadcast to your customers; you see who gets it and the cost first', menu: { section: 'Customers', title: 'Send a broadcast' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign', 'send to everyone'], run: c => reachEveryone(c) },
   { id: 'reachall', hint: 'Send an update to everyone', run: c => reachEveryone(c) },
   { id: 'reachgroup', hint: 'Send an update to a group of customers', run: reachGroup },
   { id: 'reachpick', hint: 'Use this wording', run: reachPick },
@@ -435,19 +452,19 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'reachtoggle', hint: 'Switch an automatic update on or off', run: reachToggle },
   { id: 'reachsend', hint: 'Send the planned update', run: c => reachSend(c, false) },
   { id: 'reachfree', hint: 'Send the planned update by free routes only', run: c => reachSend(c, true) },
-  { id: 'reachmark', hint: 'The links were sent from your phone', next: [['reach', 'Smart Reach'], ['menu', 'Menu']], async run(c) { const n = await markOwnerSent(c.db, c.business.id, c.arg ?? ''); return n ? `👍 Marked ${n} as sent.` : 'Those were already marked as sent.'; } },
+  { id: 'reachmark', hint: 'The links were sent from your phone', next: [['reach', 'Automatic updates'], ['menu', 'Menu']], async run(c) { const n = await markOwnerSent(c.db, c.business.id, c.arg ?? ''); return n ? `👍 Marked ${n} as sent.` : 'Those were already marked as sent.'; } },
   // Settings
   { id: 'hours', command: 'hours', hint: 'See or change your opening hours', menu: { section: 'Settings', title: 'Opening hours' }, aliases: ['hours', 'opening hours', 'my hours'], next: [['delivery', 'Delivery'], ['menu', 'Menu']], run: hours },
   { id: 'delivery', command: 'delivery', hint: 'See or change your delivery areas and prices', menu: { section: 'Settings', title: 'Delivery' }, aliases: ['delivery', 'delivery prices', 'delivery zones', 'zones'], next: [['hours', 'Opening hours'], ['menu', 'Menu']], run: delivery },
   { id: 'messages', command: 'messages', hint: 'Choose the messages customers get from your shop', menu: { section: 'Settings', title: 'Messages' }, aliases: ['messages', 'my messages', 'customer messages'], async run() { return messagesMenu(); } },
-  { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies' }, aliases: ['policies', 'policy', 'my policies'], next: [['menu', 'Menu']], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; } },
+  { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies', description: 'Returns and refunds; the assistant answers from them' }, aliases: ['policies', 'policy', 'my policies'], next: [['policyedit', 'Change policies'], ['menu', 'Menu']], async run(c) { const r = (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; return typeof r === 'string' ? r.replace(/\n\nTo change them send \*policies:\* followed by your own words\.$/, '') : r; } },
   { id: 'zonesupload', hint: 'Upload all your delivery areas and prices at once', aliases: ['delivery list', 'upload delivery', 'delivery prices list', 'upload delivery prices', 'send delivery list'], run: zonesUpload },
   { id: 'tone', hint: 'How the shop assistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
   { id: 'settone', hint: 'Set the assistant tone', run: setTone },
   { id: 'fee', hint: "Who pays Relay's 1% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
-  { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', menu: { section: 'Settings', title: 'Pause my shop' }, aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
+  { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
     hidden: c => !!c.business.pausedUntil },
-  { id: 'reopen', hint: 'Open your shop for orders again', menu: { section: 'Settings', title: 'Reopen my shop' }, aliases: ['reopen', 'open shop', 'reopen shop', 'unpause'], next: [['menu', 'Menu']], run: reopen, hidden: c => !c.business.pausedUntil },
+  { id: 'reopen', hint: 'Open your shop for orders again', aliases: ['reopen', 'open shop', 'reopen shop', 'unpause'], next: [['menu', 'Menu']], run: reopen, hidden: c => !c.business.pausedUntil },
   { id: 'switch', command: 'switch', hint: 'Move between your shops or add another one', menu: { section: 'Settings', title: 'Switch shop' }, aliases: ['switch', 'switch shop', 'switch shops', 'my shops', 'shops'],
     hidden: async c => ((await getOwner(c.db, c.ownerPhone))?.businessIds?.length ?? 1) < 2,
     async run(c) { await handleShops(c.admin, c.business, null, 'switch', c.reply); return null; } },
@@ -471,12 +488,12 @@ export const ACTIONS: OwnerAction[] = [
     return `✅ All of *${p.name}* is marked sold out.`;
   } },
   { id: 'msgcust', hint: 'Open the chat with an order\'s customer', run: messageCustomer },
-  { id: 'ready', hint: 'Mark a paid order ready', next: [['pending', 'To deliver'], ['menu', 'Menu']], async run(c) { return runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c); } },
+  { id: 'ready', hint: 'Mark a paid order ready', next: [['orders', 'To deliver'], ['menu', 'Menu']], async run(c) { return runTool('updateFulfilment', { order: c.arg ?? '', status: 'ready' }, c); } },
   { id: 'photo', hint: 'Add a photo to a product', async run(c) {
     const p = c.arg ? ((await c.db.get(c.db.doc(C.products, c.arg))) as Product | null) : null;
     if (!p || p.businessId !== c.business.id || p.deletedAt) return 'That product is gone.';
     await c.setAwaiting(`photo:${p.id}`);
-    return `Send the photo of *${p.name}*.`;
+    return waiting(`Send the photo of *${p.name}*.`);
   } },
 ];
 
@@ -529,7 +546,10 @@ export async function runAction(a: OwnerAction, c: ActionCtx): Promise<void> {
 export async function handleActionTap(choiceId: string, c: Omit<ActionCtx, 'arg'>): Promise<boolean> {
   if (choiceId.startsWith('menu:')) {
     const s = SECTIONS.find(x => x === choiceId.slice(5));
-    await c.reply(await menu({ ...c, arg: null }, s ?? null));
+    // Buttons still in the chat from the old menu go to the new screens.
+    const ctx = { ...c, arg: null };
+    const out = s === 'Orders' ? await ordersScreen(ctx) : s === 'Money' ? await moneyScreen(ctx) : s === 'Customers' ? reachHub() : await menu(ctx, s === 'Settings' || s === 'Help' ? s : null);
+    await c.reply(out);
     return true;
   }
   if (!choiceId.startsWith('act:')) return false;

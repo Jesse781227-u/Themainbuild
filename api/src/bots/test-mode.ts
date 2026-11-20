@@ -31,7 +31,7 @@ export async function startTest(ctx: AdminContext, deps: BotDeps, business: Busi
   await ctx.db.delete(ctx.db.doc(C.carts, id));
   await ctx.db.set(ctx.db.doc(C.conversations, id), { shop: null }, { merge: true });
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { testMode: { businessId: business.id, startedAt: new Date().toISOString() } }, { merge: true });
-  await reply(`🧪 *Test mode.* You're now a customer of ${business.name}. Everything works like the real thing, but payments are pretend and no real orders are made.\n\nType *EXIT* any time to come back to Relay.`);
+  await reply(`🧪 *Test mode.* You're now a customer of ${business.name}. Everything works like the real thing, but payments are pretend and no real orders are made.\n\nType *EXIT* any time to come back to Relay (every message here reminds you).`);
   return runTest(ctx, deps, business.id, { text: 'hi' });
 }
 
@@ -43,8 +43,9 @@ export async function runTest(ctx: AdminContext, deps: BotDeps, businessId: stri
   await handleShop({ db: ctx.db, cfg: ctx.cfg, event, businessId, conversationId: id, test: true }, deps);
 }
 
-export async function exitTest(ctx: AdminContext, readyToConnect: boolean, reply: (c: OutboundContent | string) => Promise<unknown>) {
+export async function exitTest(ctx: AdminContext, readyToConnect: boolean, reply: (c: OutboundContent | string) => Promise<unknown>, opts: { quiet?: boolean } = {}) {
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { testMode: null }, { merge: true });
+  if (opts.quiet) return reply("You're back with Relay 👋");
   if (readyToConnect) return reply(buttons("You're back with Relay 👋 That's exactly what your customers will see. Ready to connect your WhatsApp number?", [['ob:connect', 'Connect now'], ['test:start', 'Test again']]));
   return reply("You're back with Relay 👋 Send HELP to see what I can do, or TEST to try your shop again.");
 }

@@ -45,23 +45,25 @@ test('commands: /sales, sales, "how much did I make today?", the menu row and th
     await ai.send('admin', { from: owner(), text: 'what are my takings looking like' }),
   ];
   for (const r of replies) {
-    assert.match(r[0].text, /^📊 Sales for Business biz-a\nToday: /);
-    assert.deepEqual(r[0].options, ['act:owing', 'act:orders', 'act:menu']);
+    assert.match(r[0].text, /^💰 \*Money\* · Business biz-a\nToday: ₦[\d,]+ goods \+ ₦[\d,]+ delivery = /);
+    assert.deepEqual(r[0].options, ['act:verify', 'act:owing', 'act:menu']);
   }
 });
 
-test('menu: "hi" opens it; too many rows for one list → sections, each its own list; things that don\'t apply are hidden', async () => {
+test('menu: "hi" opens one flat list (most jobs one tap away); Settings and Help are sub-lists with a way back', async () => {
   const bot = new Bot();
   const hi = await bot.send('admin', { from: owner(), text: 'hi' });
-  assert.deepEqual(hi[0].options, ['menu:Shop', 'menu:Orders', 'menu:Money', 'menu:Customers', 'menu:Settings', 'menu:Help']);
+  assert.deepEqual(hi[0].options, ['act:orders', 'act:money', 'act:add', 'act:soldout', 'act:products', 'act:reachhub', 'act:customers', 'act:close', 'menu:Settings', 'menu:Help']);
+  assert.match(hi[0].text, /^Hi 👋 \*Business biz-a\* today: \d+ to deliver · ₦[\d,]+ in sales · \d+ unpaid/);
   const settings = await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' });
-  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:close'], 'one shop: no Switch shop; not paused: no Reopen');
-  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Shop', text: 'Shop' }))[0]), ['act:add', 'act:products', 'act:soldout']);
+  assert.deepEqual(rows(settings[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:menu'], 'one shop: no Switch shop; Pause is on the main menu now');
+  assert.deepEqual((await bot.send('admin', { from: owner(), choice: 'menu:Shop', text: 'Shop' }))[0].options[0], 'act:orders', 'an old Shop button from chat history opens the new menu');
   // A second shop brings Switch shop; pausing swaps Pause for Reopen.
   await addShop(db, fx.a.ownerPhone, fx.b.id, {});
   await switchShop(db, fx.a.ownerPhone, fx.a.id); // adding makes the new one active
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: 'open' });
-  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:reopen', 'act:switch']);
+  assert.deepEqual(rows((await bot.send('admin', { from: owner(), choice: 'menu:Settings', text: 'Settings' }))[0]), ['act:hours', 'act:delivery', 'act:messages', 'act:policies', 'act:tone', 'act:fee', 'act:switch', 'act:menu']);
+  assert.match(JSON.stringify((await bot.send('admin', { from: owner(), text: 'menu' }))[0]), /Reopen shop/);
   await db.update(db.doc('businesses', fx.a.id), { pausedUntil: null });
   // Unknown words: a short answer and the Menu, not a wall of help.
   const huh = await bot.send('admin', { from: owner(), text: 'blorp zzz' });
@@ -100,7 +102,7 @@ test('actions: sold out, receipt, add product with its follow-ups, pause stops c
   assert.match((await bot.send('admin', { from: owner(), choice: `act:photo:${id}`, text: 'Add photo' }))[0].text, /Send the photo of \*Zobo\*/);
 
   const ask = await bot.send('admin', { from: owner(), text: '/close' });
-  assert.deepEqual(ask[0].options, ['act:close:1', 'act:close:3', 'act:close:open']);
+  assert.deepEqual(ask[0].options, ['act:close:1', 'act:close:3', 'act:close:open', 'act:cancel']);
   assert.match((await bot.send('admin', { from: owner(), choice: 'act:close:open', text: 'Until I reopen' }))[0].text, /Paused/);
   const shop = new Bot();
   await shop.send('shop', { from: '2348091300001', to: fx.a.pnid, choice: `buy:${fx.a.product}`, text: 'Add to cart' });

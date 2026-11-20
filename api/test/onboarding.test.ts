@@ -173,7 +173,8 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   // TEST: the welcome they picked (option 2) is the first thing a customer gets for "hi".
   const test = await say('Test my shop', 'test:start');
   assert.equal(test[1].text.split('\n')[0], "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
-  assert.deepEqual(test[1].options, ['menu', 'ask', 'track'], 'no carousel on a plain hi');
+  assert.deepEqual(test[1].options, ['menu', 'ask', 'act:exittest'], 'no carousel on a plain hi; in test mode, the way back instead of tracking');
+  assert.match(test[1].text, /\n\n🧪 Test mode · type EXIT to go back/);
   await say('EXIT');
 
   biz = await doc('businesses', bizId);
@@ -332,10 +333,10 @@ test('admin: an owner who is already set up gets a greeting, not "didn\'t unders
   const bot = new Bot();
   const o = fx.b.ownerPhone.slice(1);
   const hi = await bot.send('admin', { from: o, text: 'Hi' });
-  assert.match(hi[0].text, /^Hi 👋 What would you like to do for Business biz-b\?/);
-  assert.deepEqual(opts(hi), ['menu:Shop', 'menu:Orders', 'menu:Money', 'menu:Customers', 'menu:Settings', 'menu:Help'], 'hi opens the MENU, by section when it is too long for one list');
+  assert.match(hi[0].text, /^Hi 👋 \*Business biz-b\* today: /);
+  assert.deepEqual(opts(hi).slice(0, 2), ['act:orders', 'act:money'], 'hi opens the MENU');
   assert.match((await bot.send('admin', { from: o, choice: 'g:products', text: 'Products' }))[0].text, /Your products/);
-  assert.match((await bot.send('admin', { from: o, text: 'good morning!' }))[0].text, /What would you like to do/);
+  assert.match((await bot.send('admin', { from: o, text: 'good morning!' }))[0].text, /^Hi 👋 \*Business biz-b\* today: /);
 });
 
 test('categories: owner commands, counts, and the delete-with-products guard', async () => {

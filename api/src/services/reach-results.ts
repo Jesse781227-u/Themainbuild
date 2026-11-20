@@ -59,7 +59,7 @@ export async function dueCampaignReports(db: Firestore, now = new Date()) {
     const business = (await db.get(db.doc(C.businesses, c.businessId))) as Business | null;
     if (!business?.ownerPhone) continue;
     const id = `${c.businessId}_reach_${c.id}`;
-    if (await db.create(db.doc(C.outbox, id), { id, businessId: c.businessId, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone, conversationId: adminConversationId(business.ownerPhone), kind: 'reach_report', text: resultText(c.name, r), buttons: [{ id: 'act:reach', title: 'Smart Reach' }, { id: 'act:menu', title: 'Menu' }], status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(id);
+    if (await db.create(db.doc(C.outbox, id), { id, businessId: c.businessId, audience: 'owner', channel: 'whatsapp', to: business.ownerPhone, conversationId: adminConversationId(business.ownerPhone), kind: 'reach_report', text: resultText(c.name, r), buttons: [{ id: 'act:reach', title: 'Automatic updates' }, { id: 'act:menu', title: 'Menu' }], status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(id);
   }
   return ids;
 }

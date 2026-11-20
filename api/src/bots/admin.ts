@@ -24,6 +24,7 @@ import { chooseAdminTool, parseAdminCommand } from './intent';
 import { conversational, isFail, runAgent } from './agent';
 import { loadMemory, remember, saveMemory } from './agent-memory';
 import { debugNote, recordAgentTurn } from './agent-stats';
+import { waiting } from './owner-home';
 import { ACTION_TOOLS, adminContext, adminSystem, adminTools2, applyUndo, confirmPrompt, mustConfirm, type AdminHelpers, type Undo } from './admin-agent';
 import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
@@ -98,7 +99,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   // ── TEST: the owner shops in their own shop (any time) ──
   const testing = (conv as { testMode?: { businessId: string } | null }).testMode;
   if (testing) {
-    if (choiceId === 'test:exit' || (!choiceId && TEST_EXIT.test(text.trim()))) return exitTest(ctx, ob?.step === 'ready', reply);
+    if (choiceId === 'test:exit' || choiceId === 'act:exittest' || (!choiceId && TEST_EXIT.test(text.trim()))) {
+      const ready = ob?.step === 'ready';
+      await exitTest(ctx, ready, reply, { quiet: !ready && !!business });
+      if (!ready && business) { const tb = await makeToolCtx(ctx, deps, business, null); return runAction(actionById('menu')!, { ...tb, admin: ctx, reply, setAwaiting: async () => {}, arg: null }); }
+      return;
+    }
     return runTest(ctx, deps, testing.businessId);
   }
   if (choiceId === 'test:start' || (!choiceId && !input.imageId && !input.document && TEST_START.test(text.trim()))) {
@@ -139,8 +145,34 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   async function everyday(business: Business): Promise<unknown> {
   const flow: FlowCtx = { db, cfg, deps, business, convRef, state };
   const toolBase = await makeToolCtx(ctx, deps, business, null);
-  const setAwaiting = async (v: string | null) => { state.awaiting = v; await db.set(convRef, { awaiting: v }, { merge: true }); };
+  const setAwaiting = async (v: string | null) => { state.awaiting = v; await db.set(convRef, { awaiting: v, awaitingAt: v ? new Date().toISOString() : null }, { merge: true }); };
   const actionCtx = { ...toolBase, admin: ctx, reply, setAwaiting };
+
+  // ── Navigation first: MENU / CANCEL / BACK, and taps that leave a half-done task behind ──
+  const c0 = conv as AdminConversation & { awaitingAt?: string | null; zoneDraft?: unknown; hoursDraft?: unknown; kycDraft?: unknown; reachDraft?: unknown };
+  // A question nobody answered for 10 minutes is dropped; the message is handled normally.
+  if (state.awaiting && (!c0.awaitingAt || Date.now() - new Date(c0.awaitingAt).getTime() > CONFIRM_MINUTES * 60_000)) {
+    state.awaiting = null;
+    await db.set(convRef, { awaiting: null, awaitingAt: null }, { merge: true });
+  }
+  const pendingNow = !!(state.awaiting || c0.pendingAction || c0.zoneDraft || c0.hoursDraft || c0.kycDraft || c0.reachDraft || state.productDraft || state.editingProductId || state.importDraft);
+  const clearPending = async (keep: string[] = []) => {
+    const patch: Record<string, null> = { awaiting: null, awaitingAt: null, pendingAction: null, zoneDraft: null, hoursDraft: null, kycDraft: null, reachDraft: null, productDraft: null, editingProductId: null, importDraft: null };
+    for (const k of keep) delete patch[k];
+    Object.assign(c0, patch);
+    state.awaiting = null; if (!keep.includes('productDraft')) state.productDraft = null; state.editingProductId = null; state.importDraft = null;
+    await db.set(convRef, patch, { merge: true });
+  };
+  const word = text.trim().toLowerCase().replace(/[.!]+$/, '');
+  if (!choiceId && !input.document && !input.imageId) {
+    if (/^(menu|home|start|hi|hello)$/.test(word)) { await clearPending(); return runAction(actionById('menu')!, { ...actionCtx, arg: null }); }
+    if (/^(cancel|stop|back|exit|nevermind|never mind|no)$/.test(word)) {
+      if (pendingNow) { await clearPending(); return reply(buttons('Cancelled. Nothing was sent or saved.', [['act:menu', 'Menu']])); }
+      return runAction(actionById('menu')!, { ...actionCtx, arg: null });
+    }
+  }
+  // Any menu row or follow-up button leaves what was half-done (the wording pick keeps its draft).
+  if (choiceId && /^(act|menu):/.test(choiceId) && pendingNow) await clearPending(choiceId.startsWith('act:reachpick') ? ['reachDraft'] : []);
 
   // ── A submitted form (WhatsApp Flow): only for the shop it was sent for ──
   const form = readFlowReply(input.flow);
@@ -172,7 +204,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   if (state.awaiting === 'add' && !choiceId) {
     const parsed = parseProduct(text);
     if (parsed) { await setAwaiting(null); for (const o of await addProduct(flow, { ...parsed, imageUrl: await photo() })) await reply(o); return; }
-    if (!matchAction(text)) return reply(withFollowUps(`Send the name and price together, e.g. *${example(business, await listProducts(db, business.id))}*.`, undefined));
+    if (!matchAction(text)) return reply(waiting(`I need a name and a price, e.g. *${example(business, await listProducts(db, business.id))}*.`));
     await setAwaiting(null);
   }
   // "tell my sneaker buyers about the new Jordans": a group update, in plain words.
@@ -183,6 +215,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     return;
   }
   if (state.awaiting === 'reach:all' && !choiceId && text.trim() && !matchAction(text)) {
+    if (text.trim().split(/\s+/).length < 2) return reply(waiting('Type the whole message you want to send to your customers (a few words at least).'));
     await setAwaiting(null);
     return reply(await reachPlan({ ...actionCtx, arg: null }, text.trim()));
   }
@@ -190,6 +223,11 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     const statusPost = state.awaiting.startsWith('campaign:status:') ? state.awaiting.slice(16) : undefined;
     await setAwaiting(null);
     return askOrRun('broadcast', { message: text.trim(), ...(statusPost ? { statusPost } : {}) });
+  }
+  if (state.awaiting === 'policies' && !choiceId && text.trim()) {
+    await setAwaiting(null);
+    const r = await handleSettings(db, cfg, business, `policies: ${text.trim()}`, null);
+    return reply(typeof r === 'string' ? buttons(r.slice(0, 1000), [['act:policies', 'Shop policies'], ['act:menu', 'Menu']]) : r ?? 'Saved.');
   }
   if (state.awaiting?.startsWith('photo:') && input.imageId) {
     const id = state.awaiting.slice(6);

@@ -103,10 +103,10 @@ test('route plan: counts and cost per route before sending', async () => {
   await bot.send('admin', { from: o, choice: 'act:reachall', text: 'Send an update' });
   const plan = await bot.send('admin', { from: o, text: 'Hi {name}, new Ankara gowns just landed!' });
   assert.match(plan[0].text, /customers:\n• \d+ free, in their chat\n• 1 regulars: you send from your phone[\s\S]*Cost: ₦0/);
-  const [send, free, edit] = plan[0].options;
+  const [send, free, cancel] = plan[0].options;
   assert.match(send, /^act:reachsend:c_/);
   assert.match(free, /^act:reachfree:c_/);
-  assert.equal(edit, 'act:reachall');
+  assert.equal(cancel, 'act:cancel', 'some go from your phone: Send all · Free ones only · Cancel');
   assert.equal((await db.query('sends', [['campaignId', '==', send.split(':')[2]]])).length, 0, 'nothing sent before Send all');
   const done = await bot.send('admin', { from: o, choice: send, text: 'Send all' });
   assert.match(done[0].text, /^✅ Sent to \d+\./);
