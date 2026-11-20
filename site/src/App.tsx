@@ -62,7 +62,7 @@ function MobileCta() {
     <AnimatePresence>
       {show && (
         <motion.div className="m-cta" initial={{ y: 90 }} animate={{ y: 0 }} exit={{ y: 90 }} transition={{ duration: 0.3, ease }}>
-          <span><b>4.5%</b> per sale</span>
+          <span><b>No sale, no fee</b></span>
           <a className="btn btn-lime" href={company.ctaHref}>Open my shop</a>
         </motion.div>
       )}
@@ -75,7 +75,7 @@ function Opening() {
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
   const drift = [useTransform(scrollYProgress, [0, 1], [0, -120]), useTransform(scrollYProgress, [0, 1], [0, -60]), useTransform(scrollYProgress, [0, 1], [0, -180]), useTransform(scrollYProgress, [0, 1], [0, -90])];
   const narrow = useViewport().w < 1000;
-  const lines = [['Take orders', ''], ['on WhatsApp', ''], ['while you', 'sleep.']];
+  const lines = [['Stop losing', ''], ['orders in', ''], ['your', 'DMs.']];
   const cards = [
     { src: PHOTOS.ankaraTop, name: 'Ankara Off-shoulder Top', price: '₦18,500', note: 'Sold 02:13', cls: 'c1' },
     { src: PHOTOS.jollof, name: 'Jollof Rice + Chicken', price: '₦4,500', note: 'Paid ✓', cls: 'c2' },
@@ -95,13 +95,13 @@ function Opening() {
           ))}
         </h1>
         <motion.div className="op-side" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.8 }}>
-          <p>Relay answers your customers on WhatsApp day and night. It sells from your catalogue, marks an order paid only when the money arrives, and keeps buyers updated until delivery.</p>
-          <p className="op-small">Built for food and fashion sellers in Lagos who sell through DMs and don't need a website.</p>
+          <p>A customer asks “how much?” at 11pm, waits an hour, and buys from someone else. Another sends a fake transfer alert and your rider leaves with the food. Relay answers every chat in seconds, takes the order, and marks it paid only when the money lands in your account.</p>
+          <p className="op-small">For food and fashion sellers in Lagos who sell through WhatsApp.</p>
           <div className="op-cta">
             <a className="btn btn-lime" href={company.ctaHref}>Open my shop free</a>
             <a className="link" href="#day">See a day of orders ↓</a>
           </div>
-          <div className="op-fee"><b>4.5%</b> per sale. No setup or monthly fee.</div>
+          <div className="op-fee">Relay earns <b>4.5%</b> of a sale, only after you get paid.</div>
         </motion.div>
         <div className="op-cards" aria-hidden>
           {cards.map((c, i) => (
@@ -241,7 +241,7 @@ function Reach() {
         <Rise className="rh-rules">
           {REACH_RULES.map(r => <span key={r}>{r}</span>)}
         </Rise>
-        <Rise><p className="rh-note">Campaigns go out free inside open chats. For regulars, Relay writes the promo and you send it from your own phone, also free. Paid WhatsApp messages come from your wallet at Meta's price, and only after you approve the cost. Type <b>REACH</b> to switch campaigns on or off.</p></Rise>
+        <Rise><p className="rh-note">Campaigns go out free inside open chats. For regulars, Relay writes the promo and you send it from your own phone, also free. Paid WhatsApp messages cost what Meta charges, with nothing added by Relay, and go out only after you approve the cost. Type <b>REACH</b> to switch campaigns on or off.</p></Rise>
       </div>
     </section>
   );
@@ -267,7 +267,7 @@ function Cost() {
       <div className="wrap cost-in">
         <Rise className="cost-copy">
           <h2>Keep the month of sales a website would have eaten.</h2>
-          <p>Your customers already buy on WhatsApp. Relay adds what a website would give you there: a catalogue, a cart, payments, receipts, tracking and marketing. You pay 4.5% when an order is paid, and nothing before your first sale.</p>
+          <p>Your customers already buy on WhatsApp. Relay adds what a website would give you there: a catalogue, a cart, payments, receipts, tracking and marketing. Relay earns 4.5% of an order only after your customer's money reaches you. A quiet week costs you nothing.</p>
           <ul className="cost-points">
             <li><b>Set up from what you have.</b> Send your menu or price list as a photo, PDF, spreadsheet or text.</li>
             <li><b>Keep your number.</b> Customers message the WhatsApp Business number they already know.</li>
@@ -308,7 +308,7 @@ const QA: [string, string][] = [
   ['Can I keep my number and my WhatsApp Business app?', 'Yes. You connect the number your customers know through Meta\'s official signup, and keep using the app on your phone.'],
   ['How does it stop fake transfers?', 'Each order has its own exact amount, and it is marked paid only when our payment partner reports that money arriving. A screenshot or an "I\'ve paid" message never marks anything paid.'],
   ['Will Smart Reach spam my customers?', 'No. Each customer gets at most one promo a week, only about things they showed interest in, and never at night. Every message has a Stop updates button.'],
-  ['What does it cost?', '4.5% of each sale, at most ₦4,000, and payments are included. You choose whether you or your customers pay it. There is no setup or monthly fee. Paid marketing messages are charged at Meta\'s price, after you approve them.'],
+  ['What does it cost?', 'Relay only gets paid when you do: 4.5% of each paid order, at most ₦4,000, with payments included. There is no setup or monthly fee, so a day without sales costs you nothing. You choose whether you or your customers pay the 4.5%. Paid marketing messages cost what Meta charges, with nothing added, and only after you approve them.'],
   ['What if a customer wants a real person?', 'Relay hands the chat to you and stays quiet until you hand it back. It also hands over complaints and refund requests.'],
 ];
 function Questions() {
@@ -338,7 +338,7 @@ function Close() {
           <span className="close-time">It's {t} in Lagos.</span>
           <h2>Somebody wants to buy from you right now.</h2>
           <a className="btn btn-lime lg" href={company.ctaHref}>Open my shop free</a>
-          <p>We're onboarding food and fashion sellers in Lagos first.</p>
+          <p>You pay nothing until a customer pays you. We're onboarding food and fashion sellers in Lagos first.</p>
         </Rise>
       </div>
     </section>

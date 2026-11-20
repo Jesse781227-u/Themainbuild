@@ -80,7 +80,7 @@ test('admin: HOURS, AFTER HOURS, POLICIES and FEE change the settings any time',
   assert.match((await say('policies: Swaps within 2 days. No refunds.'))[0].text, /Saved ✅/);
   assert.match((await say('policies'))[0].text, /Swaps within 2 days\. No refunds\./);
   const fee = await say('fee');
-  assert.match(fee[0].text, /Relay's fee is 4\.5% of each sale, at most ₦4,000/);
+  assert.match(fee[0].text, /Relay only earns when you get paid: 4\.5% of each sale, at most ₦4,000/);
   assert.match((await say("I'll pay it", 'fee:owner'))[0].text, /You pay Relay's fee from now on/);
   assert.equal((await doc('businesses', fx.a.id)).feePayer, 'owner');
   assert.match((await say('Relay fee', 'act:fee'))[0].text, /Who should pay it\?/, 'settings are in the MENU now, not in HELP');

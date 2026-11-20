@@ -42,7 +42,7 @@ import { handleShops } from './shops';
 const CONFIRM_MINUTES = 10;
 
 // The "See how Relay works" ice breaker, before signup.
-const HOW_IT_WORKS = "Relay runs your shop on your own WhatsApp number 👋\n\n1. Send me your menu or price list (a PDF, a photo, or just type it). I turn it into a shop customers can browse.\n2. Customers order by chat, any time. They pay by card or transfer and get a receipt.\n3. You get every order and payment here, and run everything by chat: prices, stock, delivery, reports.\n\nNo app to download, no monthly fee: 4.5% per sale. Setup takes about 5 minutes.";
+const HOW_IT_WORKS = "Relay runs your shop on your own WhatsApp number 👋\n\n1. Send me your menu or price list (a PDF, a photo, or just type it). I turn it into a shop customers can browse.\n2. Customers order by chat, any time. They pay by card or transfer and get a receipt.\n3. You get every order and payment here, and run everything by chat: prices, stock, delivery, reports.\n\nNo app to download, no monthly fee: 4.5% of each sale, only when you get paid. Setup takes about 5 minutes.";
 
 // The two buttons under each "are you sure?" question.
 const CONFIRM_LABELS: Record<string, [string, string][]> = {

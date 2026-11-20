@@ -37,7 +37,7 @@ export function Receipt({ capNaira = 2000, rate = 0.03, processing = 0.015 }: { 
         <div className="rc-line big"><span>You keep</span><em>{naira(order - fee)}</em></div>
       </div>
       <div className="rc-rule dashed" />
-      <p className="rc-foot">4.5% per sale · max ₦4,000<br />You choose who pays it · free withdrawals</p>
+      <p className="rc-foot">Charged only on paid orders · max ₦4,000<br />No sale, no fee · free withdrawals</p>
       <div className="rc-barcode" aria-hidden>{Array.from({ length: 46 }, (_, i) => <i key={i} style={{ width: [1, 2, 3, 1, 2][i % 5] }} />)}</div>
     </motion.div>
   );

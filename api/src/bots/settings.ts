@@ -66,7 +66,7 @@ export async function handleSettings(db: Firestore, cfg: Config, business: Busin
   }
   if (/^(fee|fees|relay fee|service fee)$/i.test(t)) {
     const who = business.feePayer === 'owner' ? 'You pay it: it comes out of what you receive' : 'Your customers pay it, as a service fee on their total';
-    return buttons(`Relay's fee is ${feeTerms(cfg)}. ${who}.\n\nWho should pay it?`, [['fee:customer', `My customers pay${business.feePayer === 'owner' ? '' : ' ✓'}`], ['fee:owner', `I'll pay the fee${business.feePayer === 'owner' ? ' ✓' : ''}`], ['act:menu', 'Menu']]);
+    return buttons(`Relay only earns when you get paid: ${feeTerms(cfg)}. ${who}.\n\nWho should pay it?`, [['fee:customer', `My customers pay${business.feePayer === 'owner' ? '' : ' ✓'}`], ['fee:owner', `I'll pay the fee${business.feePayer === 'owner' ? ' ✓' : ''}`], ['act:menu', 'Menu']]);
   }
   return null;
 }
