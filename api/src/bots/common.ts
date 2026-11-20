@@ -96,8 +96,12 @@ export async function storeProductImage(cfg: Config, deps: BotDeps, accessToken:
   return `${cfg.API_BASE_URL}/media/${key}`;
 }
 
-export const YES = /^(yes|y|yeah|yep|confirm|ok|okay|sure|do it)\b/i;
-export const NO = /^(no|n|nope|cancel|stop|don'?t)\b/i;
+// A yes or a no to a waiting question, typed or said in a voice note (written out by a machine, so
+// it may start with "uh", carry commas and end with a full stop). English and Pidgin.
+// "No wahala" / "no problem" mean yes; "leave it", "forget it", "make e be" mean no.
+const LEAD = String.raw`^\s*(?:(?:uh+|um+|hmm+|ah+|eh+|abeg|please|pls|okay so|so)[\s,.]+)?`;
+export const YES = new RegExp(LEAD + String.raw`(?:yes|y|yeah|yea|yep|yup|ya|confirm(?:ed)?|ok|okay|k|sure|do it|go ahead|go on|proceed|approved?|send it|change it|alright|all right|fine|correct|that'?s (?:fine|right|correct|good)|no wahala|no problem|oya|do am|carry go|make e happen|👍|✅)(?:\b|$|\s|[.!,])`, 'i');
+export const NO = new RegExp(LEAD + String.raw`(?!no (?:wahala|problem)\b)(?:no|n|nope|nah|cancel|stop|don'?t|leave it|leave am|forget it|forget am|never ?mind|not now|make e be|skip|abort)(?:\b|$|\s|[.!,])`, 'i');
 
 // Finds a product by name within one business: exact, then prefix, then substring.
 export async function findProducts(db: Firestore, businessId: string, query: string) {
