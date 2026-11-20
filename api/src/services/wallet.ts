@@ -49,6 +49,7 @@ export async function getWallet(db: Firestore, businessId: string): Promise<Wall
     if (e.type === 'sale') inKobo += Number(e.merchantNetKobo ?? 0);
     if (e.type === 'payout') outKobo += Number(e.amountKobo ?? 0);
     if (e.type === 'payout_reversal') outKobo -= Number(e.amountKobo ?? 0);
+    if (e.type === 'message_cost') outKobo += Number(e.amountKobo ?? 0);
   }
   const fresh: Wallet = { businessId, availableKobo: inKobo - outKobo, lifetimeInKobo: inKobo, lifetimeOutKobo: outKobo, payoutDay: w?.payoutDay ?? null, payoutDayKobo: w?.payoutDayKobo ?? 0, initialised: true, updatedAt: iso() };
   await db.set(ref, { ...fresh });
@@ -131,3 +132,19 @@ export async function recentPayouts(db: Firestore, businessId: string, limit = 1
 }
 
 export const payoutLine = (p: Payout) => `• ${p.id}: ${formatKobo(p.amountKobo)} to ${p.bank.name} ••${p.bank.last4} · ${p.status === 'processing' ? 'on its way' : p.status === 'paid' ? 'paid ✅' : 'failed, money returned'} · ${new Date(p.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Africa/Lagos' })}`;
+
+// Paid WhatsApp messages (Smart Reach) come out of the wallet at cost, once per campaign.
+// Returns false when the balance isn't enough (nothing is taken then).
+export async function chargeMessages(db: Firestore, businessId: string, campaignId: string, amountKobo: number, count: number, now = new Date()) {
+  if (amountKobo <= 0) return true;
+  await getWallet(db, businessId);
+  return db.runTransaction(async tx => {
+    const w = (await tx.get(db.doc(C.wallets, businessId))) as unknown as Wallet;
+    const id = `msgcost_${campaignId}`;
+    if (await tx.get(db.doc(C.ledger, id))) return true; // already charged
+    if (w.availableKobo < amountKobo) return false;
+    tx.update(db.doc(C.wallets, businessId), { availableKobo: w.availableKobo - amountKobo, lifetimeOutKobo: w.lifetimeOutKobo + amountKobo, updatedAt: now.toISOString() });
+    tx.create(db.doc(C.ledger, id), { id, businessId, type: 'message_cost', campaignId, amountKobo, count, at: now.toISOString() });
+    return true;
+  });
+}

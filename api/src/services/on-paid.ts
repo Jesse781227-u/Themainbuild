@@ -26,6 +26,8 @@ export interface OutboxMessage {
   template?: { key: TemplateKey; params: string[] } | null;
   // Reply buttons under the text (a document, if any, goes on top as the header).
   buttons?: { id: string; title: string }[] | null; // Firestore keeps no arrays inside arrays
+  // Smart Reach's paid route: this approved marketing template is the message (not a fallback).
+  paidTemplate?: { name: string; params: string[]; headerImage?: string | null } | null;
   // A full message (buttons, a list, an image) instead of plain text; text stays as a summary.
   content?: import('./channel').OutboundContent | null;
   // Sent as a document with the text as its caption (e.g. the PDF receipt). path is under API_BASE_URL.

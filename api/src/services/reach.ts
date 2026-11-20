@@ -22,6 +22,8 @@ import type { OutboundContent } from './channel';
 import { windowOpen } from './channel';
 import { customerConversationId } from './conversations';
 import { inQuietHours, messagingRules, monthKey, quietEnds, type MessagingRules } from './messaging-costs';
+import { templateState } from './templates';
+import { chargeMessages, getWallet } from './wallet';
 
 const DAY = 86_400_000;
 
@@ -33,6 +35,7 @@ export type ReachCustomer = Customer & {
   channel?: 'whatsapp' | 'instagram'; lastInboundAt?: string | null;
   marketingOptInAt?: string | null; marketingOptOutAt?: string | null; spamReportedAt?: string | null;
   marketingTimes?: string[] | null;   // when marketing reached them lately (the weekly cap)
+  interestWords?: string[] | null;    // what they said they want ("only sneakers")
   lastMarketingAt?: string | null;
 };
 
@@ -46,6 +49,9 @@ export interface Send {
 export interface Campaign {
   id: string; businessId: string; source: 'owner' | 'trigger' | 'suggested'; name: string;
   text: string; button?: [string, string] | null; audience: string[];
+  segment?: string | null;           // the group, in words
+  template?: string | null;          // the paid template, when one is approved
+  reportedAt?: string | null;
   routePlan: Record<string, number>; estCost: number; status: 'planned' | 'sending' | 'sent' | 'cancelled';
   createdAt: string; approvedAt: string | null;
 }
@@ -68,13 +74,24 @@ export async function recordSignal(db: Firestore, s: { businessId: string; custo
 }
 
 // ── Routing ──
-export interface Decision { customerId: string; name: string; phone: string; route: Route | null; skip?: 'no_consent' | 'reported' | 'weekly_cap' | 'unreachable' | 'owner_batch_full'; queuedUntil?: string | null; cost: number }
+export interface Decision { customerId: string; name: string; phone: string; route: Route | null; skip?: 'no_consent' | 'reported' | 'weekly_cap' | 'unreachable' | 'owner_batch_full' | 'missing_variable'; queuedUntil?: string | null; cost: number }
+
+// Paid marketing templates only go to customers who clearly said yes (Meta's rule), even where the
+// free routes also use the "customer from before Smart Reach" consent.
+export const explicitOptIn = (c: ReachCustomer) => (c.marketingOptIn === true || !!c.marketingOptInAt) && !(c.marketingOptOutAt && !(c.marketingOptInAt && c.marketingOptInAt > c.marketingOptOutAt));
+
+// The {name} etc. a message uses; a customer missing one is skipped (never a broken message).
+export const usedVariables = (text: string) => [...new Set([...text.matchAll(/\{(name|size|area)\}/gi)].map(m => m[1].toLowerCase()))] as ('name' | 'size' | 'area')[];
+export function customerValues(c: Pick<ReachCustomer, 'name'> & { size?: string | null; area?: string | null }) {
+  const first = c.name?.trim().split(/\s+/)[0] ?? '';
+  return { name: /\p{L}{2,}/u.test(first) ? first : '', size: c.size ?? '', area: c.area ?? '' };
+}
 
 const isRegular = (c: ReachCustomer, r: MessagingRules, now: Date) => (c.orderCount ?? 0) >= r.regularMinOrders && !!c.lastOrderAt && now.getTime() - new Date(c.lastOrderAt).getTime() <= r.regularWithinDays * DAY;
 const recentMarketing = (c: ReachCustomer, now: Date) => (c.marketingTimes ?? []).filter(t => now.getTime() - new Date(t).getTime() < 7 * DAY).length;
 
 // The cheapest allowed route for each customer. usedService: free service messages this month so far.
-export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, string | null>, opts: { cfg: Config; usedService: number; now?: Date; ownerSentOk?: boolean }): Decision[] {
+export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, string | null>, opts: { cfg: Config; usedService: number; now?: Date; ownerSentOk?: boolean; paidOk?: boolean; needs?: ('name' | 'size' | 'area')[] }): Decision[] {
   const r = messagingRules(opts.cfg);
   const now = opts.now ?? new Date();
   const quiet = inQuietHours(r, now);
@@ -85,6 +102,8 @@ export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, st
     if (!consented(c, opts.cfg)) return { ...base, route: null, skip: 'no_consent' as const };
     if (c.spamReportedAt) return { ...base, route: null, skip: 'reported' as const };
     if (recentMarketing(c, now) >= r.weeklyCap) return { ...base, route: null, skip: 'weekly_cap' as const };
+    const vals = customerValues(c);
+    if ((opts.needs ?? []).some(v => !vals[v])) return { ...base, route: null, skip: 'missing_variable' as const };
     const open = (c.channel ?? 'whatsapp') === 'whatsapp' && windowOpen(lastInbound.get(c.id) ?? c.lastInboundAt ?? null, now);
     if (open && allowance > 0) {
       allowance--;
@@ -98,7 +117,9 @@ export function routeAll(customers: ReachCustomer[], lastInbound: Map<string, st
       ownerRoom--;
       return { ...base, route: 'owner_sent' as const };
     }
-    return { ...base, route: null, skip: 'unreachable' as const }; // a paid template: Phase 2
+    // Paid template: approved for this shop, a clear yes from the customer, at Meta's price.
+    if (opts.paidOk && (c.channel ?? 'whatsapp') === 'whatsapp' && c.phone && explicitOptIn(c)) return { ...base, route: 'paid_template' as const, cost: r.koboPer.marketing, queuedUntil: quiet ? quietEnds(r, now).toISOString() : null };
+    return { ...base, route: null, skip: 'unreachable' as const };
   });
 }
 
@@ -108,14 +129,16 @@ export async function serviceUsed(db: Firestore, businessId: string, now = new D
 
 export function planSummary(d: Decision[]) {
   const count = (k: string) => d.filter(x => (x.route ?? x.skip) === k).length;
-  return { open: count('open'), owner_sent: count('owner_sent'), queued: d.filter(x => x.queuedUntil).length, no_consent: count('no_consent'), weekly_cap: count('weekly_cap'), reported: count('reported'), unreachable: count('unreachable'), owner_batch_full: count('owner_batch_full'), cost: d.reduce((t, x) => t + x.cost, 0) };
+  return { open: count('open'), owner_sent: count('owner_sent'), paid_template: count('paid_template'), missing_variable: count('missing_variable'), queued: d.filter(x => x.queuedUntil).length, no_consent: count('no_consent'), weekly_cap: count('weekly_cap'), reported: count('reported'), unreachable: count('unreachable'), owner_batch_full: count('owner_batch_full'), cost: d.reduce((t, x) => t + x.cost, 0) };
 }
 
 export function planText(s: ReturnType<typeof planSummary>, total: number) {
   const lines = [
     s.open ? `• ${s.open} free, in their chat${s.queued ? ` (${s.queued} wait until 8am)` : ''}` : '',
     s.owner_sent ? `• ${s.owner_sent} regulars: you send from your phone (free, I give you the links)` : '',
-    s.unreachable ? `• ${s.unreachable} can't be reached for free right now` : '',
+    s.paid_template ? `• ${s.paid_template} by paid message: ${formatKobo(s.cost)} from your wallet` : '',
+    s.unreachable ? `• ${s.unreachable} can't be reached right now` : '',
+    s.missing_variable ? `• ${s.missing_variable} skipped (no name to use)` : '',
     s.weekly_cap ? `• ${s.weekly_cap} already got an update this week` : '',
     s.no_consent + s.reported ? `• ${s.no_consent + s.reported} didn't agree to updates` : '',
   ].filter(Boolean);
@@ -133,20 +156,21 @@ async function loadAudience(db: Firestore, businessId: string, ids?: string[] | 
 }
 
 // Plans a campaign (nothing is sent): the route for everyone, saved for [Send all].
-export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string }, now = new Date()) {
+export async function planCampaign(db: Firestore, cfg: Config, business: Business, input: { name: string; text: string; source: Campaign['source']; button?: [string, string] | null; audience?: string[] | null; id?: string; segment?: string | null }, now = new Date()) {
   const { customers, lastInbound } = await loadAudience(db, business.id, input.audience ?? null);
-  const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now });
+  const paidOk = input.source === 'owner' && (await templateState(db, business.id, 'relay_update')) === 'approved';
+  const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now, paidOk, needs: usedVariables(input.text) });
   const summary = planSummary(decisions);
   const id = input.id ?? `c_${randomId(9).replace(/[^A-Za-z0-9]/g, 'x')}`;
-  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
+  const campaign: Campaign = { id, businessId: business.id, source: input.source, name: input.name.slice(0, 80), text: input.text.slice(0, 900), button: input.button ?? null, audience: customers.map(c => c.id), segment: input.segment ?? null, template: paidOk ? 'relay_update' : null, routePlan: summary, estCost: summary.cost, status: 'planned', createdAt: now.toISOString(), approvedAt: null };
   const created = await db.create(db.doc(C.campaigns, id), { ...campaign });
   return { campaign, decisions, summary, created };
 }
 
 // The message a customer gets: the owner's words with their first name, and Stop updates.
-export function personal(text: string, c: { name: string }) {
-  const first = c.name === 'A customer' ? '' : c.name.split(' ')[0];
-  return text.replace(/\{name\}/gi, first).replace(/\s+([,!.])/g, '$1').replace(/^[,\s]+/, '').trim();
+export function personal(text: string, c: { name: string; size?: string | null; area?: string | null }) {
+  const v = customerValues({ name: c.name === 'A customer' ? '' : c.name, size: c.size, area: c.area });
+  return text.replace(/\{(name|size|area)\}/gi, (_m, k: string) => v[k.toLowerCase() as 'name']).replace(/\s+([,!.])/g, '$1').replace(/^[,\s]+/, '').trim();
 }
 const waLink = (phone: string, text: string) => `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
 
@@ -156,10 +180,15 @@ export async function executeCampaign(db: Firestore, cfg: Config, deps: { enqueu
   const campaign = (await db.get(db.doc(C.campaigns, campaignId))) as Campaign | null;
   if (!campaign || campaign.businessId !== business.id) return null;
   if (campaign.status !== 'planned') return { campaign, links: [] as { name: string; link: string }[], sent: 0, queued: 0 };
-  await db.update(db.doc(C.campaigns, campaignId), { status: 'sending', approvedAt: now.toISOString() });
   // Planned again at send time: someone may have said stop or ordered since.
   const { customers, lastInbound } = await loadAudience(db, business.id, campaign.audience);
-  const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now, ownerSentOk: !opts.freeOnly });
+  const paidOk = !opts.freeOnly && !!campaign.template && (await templateState(db, business.id, campaign.template)) === 'approved';
+  const decisions = routeAll(customers, lastInbound, { cfg, usedService: await serviceUsed(db, business.id, now), now, ownerSentOk: !opts.freeOnly, paidOk, needs: usedVariables(campaign.text) });
+  // Paid messages come out of the wallet first; not enough: nothing is sent, the owner is told.
+  const paid = decisions.filter(d => d.route === 'paid_template');
+  const cost = paid.reduce((t, d) => t + d.cost, 0);
+  if (cost > 0 && !(await chargeMessages(db, business.id, campaignId, cost, paid.length, now))) return { campaign, links: [], sent: 0, queued: 0, blocked: { needKobo: cost, haveKobo: (await getWallet(db, business.id)).availableKobo } };
+  await db.update(db.doc(C.campaigns, campaignId), { status: 'sending', approvedAt: now.toISOString() });
   const byId = new Map(customers.map(c => [c.id, c]));
   const at = now.toISOString();
   const outbox: string[] = [];
@@ -168,15 +197,16 @@ export async function executeCampaign(db: Firestore, cfg: Config, deps: { enqueu
   for (const d of decisions) {
     if (!d.route) continue;
     const c = byId.get(d.customerId)!;
-    const text = personal(campaign.text, d);
+    const text = personal(campaign.text, { name: d.name });
     const sendId = `${campaignId}_${d.customerId}`.replace(/[^A-Za-z0-9_-]/g, '_');
     const content: OutboundContent = { type: 'interactive', interactive: { type: 'button', body: { text: text.slice(0, 1024) }, action: { buttons: [...(campaign.button ? [campaign.button] : []), ['stopupd', 'Stop updates']].map(([id, title]) => ({ type: 'reply', reply: { id, title } })) } } };
-    const record: Send = { id: sendId, businessId: business.id, campaignId, customerId: d.customerId, route: d.route, cost: d.cost, status: d.route === 'owner_sent' ? 'owner_pending' : d.queuedUntil ? 'queued' : 'sent', text, link: d.route === 'owner_sent' ? waLink(c.phone, text) : null, sendAfter: d.queuedUntil ?? null, sentAt: d.route === 'open' && !d.queuedUntil ? at : null, createdAt: at };
+    const record: Send = { id: sendId, businessId: business.id, campaignId, customerId: d.customerId, route: d.route, cost: d.cost, status: d.route === 'owner_sent' ? 'owner_pending' : d.queuedUntil ? 'queued' : 'sent', text, link: d.route === 'owner_sent' ? waLink(c.phone, text) : null, sendAfter: d.queuedUntil ?? null, sentAt: d.route !== 'owner_sent' && !d.queuedUntil ? at : null, createdAt: at };
     if (!(await db.create(db.doc(C.sends, sendId), { ...record }))) continue; // already sent once
     if (d.route === 'owner_sent') { links.push({ name: d.name, link: record.link! }); continue; }
-    if (d.queuedUntil) { queued++; await db.set(db.doc(C.sends, sendId), { content }, { merge: true }); continue; }
+    const paidTemplate = d.route === 'paid_template' ? { name: campaign.template!, params: [customerValues(c).name || 'there', business.name, text.slice(0, 900)] } : null;
+    if (d.queuedUntil) { queued++; await db.set(db.doc(C.sends, sendId), { content, ...(paidTemplate ? { paidTemplate } : {}) }, { merge: true }); continue; }
     const mid = `reach_${sendId}`;
-    await db.create(db.doc(C.outbox, mid), { id: mid, businessId: business.id, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: customerConversationId(business.id, c.channel ?? 'whatsapp', c.phone), kind: 'reach', text, content, status: 'pending', attempts: 0, createdAt: at });
+    await db.create(db.doc(C.outbox, mid), { id: mid, businessId: business.id, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: customerConversationId(business.id, c.channel ?? 'whatsapp', c.phone), kind: 'reach', text, content, ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: at });
     outbox.push(mid);
     await noteMarketing(db, d.customerId, at);
     sent++;
@@ -208,9 +238,10 @@ export async function releaseQueuedSends(db: Firestore, cfg: Config, now = new D
   for (const s of due) {
     const c = (await db.get(db.doc(C.customers, s.customerId))) as ReachCustomer | null;
     const conv = await db.get(db.doc(C.conversations, s.customerId));
-    if (!c || !consented(c, cfg) || !windowOpen((conv?.lastInboundAt as string | null) ?? null, now)) { await db.update(db.doc(C.sends, s.id), { status: 'failed' }); continue; }
+    const paidTemplate = (s as Send & { paidTemplate?: unknown }).paidTemplate ?? null;
+    if (!c || !consented(c, cfg) || (!paidTemplate && !windowOpen((conv?.lastInboundAt as string | null) ?? null, now))) { await db.update(db.doc(C.sends, s.id), { status: 'failed' }); continue; }
     const mid = `reach_${s.id}`;
-    if (await db.create(db.doc(C.outbox, mid), { id: mid, businessId: s.businessId, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: s.customerId, kind: 'reach', text: s.text, ...(s.content ? { content: s.content } : {}), status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(mid);
+    if (await db.create(db.doc(C.outbox, mid), { id: mid, businessId: s.businessId, audience: 'customer', channel: c.channel ?? 'whatsapp', to: c.phone, conversationId: s.customerId, kind: 'reach', text: s.text, ...(s.content ? { content: s.content } : {}), ...(paidTemplate ? { paidTemplate } : {}), status: 'pending', attempts: 0, createdAt: now.toISOString() })) ids.push(mid);
     await db.update(db.doc(C.sends, s.id), { status: 'sent', sentAt: now.toISOString() });
     await noteMarketing(db, s.customerId, now.toISOString());
   }

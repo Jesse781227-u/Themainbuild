@@ -20,6 +20,7 @@ import { openTicket } from '../services/support';
 import { matchProduct } from '../services/match';
 import { example } from '../services/shop-type';
 import { DAYS, describeHours } from '../services/hours';
+import { describeRule, evaluate, loadSegmentData, refreshSegments, ruleFromWords } from '../services/segments';
 import { executeCampaign, markOwnerSent, PHASE1_TRIGGERS, planCampaign, planText, TRIGGER_LABEL, triggerOn } from '../services/reach';
 import { confirmPosted, loadPost, MENTIONS, nextMentions, prepareStatus, type StatusPost } from '../services/status-posts';
 import { flowId, flowMessage } from '../services/flows';
@@ -263,7 +264,11 @@ async function tips(c: ActionCtx, on: boolean): Promise<Out> {
 // ── Smart Reach (services/reach.ts) ──
 async function reachHome(c: ActionCtx): Promise<Out> {
   const rows = PHASE1_TRIGGERS.map(t => ({ id: `act:reachtoggle:${t}`, title: `${triggerOn(c.business, t) ? '✅' : '⬜'} ${TRIGGER_LABEL[t]}`, description: t === 'back_in_stock' ? 'Tell people who wanted it when it\'s back' : 'Remind people who left items in their cart' }));
-  return list('Smart Reach sends updates to the right customers, free where it can. Tap an automatic update to switch it on or off.', 'Open Smart Reach', [...rows, { id: 'act:reachall', title: 'Send an update', description: 'To all your customers who get updates' }], 'Smart Reach');
+  return list('Smart Reach sends updates to the right customers, free where it can. Tap an automatic update to switch it on or off.', 'Open Smart Reach', [...rows,
+    { id: 'act:reachgroup', title: 'Send to a group', description: 'e.g. "my sneaker buyers", "people who haven\'t ordered in a month"' },
+    { id: 'act:reachall', title: 'Send to everyone', description: 'All your customers who get updates' },
+    { id: 'act:segments', title: 'My customer groups', description: 'Who buys what, and how many' },
+  ], 'Smart Reach');
 }
 async function reachToggle(c: ActionCtx): Promise<Out> {
   const t = PHASE1_TRIGGERS.find(x => x === c.arg);
@@ -278,16 +283,63 @@ async function reachEveryone(c: ActionCtx): Promise<Out> {
   await c.setAwaiting('reach:all');
   return 'Type the update for your customers. Write *{name}* where their first name should go, e.g. "Hi {name}, new Ankara gowns just landed!"';
 }
+// "Send to a group": who (in plain words) and what. "tell my sneaker buyers about the new Jordans".
+async function reachGroup(c: ActionCtx): Promise<Out> {
+  await c.setAwaiting('reach:group');
+  return 'Who should get it, and what\'s the news? e.g. *tell my sneaker buyers about the new Jordans, 10% off this weekend*';
+}
+
+export async function reachFromWords(c: ActionCtx, raw: string): Promise<Out | Out[]> {
+  const t = raw.trim().replace(/[.!]+$/, '');
+  const m = /^(?:please\s+)?(?:tell|message|remind|text|send (?:a message|an update|this) to|let)\s+(.+?)\s+(?:about|that|know about|know that)\s+(.+)$/i.exec(t) ?? /^(.{3,80}?)\s*:\s*(.+)$/.exec(t);
+  if (!m) { await c.setAwaiting('reach:group'); return 'Say who and what, e.g. *tell my sneaker buyers about the new Jordans* or *my top customers: free delivery this week*.'; }
+  const [cats, products] = await Promise.all([listCategories(c.db, c.business.id), listProducts(c.db, c.business.id)]);
+  const rule = await ruleFromWords(m[1], { categories: cats, products, llm: c.deps.llm });
+  if (!rule) return buttons(`I couldn't tell who "${m[1].slice(0, 60)}" means. Try e.g. *my sneaker buyers*, *people who haven't ordered in a month*, or *my top customers*.`, [['act:reachgroup', 'Try again'], ['act:segments', 'My customer groups']]);
+  const who = describeRule(rule, { categories: cats, products });
+  const members = evaluate(rule, await loadSegmentData(c.db, c.business.id));
+  if (!members.length) return buttons(`Nobody matches *${who}* yet.`, [['act:reachgroup', 'Try another group'], ['act:menu', 'Menu']]);
+  const samples = await draftUpdates(c, m[2]);
+  await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { reachDraft: { audience: members, segment: who, samples } }, { merge: true });
+  return [`*${members.length} customer${members.length === 1 ? '' : 's'}*: ${who}.\n\nPick the wording ({name} becomes their first name):\n\n${samples.map((x, i) => `*${i + 1}.* ${x}`).join('\n\n')}`.slice(0, 4000),
+    list('Which one?', 'Pick wording', samples.map((_, i) => ({ id: `act:reachpick:${i + 1}`, title: `Option ${i + 1}` })), 'Wording')];
+}
+
+// Three ways to say the owner's news, in the shop's voice (the AI; plain versions without it).
+async function draftUpdates(c: ActionCtx, news: string): Promise<string[]> {
+  const n = news.trim().replace(/^(the |that )/i, '');
+  const plain = [`Hi {name}! ${n.charAt(0).toUpperCase()}${n.slice(1)} at ${c.business.name} 🎉`, `Hi {name}, quick news from ${c.business.name}: ${n}.`, `{name}, ${n}! Reply to order 🙌`];
+  if (!c.deps.llm?.writeTexts) return plain;
+  try {
+    const out = await c.deps.llm.writeTexts({ prompt: [`Write a short WhatsApp update from the shop "${c.business.name}" to one of its customers about: ${n.slice(0, 300)}.`, 'Start with "Hi {name}" (keep {name} exactly; it becomes their first name). Under 300 characters. At most one emoji. Never invent prices, dates or offers that aren\'t in the news.', 'Write it three ways: "warm" (warm and chatty), "short" (short and clear), "naija" (light Nigerian Pidgin, never forced).'].join('\n'), keys: ['warm', 'short', 'naija'] });
+    return ['warm', 'short', 'naija'].map((k, i) => { const x = String(out[k] ?? '').trim().slice(0, 400); return x.length > 10 && !/\{(?!name\})/.test(x) ? x : plain[i]; });
+  } catch { return plain; }
+}
+
+async function reachPick(c: ActionCtx): Promise<Out> {
+  const d = (await c.db.get(c.db.doc(C.conversations, c.admin.conversationId)))?.reachDraft as { audience: string[]; segment: string; samples: string[] } | null | undefined;
+  const text = d?.samples?.[Number(c.arg) - 1];
+  if (!d || !text) return reachGroup(c);
+  await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { reachDraft: null }, { merge: true });
+  return reachPlan(c, text, d.audience, d.segment);
+}
+
+async function segmentsView(c: ActionCtx): Promise<Out> {
+  const groups = await refreshSegments(c.db, c.business.id);
+  return buttons(`Your customer groups:\n${groups.map(g => `• ${g.name}: ${g.size}`).join('\n')}\n\nSend to any group with *Send to a group*, e.g. "tell my top customers about…".`.slice(0, 1000), [['act:reachgroup', 'Send to a group'], ['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+}
+
 // The route plan, then [Send all] [Free ones only] [Edit message].
-export async function reachPlan(c: ActionCtx, text: string): Promise<Out> {
-  const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: 'Update to everyone', text, source: 'owner', button: ['menu', 'See what we have'] });
+export async function reachPlan(c: ActionCtx, text: string, audience?: string[] | null, segment?: string | null): Promise<Out> {
+  const { campaign, decisions, summary } = await planCampaign(c.db, c.cfg, c.business, { name: segment ? `Update to ${segment}` : 'Update to everyone', text, source: 'owner', button: ['menu', 'See what we have'], audience: audience ?? null, segment: segment ?? null });
   if (!decisions.length) return buttons('You have no customers yet. Once people chat or order, you can send them updates here.', [['act:menu', 'Menu']]);
-  if (!summary.open && !summary.owner_sent) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this for free right now. Paid updates are coming soon.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
+  if (!summary.open && !summary.owner_sent && !summary.paid_template) return buttons(`${planText(summary, decisions.length)}\n\nNobody can get this right now: paid updates need your marketing template approved by Meta.`, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
   return buttons(planText(summary, decisions.length), [[`act:reachsend:${campaign.id}`, 'Send all'], [`act:reachfree:${campaign.id}`, 'Free ones only'], ['act:reachall', 'Edit message']]);
 }
 async function reachSend(c: ActionCtx, freeOnly: boolean): Promise<Out | Out[]> {
   const r = await executeCampaign(c.db, c.cfg, c.deps, c.business, c.arg ?? '', { freeOnly });
   if (!r) return 'That update isn\'t there any more. Send */reach* to start again.';
+  if ('blocked' in r && r.blocked) return buttons(`Your wallet has ${formatKobo(r.blocked.haveKobo)}, and the paid messages cost ${formatKobo(r.blocked.needKobo)}. Nothing was sent. Send the free ones only, or wait for more sales.`, [[`act:reachfree:${r.campaign.id}`, 'Free ones only'], ['act:wallet', 'My wallet'], ['act:menu', 'Menu']]);
   if (r.campaign.status !== 'planned' && !r.sent && !r.queued && !r.links.length) return 'That update was already sent.';
   const head = `✅ Sent to ${r.sent}${r.queued ? `; ${r.queued} more at 8am (it's late now)` : ''}.`;
   if (!r.links.length) return buttons(head, [['act:reach', 'Smart Reach'], ['act:menu', 'Menu']]);
@@ -323,6 +375,9 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'reach', command: 'reach', hint: 'Smart Reach: updates to the right customers by the cheapest route, and automatic ones', menu: { section: 'Customers', title: 'Smart Reach' }, aliases: ['reach', 'smart reach', 'marketing'], run: reachHome },
   { id: 'campaign', command: 'campaign', hint: 'Send an update to your customers; you see who gets it and the cost first', menu: { section: 'Customers', title: 'Send an update' }, aliases: ['campaign', 'broadcast', 'send a campaign', 'send campaign', 'send to everyone'], run: c => reachEveryone(c) },
   { id: 'reachall', hint: 'Send an update to everyone', run: c => reachEveryone(c) },
+  { id: 'reachgroup', hint: 'Send an update to a group of customers', run: reachGroup },
+  { id: 'reachpick', hint: 'Use this wording', run: reachPick },
+  { id: 'segments', hint: 'Your customer groups and their sizes', aliases: ['groups', 'segments', 'customer groups', 'my groups'], run: segmentsView },
   { id: 'reachtoggle', hint: 'Switch an automatic update on or off', run: reachToggle },
   { id: 'reachsend', hint: 'Send the planned update', run: c => reachSend(c, false) },
   { id: 'reachfree', hint: 'Send the planned update by free routes only', run: c => reachSend(c, true) },

@@ -34,6 +34,16 @@ export async function processOutbox(db: Firestore, cfg: Config, transport: Trans
     const base = { from, conversationId: claimed.conversationId, to: claimed.to, now };
     let messageId: string;
     let viaTemplate = false;
+    if (claimed.paidTemplate && claimed.channel === 'whatsapp') {
+      const t = claimed.paidTemplate;
+      const components: Record<string, unknown>[] = [
+        ...(t.headerImage ? [{ type: 'header', parameters: [{ type: 'image', image: { link: t.headerImage } }] }] : []),
+        { type: 'body', parameters: t.params.map(text => ({ type: 'text', text: text.slice(0, 1000) })) },
+      ];
+      ({ messageId } = await send(db, cfg, transport, { ...base, content: { type: 'template', name: t.name, language: cfg.TEMPLATE_LANGUAGE, components } as OutboundContent }));
+      await db.update(db.doc(C.outbox, id), { status: 'sent', leaseUntil: null, sentAt: new Date().toISOString(), providerMessageId: messageId, viaTemplate: true });
+      return 'sent';
+    }
     try {
       const doc = claimed.document ? { link: `${cfg.API_BASE_URL}${claimed.document.path}`, filename: claimed.document.filename } : null;
       const content: OutboundContent = claimed.content ? claimed.content : claimed.buttons?.length

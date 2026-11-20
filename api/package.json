@@ -12,7 +12,8 @@
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
     "simulate": "tsx scripts/simulate-webhook.ts",
-    "sync:commands": "tsx scripts/sync-commands.ts"
+    "sync:commands": "tsx scripts/sync-commands.ts",
+    "templates": "tsx scripts/submit-templates.ts"
   },
   "dependencies": {
     "@cf-wasm/photon": "0.4.0",
