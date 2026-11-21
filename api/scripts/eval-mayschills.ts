@@ -27,7 +27,7 @@ async function replies(before: number, maxMs = 120_000): Promise<Msg[]> {
   for (;;) {
     const out = (await messages()).slice(before).filter(m => m.direction === 'out' && !['typing', 'reaction'].includes(m.content.type));
     if (out.length !== last) { last = out.length; quietSince = Date.now(); }
-    const settled = out.length && !/^Reading it now/.test(textOf(out[out.length - 1]));
+    const settled = out.length && !/^(Reading it now|Still reading)/.test(textOf(out[out.length - 1]));
     if ((settled && Date.now() - quietSince > 4000) || Date.now() - start > maxMs) return out;
     await new Promise(r => setTimeout(r, 700));
   }
