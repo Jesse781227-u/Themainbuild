@@ -394,11 +394,16 @@ test('location: a known area is saved straight away; an unknown one is read back
   assert.match(body(fixed[0]), /📍 7 Church Street, Ogudu Village, Lagos\. Is that right\?/);
   const next = await say2('Yes', 'loc:ok');
   assert.match(body(next[0]), /^✅ 7 Church Street, Ogudu Village, Lagos\n\nDo you deliver\?/);
-  // A known area in another city ("Sango" is in Ibadan): read back too.
+  // Sango Ota is Lagos (the owner's call): saved straight away. A known area with another city is
+  // read back ("Yaba, Ibadan").
   const third = '2348035550005';
   const say3 = (text: string, choice?: string) => bot.send('admin', { from: third, text, choice, name: 'Femi' });
   await say3('hi'); await say3('Femi Phones'); await say3('Charger 3000'); await say3("That's all", 'prod:done');
-  assert.deepEqual((await say3('12 Idiroko Road, Sango Ota, Ogun · 9am to 6pm'))[0].options, ['loc:ok', 'loc:fix']);
+  assert.match(body((await say3('12 Idiroko Road, Sango Ota · 9am to 6pm'))[0]), /^✅ 12 Idiroko Road, Sango Ota, Lagos\n✅ Every day 9am–6pm\n\nDo you deliver\?/);
+  const fourth = '2348035550006';
+  const say4 = (text: string, choice?: string) => bot.send('admin', { from: fourth, text, choice, name: 'Femi' });
+  await say4('hi'); await say4('Femi Phones 2'); await say4('Charger 3000'); await say4("That's all", 'prod:done');
+  assert.deepEqual((await say4('3 Herbert Macaulay Way, Yaba, Ibadan · 9am to 6pm'))[0].options, ['loc:ok', 'loc:fix']);
 });
 
 test('hours at signup: the reported message is checked, not saved as "Every day 8am–7am"', async () => {
