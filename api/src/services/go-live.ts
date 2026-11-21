@@ -1,6 +1,7 @@
 // After the owner connects their number: the go-live kit and the last few (optional) questions.
 //   1. "🎉 <shop> is live!" with the shop link (wa.me/<number>)
-//   2. a Status image ("Now taking orders on WhatsApp 24/7"), /golive/<businessId>.png
+//   2. a Status image ("Now taking orders on WhatsApp 24/7"), /golive/<businessId>.png, whose caption
+//      also says to forward the next message
 //   3. a short announcement to forward to customers
 //   4. questions, one at a time, in the Admin Bot chat (onboarding stage "live"):
 //      profile photo (only if the WhatsApp Business profile has none) → add existing contacts? →
@@ -76,10 +77,10 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
   const link = digitsOf(number) ? `https://wa.me/${digitsOf(number)}` : null;
   const step: Onboarding['step'] = business.profilePhotoUrl ? 'live_contacts' : 'live_photo';
   const messages: { kind: string; text: string; content?: OutboundContent }[] = [
-    { kind: 'golive', text: `🎉 ${business.name} is live! Customers who message ${number || 'your number'} now get your shop assistant, any time of day.${link ? `\n\nYour shop link: ${link}\nPut it in your Instagram bio and share it everywhere.` : ''}\n\nYou keep using the WhatsApp Business app as normal. If you reply to a customer yourself, the assistant steps back in that chat.` },
-    { kind: 'golive_status', text: 'Post this on your WhatsApp Status 👆', content: { type: 'image', link: `${cfg.API_BASE_URL}${goLivePath(business.id)}`, caption: 'Post this on your WhatsApp Status, so your contacts know they can order any time 👆' } },
-    { kind: 'golive_forward', text: 'Forward this to your customers 👇' },
-    { kind: 'golive_announce', text: `Hi! 👋 You can now order from ${business.name} right here on WhatsApp, any time: see everything we have, order and pay in a few taps.${link ? ` Start here: ${link}` : ''}` },
+    // Short (the owner's rule: 1–3 lines a message).
+    { kind: 'golive', text: `🎉 ${business.name} is live${number ? ` on ${number}` : ''}!${link ? `\nYour shop link: ${link}` : ''}\nReply to a customer yourself and the assistant steps back in that chat.` },
+    { kind: 'golive_status', text: 'Post this on your Status 👆', content: { type: 'image', link: `${cfg.API_BASE_URL}${goLivePath(business.id)}`, caption: 'Post this on your Status 👆 and forward the next message to your customers.' } },
+    { kind: 'golive_announce', text: `Hi! 👋 You can now order from ${business.name} here on WhatsApp, any time.${link ? ` ${link}` : ''}` },
     { kind: 'golive_q', text: 'A few last questions', content: liveQuestion(step, business) ?? undefined },
   ];
   const ids: string[] = [];

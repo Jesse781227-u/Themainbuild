@@ -195,7 +195,7 @@ test('onboarding v2: hi → shop name → menu → preview → location → hour
   assert.match(fb[0].text, /^\*Step 6 of 6\* · Can you log into Facebook\? Meta uses it to set up your business account\./);
   assert.match((await say('No', 'fb:no'))[0].text, /Create a free one at facebook.com/);
   const link = await say('I have one now', 'fb:now');
-  assert.match(link[0].text, /open this link[\s\S]*\/connect\/[A-Za-z0-9]+/);
+  assert.match(link[0].text, /^Last step: connect your number with Facebook 👇\n\S*\/connect\/[A-Za-z0-9]+\nThe link works for 24 hours\.$/);
   assert.equal((await conv(OWNER)).onboarding, null, 'the everyday Admin Bot from here');
   assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'connect');
   assert.match((await say('products'))[0].text, /\*Meals\*[\s\S]*Jollof rice & chicken/);

@@ -21,12 +21,13 @@ test('go-live: after connecting, the kit (link, Status image, announcement) and 
   const before = bot.transport.sent.length;
   await bot.drain();
   const sent = bot.transport.sent.slice(before).filter(m => m.to === `+${from}`).map(m => m.content as any);
-  assert.match(sent[0].text, /🎉 Ada Thrift is live! Customers who message \+234 803 777 1111[\s\S]*Your shop link: https:\/\/wa\.me\/2348037771111/);
+  assert.match(sent[0].text, /^🎉 Ada Thrift is live on \+234 803 777 1111!\nYour shop link: https:\/\/wa\.me\/2348037771111\n/);
   assert.equal(sent[1].type, 'image');
   assert.ok(sent[1].link.endsWith(`/golive/${businessId}.png`));
-  assert.match(sent[2].text, /Forward this to your customers/);
-  assert.match(sent[3].text, /You can now order from Ada Thrift right here on WhatsApp[\s\S]*wa\.me\/2348037771111/);
-  assert.match(sent[4].interactive.body.text, /no picture yet/, 'no profile photo: asked for one');
+  assert.match(sent[1].caption, /forward the next message/);
+  assert.match(sent[2].text, /You can now order from Ada Thrift here on WhatsApp[\s\S]*wa\.me\/2348037771111/);
+  assert.match(sent[3].interactive.body.text, /no picture yet/, 'no profile photo: asked for one');
+  assert.ok(sent.slice(0, 3).every(m => String(m.text ?? m.caption).split('\n').length <= 3), 'the go-live kit: 1–3 lines a message');
 
   const png = await api('GET', `/golive/${businessId}.png`);
   assert.equal(png.status, 200);

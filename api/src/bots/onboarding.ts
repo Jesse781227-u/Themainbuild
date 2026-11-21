@@ -889,7 +889,7 @@ async function sendConnectLink(c: Ctx) {
   // From here the owner uses the everyday Admin Bot; ownerPhones.onboardingStage stays "connect"
   // until the number is connected (then the go-live questions come).
   await c.ctx.db.set(c.ctx.db.doc(C.conversations, c.ctx.conversationId), { onboarding: null }, { merge: true });
-  return c.reply(`Last step: open this link and log in with Facebook to connect your number (valid 24 hours):\n${link}\n\nYou keep using WhatsApp Business as normal. I'll message you when it's done.`);
+  return c.reply(`Last step: connect your number with Facebook 👇\n${link}\nThe link works for 24 hours.`);
 }
 
 // ── After go-live: optional questions; anything else goes to the Admin Bot ──
