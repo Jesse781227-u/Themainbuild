@@ -32,6 +32,17 @@ test('hours: whole weeks in different words go straight to the check', async () 
   assert.deepEqual(change, { restart: true });
 });
 
+test('hours: small spelling slips in day words ("weedays", "satuday", "wkdays") still read; "money" is not Monday', async () => {
+  let d = await read('8 to 7 on weedays and 10 to 7 on saturday');
+  assert.deepEqual(ask(d), { text: 'And Sunday?', buttons: ['hrv:closed|Closed', 'hrv:same|Same as Mon–Fri', 'hrv:diff|Different hours'] });
+  d = step(d, 'hrv:closed');
+  assert.equal(ask(d).text, 'Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed. Correct?');
+  assert.equal(ask(await read('wkdays 9-5, satuday 10-4, sunday closed')).text, 'Mon–Fri 9am–5pm · Sat 10am–4pm · Sun closed. Correct?');
+  assert.equal(ask(await read('mon-fri 8-6, weekeds 10-4')).text, 'Mon–Fri 8am–6pm · Sat–Sun 10am–4pm. Correct?');
+  assert.equal(ask(await read('tusday to thurday 9-5, monday friday saturday sunday closed')).text, 'Mon closed · Tue–Thu 9am–5pm · Fri–Sun closed. Correct?');
+  assert.equal(readWeek('money 8 to 9')!.everyDay, true);
+});
+
 test('hours: one time is every day (signup then asks "Same every day?")', () => {
   const r = readWeek('8am - 9pm')!;
   assert.equal(r.everyDay, true);

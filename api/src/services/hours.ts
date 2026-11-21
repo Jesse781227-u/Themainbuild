@@ -13,6 +13,32 @@ const DAY_FULL: Record<Day, string> = { mon: 'Monday', tue: 'Tuesday', wed: 'Wed
 const DAY_WORD = /\b(mon(day)?s?|tue(s(day)?)?s?|wed(s|nesday)?s?|thu(r(s(day)?)?)?s?|fri(day)?s?|sat(urday)?s?|sun(day)?s?|weekdays?|weekends?|every ?day|daily)\b/gi;
 const LAGOS_OFFSET_MS = 3600_000;
 
+// Small spelling slips in day words: "weedays", "wekends", "saturdy", "wednsday", "wkdays".
+// Only words of 5+ letters, one letter off (two for 8+ letters), so "money" never reads as Monday.
+const DAY_SPELLINGS = ['weekdays', 'weekday', 'weekends', 'weekend', 'everyday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const DAY_ALIASES: Record<string, string> = { wkdays: 'weekdays', wkday: 'weekday', wkends: 'weekends', wkend: 'weekend', wknds: 'weekends', wknd: 'weekend' };
+function editDistance(a: string, b: string) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+export function fixDayTypos(text: string): string {
+  return text.replace(/[a-z]{4,}/gi, w => {
+    const low = w.toLowerCase();
+    if (DAY_ALIASES[low]) return DAY_ALIASES[low];
+    const plural = low.endsWith('s') && !/(days|ends)$/.test(low) ? 's' : '';
+    const stem = plural ? low.slice(0, -1) : low;
+    if (stem.length < 5 || DAY_SPELLINGS.includes(stem)) return w;
+    for (const word of DAY_SPELLINGS) if (editDistance(stem, word) <= (word.length >= 8 ? 2 : 1)) return word.endsWith('s') ? word : word + plural;
+    return w;
+  });
+}
+
 function dayOf(word: string): Day | null {
   const w = word.toLowerCase();
   return DAYS.find(d => w.startsWith(d)) ?? null;
@@ -57,7 +83,7 @@ const everyDay = (h: DayHours | null): Hours => Object.fromEntries(DAYS.map(d =>
 
 // The days a segment like "Mon-Fri", "weekends", "Sat & Sun" or "daily" covers.
 function daysIn(segment: string): Day[] {
-  const s = segment.toLowerCase().replace(/[–—]/g, '-');
+  const s = fixDayTypos(segment).toLowerCase().replace(/[–—]/g, '-');
   if (/\b(every ?day|daily)\b/.test(s)) return [...DAYS];
   const out = new Set<Day>();
   if (/\bweekdays?\b/.test(s)) ['mon', 'tue', 'wed', 'thu', 'fri'].forEach(d => out.add(d as Day));
@@ -74,7 +100,8 @@ function daysIn(segment: string): Day[] {
 
 // A whole week from text with day names. Days not mentioned take the first range given
 // ("Mon-Sat 8-6, Sun closed" → all seven set). Returns null without any day names.
-export function parseWeek(text: string): Hours | null {
+export function parseWeek(raw: string): Hours | null {
+  const text = fixDayTypos(raw);
   if (!(text.match(DAY_WORD) ?? []).length) return null;
   const segments = text.split(/[,;\n]|\band\b(?=\s*(?:mon|tue|wed|thu|fri|sat|sun|week))/i).map(s => s.trim()).filter(Boolean);
   const hours: Partial<Hours> = {};
@@ -147,7 +174,7 @@ function daysOfMatch(m: RegExpExecArray): Day[] {
 type Tok = { kind: 'D'; days: Day[]; every: boolean; start: number; end: number } | { kind: 'T'; r: NonNullable<ReturnType<typeof rangeOf>>; start: number; end: number } | { kind: 'X'; start: number; end: number } | { kind: 'S'; start: number; end: number };
 
 export function readWeek(text: string): WeekRead | null {
-  const t = text.toLowerCase().replace(/[–—]/g, '-');
+  const t = fixDayTypos(text).toLowerCase().replace(/[–—]/g, '-');
   const toks: Tok[] = [];
   const inside = (i: number) => toks.some(k => i >= k.start && i < k.end);
   for (const m of t.matchAll(RANGE_RE)) { const r = rangeOf(m[1], m[2]); if (r) toks.push({ kind: 'T', r, start: m.index!, end: m.index! + m[0].length }); }
