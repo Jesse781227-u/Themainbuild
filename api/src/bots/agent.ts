@@ -42,6 +42,9 @@ export async function runAgent<C>(opts: {
   llm: LLMProvider | null; system: string; context: string; memory: AgentMemory; message: string;
   tools: AgentTool<C>[]; c: C; maxSteps: number; timeoutMs: number; now?: () => number;
   actionTools?: string[];   // the tools that change something: a reply claiming a change needs one of them called
+  // After a round of tool calls: true = done, no words needed (the caller's own messages say what
+  // happened). Saves a model call; the signup assistant uses it.
+  doneAfterTools?: (calls: AgentRun['calls']) => boolean;
 }): Promise<AgentRun | AgentFail> {
   const clock = opts.now ?? Date.now;
   const start = clock();
@@ -95,6 +98,7 @@ export async function runAgent<C>(opts: {
         known.push(JSON.stringify(result));
         turns.push({ role: 'result', name: call.name, result });
       }
+      if (opts.doneAfterTools?.(calls)) return { text: '', finish, calls, facts: { ok: true, unknown: [], retried: false }, usage: { ...usage, ms: clock() - start } };
     }
     // Tools ran but no words came back: one more step to write them.
     if (!text && calls.length) text = whatsappStyle((await step('text')).text);

@@ -36,6 +36,8 @@ const SIGNUPS: Record<string, Script> = {
     fee_city: ['for other parts of lagos na 3500'],
     interstate: ['no we no dey send outside lagos'],
     policies: ['use the one wey you write'],
+    msg_offer: ['just use the normal ones'],
+    fee_payer: ['make my customers pay am'],
   } },
   fashion: { name: 'Chioma', answers: {
     shop_name: ["Hello! I'm Chioma and my store is called Chi Luxe Closet, I sell ladies bags and shoes"],
@@ -54,9 +56,12 @@ const SIGNUPS: Record<string, Script> = {
     interstate_pricing: ['I quote per order'],
     policies: ['no returns after 3 days, exchanges only, no refunds'],
     policies_edit: ['no returns after 3 days, exchanges only, no refunds'],
+    msg_offer: ['I want to choose them myself'],
+    msg_pick: ['the short professional one', 'keep the one you have now', 'the playful naija one please'],
+    fee_payer: ["I'll pay it myself, don't charge my customers"],
   } },
 };
-const DONE_STEPS = ['msg_offer', 'fee_payer', 'ready'];
+const DONE_STEPS = ['ready', 'check_wa'];
 
 async function main() {
   if (!vars.GEMINI_API_KEY && !vars.GROQ_API_KEY) throw new Error('Set GROQ_API_KEY or GEMINI_API_KEY in api/.dev.vars.');

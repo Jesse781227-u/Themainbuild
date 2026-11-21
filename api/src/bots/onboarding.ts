@@ -29,7 +29,7 @@ import { closeDays, DAYS, describeHours, sameEveryDay, validHours, type Hours } 
 import { answerHours, hoursDraftFrom, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
 import { conversational, isFail, runAgent } from './agent';
 import { loadMemory, remember, saveMemory } from './agent-memory';
-import { signupContext, signupSystem, signupTools, type SignupHelpers } from './signup-agent';
+import { amountsIn, signupContext, signupSystem, signupTools, type SignupHelpers } from './signup-agent';
 import { defaultPolicies, policyText } from '../services/policies';
 import { listZones, saveZone } from '../services/delivery';
 import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
@@ -37,7 +37,7 @@ import { openTicket } from '../services/support';
 import { buttons, findProducts, list, NO, storeProfilePhoto, YES, type BotDeps, type Input } from './common';
 import { handleImport, parsePastedMenu } from './catalog-import';
 import { handleMessageInput, showChoices } from './messages-flow';
-import { SIGNUP_MESSAGES } from '../services/shop-messages';
+import { SIGNUP_MESSAGES, TONES } from '../services/shop-messages';
 import { log } from '../lib/logger';
 import { parseAdminCommand } from './intent';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
@@ -187,7 +187,29 @@ function yesTap(c: Ctx, text: string): string | null {
 // The AI reads the reply and saves it through the same fixed step (as the tap or plain text that
 // step expects), so every check stays. Replies the tools produce are held, then sent after the AI's
 // words in one go; the code, never the AI, asks the next question.
-const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit']);
+const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit', 'msg_offer', 'msg_pick', 'ready', 'fee_payer', 'check_wa', 'check_fb']);
+
+// The buttons or list rows a question shows ({ id, title, description }).
+type Option = { id: string; title: string; description?: string };
+function optionsIn(out: Out[]): Option[] {
+  const found: Option[] = [];
+  const walk = (v: unknown) => {
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    if (typeof o.id === 'string' && typeof o.title === 'string') found.push({ id: o.id, title: o.title, ...(typeof o.description === 'string' ? { description: o.description } : {}) });
+    for (const x of Object.values(o)) walk(x);
+  };
+  out.forEach(walk);
+  return found.filter(o => o.id !== 'test:start'); // TEST is a command (admin.ts), not a signup step
+}
+// "Which wording?": from the samples already shown (showing them again would write new ones).
+async function wordingQuestion(c: Ctx): Promise<{ text: string; options: Option[] }> {
+  const conv = await c.ctx.db.get(c.ctx.db.doc(C.conversations, c.ctx.conversationId));
+  const s = conv?.msgSamples as { key: string; samples: string[] } | undefined;
+  if (!s?.samples?.length) return { text: 'Which wording should customers get?', options: [] };
+  const options: Option[] = [...s.samples.map((_, i) => ({ id: `msgpick:${s.key}:${i + 1}`, title: `Option ${i + 1}`, description: TONES[i]?.label ?? '' })), { id: `msgedit:${s.key}`, title: 'Write my own' }, { id: `msgkeep:${s.key}`, title: 'Keep the current one' }];
+  return { text: ['Which wording should customers get?', ...s.samples.map((x, i) => `Option ${i + 1}: ${x.slice(0, 160)}`)].join('\n'), options };
+}
 const QUESTION = /\?|^(what|how|why|when|where|who|which|can|could|do|does|is|are|will|should|abeg|wetin|how far|shey|abi)\b/i;
 // Steps whose fixed reader takes any text as the answer ("delivery for surulere na 1500" would become
 // the street): anything of three words or more goes to the assistant first.
@@ -195,16 +217,19 @@ const GREEDY = new Set<Step>(['shop_name', 'owner_name', 'city', 'area', 'street
 // Whether the step's fixed reader clearly understands this reply (then it answers: free and instant).
 // Anything else goes to the assistant: "that's all for now thanks", "we dey deliver and people fit
 // come pick up too" (both, not delivery), "yes, I quote per order" (yes and how).
-function fixedReads(step: Step, t: string): boolean {
+// With buttons on screen, only a button's own words or its number count as clear ("we don't open on
+// sundays" is for the AI, not the fixed reader that only knows "Closed").
+function fixedReads(step: Step, t: string, options: Option[]): boolean {
   const words = t.split(/\s+/).length;
   if (conversational(t.toLowerCase())) return false;
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   switch (step) {
     case 'products': return DONE.test(t) || !!parseProduct(t);
     case 'photos': return SKIP.test(t) || DONE.test(t);
     case 'fee_local': case 'fee_city': case 'interstate_fee': return feeFrom(t) !== null || SKIP.test(t);
-    case 'delivery': case 'interstate': case 'interstate_pricing': case 'policies': case 'type': case 'prep': case 'hours_same': case 'preview': return words <= 2;
-    default: return !GREEDY.has(step) || words < 3;
   }
+  if (options.length) return /^\d{1,2}$/.test(t) || options.some(o => norm(o.title) === norm(t));
+  return !GREEDY.has(step) || words < 3;
 }
 // "Your address is set", "✅ Hours saved" with nothing saved is never sent.
 const SAVED_CLAIM = /\b(is|are|has been|have been|been|got) (saved|set|added|updated|noted|recorded)\b|\b(saved|noted)\b|✅/i;
@@ -214,16 +239,28 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
   const t = text.trim();
   if (!c.deps.llm?.converse || cfg.AGENT_ENABLED === 'false' || !t || input?.imageId || input?.document) return false;
   if (!ASSISTANT_STEPS.has(c.ob.step) || !c.ob.welcomed || (!c.business && c.ob.step !== 'shop_name')) return false;
-  if (!depth && !QUESTION.test(t) && fixedReads(c.ob.step, t)) return false;
   const stepBefore = c.ob.step;
 
   let out: Out[] = [];
   const held: Ctx = { ...c, reply: async (o: Out) => { out.push(o); } };
   const capture = async (run: () => Promise<unknown>) => { out = []; await run(); const got = out; out = []; return got; };
-  const question = (await capture(() => prompt(held))).map(textOf).join('\n');
+  const asked = c.ob.step === 'msg_pick' ? await wordingQuestion(c) : await (async () => { const o = await capture(() => prompt(held)); return { text: o.map(textOf).join('\n'), options: optionsIn(o) }; })();
+  if (!depth && !QUESTION.test(t) && fixedReads(c.ob.step, t, asked.options)) {
+    // A button's own words or its number ("I quote per order", "2"): that tap, since some steps only read taps.
+    const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const opt = /^\d{1,2}$/.test(t) ? asked.options[Number(t) - 1] : asked.options.find(o => norm(o.title) === norm(t));
+    if (!opt) return false;
+    await handleOnboarding(c, '', opt.id, async () => null);
+    return true;
+  }
+  const question = asked.text;
   const productOuts: Out[] = [];
   let shown: Out[] = [];
   const replay = async (txt: string, choice: string | null) => { shown = await capture(() => fixedStep(held, txt, choice, async () => null, undefined)); return held.ob.step; };
+  // The same question again (wording: the options already shown, not new ones).
+  const reAsk = () => (held.ob.step === 'msg_pick' && stepBefore === 'msg_pick' && asked.options.length ? held.reply(list('Which one should customers get?', 'Choose wording', asked.options, 'Wording')) : prompt(held));
+  // A button the owner meant in words: the same as tapping it.
+  const tap = async (id: string) => { shown = await capture(() => handleOnboarding(held, '', id, async () => null)); return held.ob.step; };
 
   const memory = await loadMemory(c.ctx.db, c.ctx.conversationId);
   const helpers: SignupHelpers = {
@@ -231,7 +268,7 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
     heard: [...memory.turns.filter(x => x.r === 'u').slice(-8).map(x => x.t), t].join('\n'),
     business: held.business, feeTerms: feeTerms(cfg),
     checklist: await checklist(held),
-    replay,
+    replay, options: asked.options, tap,
     currentStep: () => held.ob.step,
     setOwnerName: async name => {
       const clean = profileName(ownerNameFrom(name));
@@ -268,14 +305,19 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
   };
 
   const tools = signupTools(helpers);
-  const r = await runAgent({ llm: c.deps.llm, system: signupSystem(), context: signupContext(helpers), memory, message: t, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.SIGNUP_AGENT_TIMEOUT_MS, actionTools: tools.map(x => x.spec.name).filter(n => n !== 'callMe') });
+  const run = () => runAgent({ llm: c.deps.llm, system: signupSystem(), context: signupContext(helpers), memory, message: t, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.SIGNUP_AGENT_TIMEOUT_MS, actionTools: tools.map(x => x.spec.name).filter(n => n !== 'callMe'),
+    // Saved, no question asked: the step's own message is the reply, so no second model call for words.
+    doneAfterTools: done => !QUESTION.test(t) && done.length > 0 && done.every(x => x.ok) });
+  // An empty answer or a garbled tool call (gpt-oss sometimes does either) gets one more try.
+  let r = await run();
+  if (isFail(r) && !r.calls.length && (r.failed === 'empty' || r.failed === 'error') && !/quota|rate limited|resting/i.test(r.detail ?? '')) r = await run();
   const calls = r.calls.filter(x => x.ok);
   c.ob = held.ob; c.business = held.business;
-  log('info', 'signup_agent', { step: stepBefore, now: c.ob.step, calls: r.calls.map(x => `${x.name}${x.ok ? '' : ` ✗ ${x.error ?? ''}`}`).join(', ').slice(0, 200), failed: isFail(r) ? r.failed : null, ms: r.usage.ms });
+  log('info', 'signup_agent', { step: stepBefore, now: c.ob.step, calls: r.calls.map(x => `${x.name}${x.ok ? '' : ` ✗ ${x.error ?? ''}`}`).join(', ').slice(0, 200), failed: isFail(r) ? r.failed : null, ms: r.usage.ms, tokens: r.usage.inTokens + r.usage.outTokens, steps: r.usage.steps });
   if (!calls.length && isFail(r)) {
     log('info', 'signup_agent_fallback', { step: c.ob.step, reason: r.failed, detail: r.detail?.slice(0, 80) });
     // A question is never saved as an answer ("how much una dey charge?" is not a shop name).
-    if (/\?\s*$/.test(t)) { for (const m of joinWords("Sorry, I can't answer that right now. Reply *CALL* and a person from Relay will help.", await capture(() => prompt(held)))) await c.reply(m); return true; }
+    if (/\?\s*$/.test(t)) { for (const m of joinWords("Sorry, I can't answer that right now. Reply *CALL* and a person from Relay will help.", await capture(reAsk))) await c.reply(m); return true; }
     return false;
   }
 
@@ -295,9 +337,9 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
     // They answered something not asked yet ("we dey deliver too" during the hours): no chit-chat
     // that sounds saved; this step's question again.
     if (!QUESTION.test(t) && !/\?\s*$/.test(words)) words = "We'll get to that 👍";
-    if (!/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // answered a question: the same question again
+    if (!/\?\s*$/.test(words)) shown = await capture(reAsk); // answered a question: the same question again
   }
-  if (!shown.length && !/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // saved quietly (e.g. the owner's name): ask where we are
+  if (!shown.length && !/\?\s*$/.test(words)) shown = await capture(reAsk); // saved quietly (e.g. the owner's name): ask where we are
   const msgs = joinWords(words, shown);
   // Moving on, and the message also answers the next step ("add photos later, we're at 15 Adeniran
   // Ogunsanya Street"): the next step's question isn't sent; the same message is read for that step.
@@ -791,7 +833,12 @@ const feeFrom = (text: string) => {
   const t = text.trim().toLowerCase();
   if (/^(0|free|nothing|zero)$/.test(t)) return 0;
   const k = nairaToKobo(t.replace(/^(₦|n)\s*/, '').replace(/\s*naira$/, ''));
-  return k !== null && k >= 0 && k <= 100_000_000 ? k : null;
+  if (k !== null && k >= 0 && k <= 100_000_000) return k;
+  // One amount in a sentence: "5000 for the rest of lagos", "delivery for surulere na 1.5k". Two or
+  // more ("3k in Yaba, 5k elsewhere") are a list, not one price.
+  const amounts = [...new Set(amountsIn(t))].filter(n => n >= 100);
+  if (amounts.length === 1 && amountsIn(t).length === 1) { const one = nairaToKobo(String(amounts[0])); return one !== null && one <= 100_000_000 ? one : null; }
+  return null;
 };
 
 // At the delivery price steps, a whole list (pasted, even squashed into one line, or a spreadsheet,

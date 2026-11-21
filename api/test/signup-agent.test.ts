@@ -121,13 +121,13 @@ test('signup assistant: the AI down (quota) → the fixed step reads it, as befo
   assert.match(texts(r), /Same every day\?/);
 });
 
-test('signup assistant: short plain answers skip the AI; the fee payer and connect steps have no AI tools', async () => {
+test('signup assistant: short plain answers skip the AI; a button step offers the buttons as a choice', async () => {
   const llm = scripted();
   const bot = new Bot(llm);
   await toHours(bot, '2348035550105');
   assert.equal(llm.seen.length, 0, 'plain answers like "Ada Store" and "Lagos, Ikeja" never called the model');
-  const h = { step: 'fee_payer', message: 'make customers pay am', business: null } as unknown as SignupHelpers;
-  assert.deepEqual(signupTools(h).map(t => t.spec.name), ['callMe']);
+  const h = { step: 'fee_payer', message: 'make customers pay am', business: null, options: [{ id: 'fee:customer', title: 'My customers pay' }, { id: 'fee:owner', title: "I'll pay the fee" }] } as unknown as SignupHelpers;
+  assert.deepEqual(signupTools(h).map(t => t.spec.name), ['pickOption', 'callMe']);
   assert.deepEqual(amountsIn('jollof na 2.5k, fried rice ₦3,000 and 1500 for small chops'), [2500, 3000, 1500]);
 });
 
@@ -143,4 +143,32 @@ test('signup assistant: names, places and times must come from the owner, not fr
   const hours = signupTools({ step: 'hours', message: 'we open 9 to 5', heard: 'we open 9 to 5', business: null, setHours: async () => true } as unknown as SignupHelpers).find(t => t.spec.name === 'setHours')!;
   await assert.rejects(hours.run({ mon: '08:00-21:00' }, null), /TIMES_NOT_FROM_OWNER/);
   assert.ok(await hours.run({ mon: '09:00-17:00', sun: 'closed' }, null));
+});
+
+test('signup assistant: words at a question with buttons ("we no dey open sunday", "make my customers pay am") work like the tap', async () => {
+  const llm = scripted();
+  const bot = new Bot(llm);
+  const from = '2348035550106';
+  await toHours(bot, from);
+  await bot.send('admin', { from, text: 'Mon-Fri 8am-7pm, Sat 10am-7pm' });          // fixed reader: Sunday is asked
+  // A short plain sentence at the buttons [Closed] [Same as Mon–Fri] [Different hours] goes to the AI.
+  llm.steps.push({ call: [['pickOption', { option: 'Closed' }]] });
+  const check = await bot.send('admin', { from, text: 'we dont open sundays' });
+  assert.ok(llm.seen.at(-1)!.tools.includes('pickOption'));
+  assert.match(llm.seen.at(-1)!.system, /Buttons on screen[^\n]*"Closed"/);
+  assert.match(texts(check), /Sun closed\. Correct\?/);
+  // The exact button words stay instant (no AI).
+  const before = llm.seen.length;
+  await bot.send('admin', { from, text: 'Yes' });
+  assert.equal(llm.seen.length, before);
+  // On to who pays the fee, then the owner says it in words.
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
+  let last = await say('Pickup', 'dl:pickup');
+  if (opts(last).some(id => id.startsWith('prep:'))) last = await say('30–60 min', 'prep:1');
+  await say('Use these', 'pol:use');
+  await say('Use defaults', 'msgs:default');
+  llm.steps.push({ call: [['pickOption', { option: 'My customers pay' }]] });
+  const paid = await say('make my customers pay am abeg');
+  assert.match(texts(paid), /Your customers pay the fee/);
+  assert.equal((await shopOf(from)).feePayer, 'customer');
 });

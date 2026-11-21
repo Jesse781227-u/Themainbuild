@@ -194,6 +194,9 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         const last = contents[contents.length - 1];
         if (last && last.role === role) last.parts.push(part); else contents.push({ role, parts: [part] });
       };
+      // A call another provider made (Groq in the chain) has no thought signature, which Gemini 3
+      // refuses as a functionCall: it and its result go back as plain text instead.
+      const plain: string[] = [];
       for (const t of turns) {
         if (t.role === 'user') push('user', { text: t.text });
         else if (t.role === 'assistant') push('model', { text: t.text });
@@ -201,9 +204,10 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         // call of a step carries all its parts, the others are already in it.
         else if (t.role === 'call') {
           if (Array.isArray(t.raw)) for (const part of t.raw) push('model', part);
-          // (a call another provider made, e.g. Groq in the chain, is rebuilt from its name and args)
+          else if ((t.raw as { openaiId?: string } | undefined)?.openaiId) { plain.push(t.name); push('model', { text: `(I used ${t.name} ${JSON.stringify(t.args ?? {})})` }); }
           else if (!(t.raw && (t.raw as { sameStep?: boolean }).sameStep)) push('model', (t.raw as { functionCall?: unknown } | undefined)?.functionCall ? t.raw : { functionCall: { name: t.name, args: t.args } });
         }
+        else if (plain.includes(t.name)) { plain.splice(plain.indexOf(t.name), 1); push('user', { text: `(Result of ${t.name}: ${JSON.stringify(t.result ?? null).slice(0, 4000)})` }); }
         else push('user', { functionResponse: { name: t.name, response: { result: t.result } } });
       }
       const res = await gemini({

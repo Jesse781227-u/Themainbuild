@@ -19,6 +19,9 @@ export interface SignupHelpers {
   // Hands an answer to the fixed step (text, or the id of the button it stands for); returns the step after.
   replay: (text: string, choiceId: string | null) => Promise<Step>;
   currentStep: () => Step;
+  // The buttons or list rows on screen, and tapping one (exactly as if the owner had tapped it).
+  options: { id: string; title: string; description?: string }[];
+  tap: (id: string) => Promise<Step>;
   setOwnerName: (name: string) => Promise<boolean>;
   addProduct: (p: { name: string; priceKobo: number; stock: number | null }) => Promise<void>;
   setLocation: (loc: Partial<Location>) => Promise<Step>;
@@ -48,6 +51,7 @@ export function signupSystem() {
 export function signupContext(h: SignupHelpers) {
   return [
     `They are on this signup step: ${h.step}. The question Relay asked them:\n"""${h.question.slice(0, 700)}"""`,
+    ...((h.options ?? []).length ? [`Buttons on screen (pickOption picks one when their words mean it): ${h.options.map(o => `"${o.title}"${o.description ? ` (${o.description})` : ''}`).join(' | ')}`] : []),
     `What's done so far:\n${h.checklist}`,
     'Facts you may use when they ask:',
     '- Relay is an AI that runs their shop in WhatsApp: it replies to customers, takes orders and payments, and sends receipts. Customers keep messaging the shop\'s own number.',
@@ -199,6 +203,18 @@ export function signupTools(h: SignupHelpers): Tool[] {
     if (h.message.length < 5) throw new Error('NO_POLICY_TEXT');
     if (h.currentStep() === 'policies') await h.replay('', 'pol:edit');
     return replay(h.message, null); // their own words, never the AI's
+  }));
+
+  // Any question with buttons: the owner says in words what a button says ("make my customers pay am",
+  // "the friendly one", "yes I get Facebook", "connect am now"). Prefer a step's own tool when it
+  // also takes details (hours, prices); this is for the plain choice.
+  if ((h.options ?? []).length) tools.push(tool({ name: 'pickOption', description: 'Taps one of the buttons on screen, when their words clearly mean that choice. Use the exact button title.',
+    params: { option: { type: 'string', description: 'The button title', enum: [...new Set(h.options.map(o => o.title))].slice(0, 20) } }, required: ['option'] },
+  async a => {
+    const o = h.options.find(x => x.title === a.option);
+    if (!o) throw new Error('NO_SUCH_BUTTON');
+    const before = h.currentStep();
+    return moved(before, await h.tap(o.id));
   }));
 
   tools.push(tool({ name: 'callMe', description: 'A real person from Relay contacts them (they asked for a person, are stuck or upset).', params: { reason: { type: 'string', description: 'What they need, in a few words' } } },
