@@ -651,7 +651,7 @@ const ORDER_CHANGE = /\b(cancel|change|edit|modify|update|add|remove|swap|reduce
 
 // Products ranked by how much of their name the words match (category names count less).
 // clear: one product stands out (all the words are in its name, and nothing else matches as well).
-async function rankProducts(db: Firestore, businessId: string, query: string) {
+export async function rankProducts(db: Firestore, businessId: string, query: string) {
   const singular = (w: string) => (/(sh|ch|x|ss|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
   const words = productWords(query).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^\d+$/.test(w) && !/^(see|show|and|you|have|your|with)$/.test(w)).map(singular);
   if (!words.length) return { list: [] as Product[], clear: false };
@@ -665,6 +665,14 @@ async function rankProducts(db: Firestore, businessId: string, query: string) {
     const nameWords = name.split(/[^a-z0-9]+/).filter(Boolean).length || 1;
     return { p, nameHits, score: nameHits * 2 + catHits, cover: nameHits / nameWords };
   }).filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.cover - a.cover);
+  // The words name a section ("smoothies", "juices"): that section first, then other products named
+  // that way ("what smoothies do you have?" is the Smoothies section, not just "Smoothie Only 3 Days").
+  const sections = cats.filter(c => words.every(w => hit(w, c.name.toLowerCase())));
+  const inSections = sections.length ? products.filter(p => sections.some(c => c.id === p.categoryId)) : [];
+  if (inSections.length >= 2) {
+    const others = scored.filter(x => x.nameHits && !inSections.includes(x.p)).map(x => x.p);
+    return { list: [...inSections, ...others], clear: false };
+  }
   // Products named in the words come first; ones that only share a section drop out then.
   const named = scored.some(x => x.nameHits) ? scored.filter(x => x.nameHits) : scored;
   const [top, second] = named;
