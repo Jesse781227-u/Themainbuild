@@ -29,31 +29,37 @@ export async function readHoursText(text: string, llm: LLMProvider | null | unde
       ].join('\n'),
       keys: DAYS,
     });
-    const week: Partial<Record<Day, DayHours | null>> = {};
-    for (const d of DAYS) {
-      const v = String(out[d] ?? '').trim().toLowerCase();
-      const m = /^(\d\d:\d\d)\s*-\s*(\d\d:\d\d)$/.exec(v);
-      const real = (t: string) => { const [h, mm] = t.split(':').map(Number); return h < 24 && mm < 60; }; // not "25:00"
-      if (v === 'closed') week[d] = null;
-      else if (m && m[1] !== m[2] && real(m[1]) && real(m[2])) week[d] = { open: m[1], close: m[2] };
-    }
-    if (!Object.keys(week).length || !validHours({ ...Object.fromEntries(DAYS.map(d => [d, null])), ...week })) return null;
-    // Overnight or very long days are still asked about.
-    const doubts: Doubt[] = [];
-    for (const d of DAYS) {
-      const h = week[d];
-      if (!h) continue;
-      const span = (mins(h.close) - mins(h.open) + 1440) % 1440;
-      if (mins(h.close) < mins(h.open) || span > 16 * 60) {
-        const same = doubts.find(x => x.range.open === h.open && x.range.close === h.close);
-        if (same) same.days.push(d); else doubts.push({ days: [d], range: h, alt: null });
-      }
-    }
-    return { week, doubts, missing: DAYS.filter(d => !(d in week)), orphan: null, asking: null };
+    return hoursDraftFrom(out);
   } catch (e) {
     log('warn', 'hours_ai_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) });
     return null;
   }
+}
+
+// Per-day answers from the AI ({ mon: "08:00-19:00", sun: "closed", sat: "unknown" }) → a draft to
+// check: days it didn't give stay missing (asked about), overnight or very long days are doubts.
+export function hoursDraftFrom(out: Record<string, unknown>): HoursDraft | null {
+  const week: Partial<Record<Day, DayHours | null>> = {};
+  for (const d of DAYS) {
+    const v = String(out[d] ?? '').trim().toLowerCase();
+    const m = /^(\d\d?:\d\d)\s*-\s*(\d\d?:\d\d)$/.exec(v);
+    const two = (t: string) => t.padStart(5, '0');
+    const real = (t: string) => { const [h, mm] = t.split(':').map(Number); return h < 24 && mm < 60; }; // not "25:00"
+    if (v === 'closed') week[d] = null;
+    else if (m && two(m[1]) !== two(m[2]) && real(m[1]) && real(m[2])) week[d] = { open: two(m[1]), close: two(m[2]) };
+  }
+  if (!Object.keys(week).length || !validHours({ ...Object.fromEntries(DAYS.map(d => [d, null])), ...week })) return null;
+  const doubts: Doubt[] = [];
+  for (const d of DAYS) {
+    const h = week[d];
+    if (!h) continue;
+    const span = (mins(h.close) - mins(h.open) + 1440) % 1440;
+    if (mins(h.close) < mins(h.open) || span > 16 * 60) {
+      const same = doubts.find(x => x.range.open === h.open && x.range.close === h.close);
+      if (same) same.days.push(d); else doubts.push({ days: [d], range: h, alt: null });
+    }
+  }
+  return { week, doubts, missing: DAYS.filter(d => !(d in week)), orphan: null, asking: null };
 }
 
 const mins = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };

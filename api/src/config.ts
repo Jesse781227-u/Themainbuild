@@ -56,6 +56,8 @@ const schema = z.object({
   AGENT_ENABLED: optionalString,
   AGENT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30_000).default(8000),
   AGENT_MAX_STEPS: z.coerce.number().int().min(1).max(8).default(4),
+  // The signup assistant (bots/signup-agent.ts) may take longer: "typing…" shows meanwhile.
+  SIGNUP_AGENT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30_000).default(12_000),
   AGENT_FALLBACK_ALERT: z.coerce.number().int().min(1).default(10),   // tell the owner after this many fallbacks in a day
   // Gemini prices for the cost line (USD per million tokens). TODO(jesse): confirm for the model in use.
   GEMINI_IN_USD_PER_M: z.coerce.number().min(0).default(0.3),

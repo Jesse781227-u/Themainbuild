@@ -26,7 +26,10 @@ import { trackStep } from '../services/onboarding-events';
 import { inferBusinessType } from '../services/business-type';
 import { example, exampleType } from '../services/shop-type';
 import { closeDays, DAYS, describeHours, sameEveryDay, validHours, type Hours } from '../services/hours';
-import { answerHours, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
+import { answerHours, hoursDraftFrom, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
+import { conversational, isFail, runAgent } from './agent';
+import { loadMemory, remember, saveMemory } from './agent-memory';
+import { signupContext, signupSystem, signupTools, type SignupHelpers } from './signup-agent';
 import { defaultPolicies, policyText } from '../services/policies';
 import { listZones, saveZone } from '../services/delivery';
 import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
@@ -163,6 +166,130 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
     if (choiceId && /^(pmatch|pcat|pedit|setcat):/.test(choiceId) && c.ob.step !== 'products' && c.ob.step !== 'preview') return 'pass';
   }
 
+  // Chatty, long or Pidgin replies and questions: the signup assistant reads them first (the fixed
+  // step below is the fallback when the AI is off, out of quota, slow or unsure).
+  if (!choiceId && await signupAssistant(c, text, input)) return;
+  return fixedStep(c, text, choiceId, imageUrl, input);
+}
+
+// ── Signup assistant ──
+// The AI reads the reply and saves it through the same fixed step (as the tap or plain text that
+// step expects), so every check stays. Replies the tools produce are held, then sent after the AI's
+// words in one go; the code, never the AI, asks the next question.
+const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit']);
+const QUESTION = /\?|^(what|how|why|when|where|who|which|can|could|do|does|is|are|will|should|abeg|wetin|how far|shey|abi)\b/i;
+
+async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boolean> {
+  const cfg = c.ctx.cfg;
+  const t = text.trim();
+  if (!c.deps.llm?.converse || cfg.AGENT_ENABLED === 'false' || !t || input?.imageId || input?.document) return false;
+  if (!ASSISTANT_STEPS.has(c.ob.step) || !c.ob.welcomed || (!c.business && c.ob.step !== 'shop_name')) return false;
+  if (!conversational(t.toLowerCase()) && !QUESTION.test(t)) return false;
+
+  let out: Out[] = [];
+  const held: Ctx = { ...c, reply: async (o: Out) => { out.push(o); } };
+  const capture = async (run: () => Promise<unknown>) => { out = []; await run(); const got = out; out = []; return got; };
+  const question = (await capture(() => prompt(held))).map(textOf).join('\n');
+  const productOuts: Out[] = [];
+  let shown: Out[] = [];
+  const replay = async (txt: string, choice: string | null) => { shown = await capture(() => fixedStep(held, txt, choice, async () => null, undefined)); return held.ob.step; };
+
+  const helpers: SignupHelpers = {
+    step: held.ob.step, message: t, question, voice: !!input?.audioId,
+    business: held.business, feeTerms: feeTerms(cfg),
+    checklist: await checklist(held),
+    replay,
+    currentStep: () => held.ob.step,
+    setOwnerName: async name => {
+      const clean = profileName(ownerNameFrom(name));
+      if (!clean || !held.business) return false;
+      if (held.ob.step === 'owner_name') { await replay(clean, null); return true; }
+      await held.ctx.db.update(held.ctx.db.doc(C.businesses, held.business.id), { ownerName: clean, updatedAt: new Date().toISOString() });
+      held.business.ownerName = clean;
+      await held.ctx.db.set(held.ctx.db.doc(C.ownerPhones, held.ctx.ownerPhone), { ownerName: clean }, { merge: true });
+      return true;
+    },
+    addProduct: async p => {
+      await starterCategories(held, p.name);
+      productOuts.push(...await addProduct(flowFor(held), { name: p.name, priceKobo: p.priceKobo, stock: p.stock, imageUrl: null }, held.ob.step === 'preview' ? { prefer: 'update' } : undefined));
+    },
+    setLocation: async got => {
+      const loc: Location = { city: null, area: null, street: null, landmark: null, ...held.ob.draft?.loc };
+      for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k]) loc[k] = k === 'city' ? knownCity(got[k]!) ?? tidyPlace(got[k]!) : tidyPlace(got[k]!);
+      await setOb(held, { draft: { ...held.ob.draft, loc, ...(got.street ? { streetAsked: true } : {}) } });
+      shown = await capture(() => nextLocation(held));
+      return held.ob.step;
+    },
+    setHours: async days => {
+      const draft = hoursDraftFrom(days);
+      if (!draft) return false;
+      shown = await capture(() => review(held, draft));
+      return true;
+    },
+    callMe: async reason => {
+      await openTicket(held.ctx.db, held.ctx.cfg, held.deps, { ownerPhone: held.ctx.ownerPhone, businessId: held.business?.id ?? null, businessName: held.business?.name ?? null, stage: `${held.ob.stage}/${held.ob.step}`, message: reason.slice(0, 300) });
+      shown = ['Got it 👍 A real person from Relay will call or WhatsApp you shortly on this number.'];
+    },
+  };
+
+  const memory = await loadMemory(c.ctx.db, c.ctx.conversationId);
+  const r = await runAgent({ llm: c.deps.llm, system: signupSystem(), context: signupContext(helpers), memory, message: t, tools: signupTools(helpers), c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.SIGNUP_AGENT_TIMEOUT_MS });
+  const calls = r.calls.filter(x => x.ok);
+  c.ob = held.ob; c.business = held.business;
+  if (!calls.length && isFail(r)) {
+    log('info', 'signup_agent_fallback', { step: c.ob.step, reason: r.failed, detail: r.detail?.slice(0, 80) });
+    // A question is never saved as an answer ("how much una dey charge?" is not a shop name).
+    if (/\?\s*$/.test(t)) { for (const m of joinWords("Sorry, I can't answer that right now. Reply *CALL* and a person from Relay will help.", await capture(() => prompt(held)))) await c.reply(m); return true; }
+    return false;
+  }
+
+  // Products typed in words: their cards, then one "send the next one" (not one per product).
+  if (productOuts.length && !calls.some(x => x.name === 'productsDone')) shown = [...await capture(() => afterTyped(held, productOuts)), ...(calls.some(x => x.name !== 'addProduct') ? shown : [])];
+  c.ob = held.ob;
+  let words = isFail(r) ? '' : r.text;
+  // Something was saved: the step's own message says so. The AI's words stay only when they answer the
+  // owner's question or ask about something it couldn't save ("How much is the fried rice?").
+  if (calls.length) { if (!QUESTION.test(t) && !/\?\s*$/.test(words) && r.calls.every(x => x.ok)) words = ''; }
+  else if (!/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // answered a question: the same question again
+  if (!shown.length && !/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // saved quietly (e.g. the owner's name): ask where we are
+  const msgs = joinWords(words, shown);
+  for (const m of msgs) await c.reply(m);
+  await saveMemory(c.ctx.db, c.ctx.conversationId, remember(memory, t, msgs.map(textOf).join('\n').slice(0, 600), calls.map(x => x.name)));
+  return true;
+}
+
+// The AI's words in front of the step's own message (one bubble when it fits).
+function joinWords(words: string, out: Out[]): Out[] {
+  if (!words) return out;
+  if (!out.length) return [words];
+  const [head, ...rest] = out;
+  if (typeof head === 'string') return [`${words}\n\n${head}`, ...rest];
+  const body = (head as { interactive?: { body?: { text: string } } }).interactive?.body;
+  if (body && words.length + body.text.length + 2 <= 1024) { body.text = `${words}\n\n${body.text}`; return out; }
+  return [words, ...out];
+}
+
+const textOf = (o: Out) => (typeof o === 'string' ? o : (o as { interactive?: { body?: { text: string } } }).interactive?.body?.text ?? '');
+
+// What's done and what's left, for the assistant.
+async function checklist(c: Ctx) {
+  const b = c.business;
+  const products = b ? await listProducts(c.ctx.db, b.id) : [];
+  const loc = c.ob.draft?.loc;
+  const hours = c.ob.draft?.hoursReview;
+  return [
+    `Shop name: ${b && c.ob.nameSet ? b.name : 'not yet'}`,
+    `Owner's name: ${b?.ownerName ?? 'not yet'}`,
+    `Products: ${products.length ? `${products.length} (${products.slice(0, 8).map(p => `${p.name} ${formatKobo(p.priceKobo)}`).join(', ')})` : 'none yet'}`,
+    `Business type: ${b && b.category !== 'other' ? typeOf(b.category)?.label ?? b.category : 'not set'}`,
+    `Location: ${b?.area ? describeLocation({ area: b.area, city: b.city ?? null, street: b.address ?? null, landmark: b.landmark ?? null }) : loc ? `so far: ${describeLocation(loc)}` : 'not yet'}`,
+    `Opening hours: ${b?.hours ? describeHours(b.hours) : hours ? `so far: ${DAYS.map(d => `${d} ${d in hours.week ? (hours.week[d] ? `${hours.week[d]!.open}-${hours.week[d]!.close}` : 'closed') : 'unknown'}`).join(', ')}` : 'not yet'}`,
+    `Delivery: ${b?.fulfilment ?? 'not yet'}`,
+  ].join('\n');
+}
+
+async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl: () => Promise<string | null>, input?: Input): Promise<unknown> {
+  const now = new Date();
   switch (c.ob.step) {
     case 'shop_name': {
       if (!c.ob.welcomed) { await setOb(c, { welcomed: true }); return c.reply(welcomeText(c, 'What\'s your shop called?')); }
