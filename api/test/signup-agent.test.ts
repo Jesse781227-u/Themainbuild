@@ -130,3 +130,17 @@ test('signup assistant: short plain answers skip the AI; the fee payer and conne
   assert.deepEqual(signupTools(h).map(t => t.spec.name), ['callMe']);
   assert.deepEqual(amountsIn('jollof na 2.5k, fried rice ₦3,000 and 1500 for small chops'), [2500, 3000, 1500]);
 });
+
+test('signup assistant: names, places and times must come from the owner, not from Relay\'s examples', async () => {
+  const { fromOwner } = await import('../src/bots/signup-agent');
+  const h = { heard: "I'll add photos later\nI'm in Lekki phase 1, Lagos. Admiralty way, opposite the Mega Chicken" };
+  assert.throws(() => fromOwner(h, '12 Herbert Macaulay Way', 'PLACE'), /PLACE_NOT_FROM_OWNER/, 'the example address in the question');
+  assert.throws(() => fromOwner(h, 'Yaba', 'PLACE'), /NOT_FROM_OWNER/);
+  assert.equal(fromOwner(h, 'Admiralty Way', 'PLACE'), 'Admiralty Way');
+  assert.equal(fromOwner(h, 'Lekki Phase 1', 'PLACE'), 'Lekki Phase 1');
+  assert.equal(fromOwner({ heard: 'we dey for surulree' }, 'Surulere', 'PLACE'), 'Surulere', 'one letter off is fine');
+  const { signupTools } = await import('../src/bots/signup-agent');
+  const hours = signupTools({ step: 'hours', message: 'we open 9 to 5', heard: 'we open 9 to 5', business: null, setHours: async () => true } as unknown as SignupHelpers).find(t => t.spec.name === 'setHours')!;
+  await assert.rejects(hours.run({ mon: '08:00-21:00' }, null), /TIMES_NOT_FROM_OWNER/);
+  assert.ok(await hours.run({ mon: '09:00-17:00', sun: 'closed' }, null));
+});

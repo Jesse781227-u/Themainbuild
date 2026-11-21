@@ -79,11 +79,13 @@ async function create(f: FlowCtx, d: ProductDraft, cat: Category, opts: { sayNew
 // A new product line (or a correction while editing). Returns the messages to send.
 //   prefer 'update': the owner is fixing their list ("pink crop top 5000" updates Pink Tie-Front Crop
 //   Top when that's the one clear match); 'ask': they're adding, so a near match is only suggested.
-export async function addProduct(f: FlowCtx, d: ProductDraft, opts: { prefer?: 'update' | 'ask' } = {}): Promise<Out[]> {
+//   'new': several distinct products given at once (the signup assistant); only an exact name updates.
+export async function addProduct(f: FlowCtx, d: ProductDraft, opts: { prefer?: 'update' | 'ask' | 'new' } = {}): Promise<Out[]> {
   if (f.state.editingProductId) return correctProduct(f, f.state.editingProductId, d);
   const all = await listProducts(f.db, f.business.id);
   const exact = all.find(p => p.name.toLowerCase() === d.name.toLowerCase());
   if (exact) return [await updateExisting(f, exact, d)];
+  if (opts.prefer === 'new') return createNew(f, d);
   const m = matchProduct(d.name, all);
   if (m.kind === 'strong' && opts.prefer === 'update') return [await updateExisting(f, m.product, d)];
   if (m.kind !== 'none') {

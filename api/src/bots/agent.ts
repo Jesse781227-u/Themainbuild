@@ -22,7 +22,7 @@ export interface AgentTool<C> { spec: ToolSpec; run(args: Record<string, unknown
 export interface AgentRun {
   text: string;
   finish: ((words: string) => Promise<void>) | null;  // the rich element / fixed flow to send it with
-  calls: { name: string; args: Record<string, unknown>; ok: boolean }[];
+  calls: { name: string; args: Record<string, unknown>; ok: boolean; error?: string }[];
   facts: { ok: boolean; unknown: string[]; retried: boolean };
   usage: { inTokens: number; outTokens: number; steps: number; ms: number };
 }
@@ -90,7 +90,7 @@ export async function runAgent<C>(opts: {
           calls.push({ name: call.name, args: call.args, ok: true });
         } catch (e) {
           result = { error: String(e instanceof Error ? e.message : e).slice(0, 120) };
-          calls.push({ name: call.name, args: call.args, ok: false });
+          calls.push({ name: call.name, args: call.args, ok: false, error: String((result as { error?: string }).error ?? "") });
         }
         known.push(JSON.stringify(result));
         turns.push({ role: 'result', name: call.name, result });

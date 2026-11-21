@@ -34,7 +34,7 @@ import { defaultPolicies, policyText } from '../services/policies';
 import { listZones, saveZone } from '../services/delivery';
 import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
 import { openTicket } from '../services/support';
-import { buttons, findProducts, list, storeProfilePhoto, type BotDeps, type Input } from './common';
+import { buttons, findProducts, list, NO, storeProfilePhoto, YES, type BotDeps, type Input } from './common';
 import { handleImport, parsePastedMenu } from './catalog-import';
 import { handleMessageInput, showChoices } from './messages-flow';
 import { SIGNUP_MESSAGES } from '../services/shop-messages';
@@ -168,8 +168,19 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
 
   // Chatty, long or Pidgin replies and questions: the signup assistant reads them first (the fixed
   // step below is the fallback when the AI is off, out of quota, slow or unsure).
+  // "e correct", "yes na there", "no wahala" to a read-back: the Yes tap (never a correction).
+  const tap = choiceId ? null : yesTap(c, text);
+  if (tap) return fixedStep(c, '', tap, imageUrl, input);
   if (!choiceId && await signupAssistant(c, text, input)) return;
   return fixedStep(c, text, choiceId, imageUrl, input);
+}
+
+function yesTap(c: Ctx, text: string): string | null {
+  const t = text.trim();
+  if (t.split(/\s+/).length > 4 || !YES.test(t) || NO.test(t)) return null;
+  const draft = c.ob.draft?.hoursReview;
+  return c.ob.step === 'location_confirm' ? 'loc:ok' : c.ob.step === 'preview' ? 'ok:yes' : c.ob.step === 'hours_same' ? 'hrs:same'
+    : c.ob.step === 'hours_review' && draft && !draft.doubts.length && !draft.missing.length ? 'hrv:ok' : null;
 }
 
 // ── Signup assistant ──
@@ -178,13 +189,33 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
 // words in one go; the code, never the AI, asks the next question.
 const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit']);
 const QUESTION = /\?|^(what|how|why|when|where|who|which|can|could|do|does|is|are|will|should|abeg|wetin|how far|shey|abi)\b/i;
+// Steps whose fixed reader takes any text as the answer ("delivery for surulere na 1500" would become
+// the street): anything of three words or more goes to the assistant first.
+const GREEDY = new Set<Step>(['shop_name', 'owner_name', 'city', 'area', 'street', 'location_confirm', 'prep_custom', 'policies_edit']);
+// Whether the step's fixed reader clearly understands this reply (then it answers: free and instant).
+// Anything else goes to the assistant: "that's all for now thanks", "we dey deliver and people fit
+// come pick up too" (both, not delivery), "yes, I quote per order" (yes and how).
+function fixedReads(step: Step, t: string): boolean {
+  const words = t.split(/\s+/).length;
+  if (conversational(t.toLowerCase())) return false;
+  switch (step) {
+    case 'products': return DONE.test(t) || !!parseProduct(t);
+    case 'photos': return SKIP.test(t) || DONE.test(t);
+    case 'fee_local': case 'fee_city': case 'interstate_fee': return feeFrom(t) !== null || SKIP.test(t);
+    case 'delivery': case 'interstate': case 'interstate_pricing': case 'policies': case 'type': case 'prep': case 'hours_same': case 'preview': return words <= 2;
+    default: return !GREEDY.has(step) || words < 3;
+  }
+}
+// "Your address is set", "✅ Hours saved" with nothing saved is never sent.
+const SAVED_CLAIM = /\b(is|are|has been|have been|been|got) (saved|set|added|updated|noted|recorded)\b|\b(saved|noted)\b|✅/i;
 
-async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boolean> {
+async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): Promise<boolean> {
   const cfg = c.ctx.cfg;
   const t = text.trim();
   if (!c.deps.llm?.converse || cfg.AGENT_ENABLED === 'false' || !t || input?.imageId || input?.document) return false;
   if (!ASSISTANT_STEPS.has(c.ob.step) || !c.ob.welcomed || (!c.business && c.ob.step !== 'shop_name')) return false;
-  if (!conversational(t.toLowerCase()) && !QUESTION.test(t)) return false;
+  if (!depth && !QUESTION.test(t) && fixedReads(c.ob.step, t)) return false;
+  const stepBefore = c.ob.step;
 
   let out: Out[] = [];
   const held: Ctx = { ...c, reply: async (o: Out) => { out.push(o); } };
@@ -194,8 +225,10 @@ async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boo
   let shown: Out[] = [];
   const replay = async (txt: string, choice: string | null) => { shown = await capture(() => fixedStep(held, txt, choice, async () => null, undefined)); return held.ob.step; };
 
+  const memory = await loadMemory(c.ctx.db, c.ctx.conversationId);
   const helpers: SignupHelpers = {
     step: held.ob.step, message: t, question, voice: !!input?.audioId,
+    heard: [...memory.turns.filter(x => x.r === 'u').slice(-8).map(x => x.t), t].join('\n'),
     business: held.business, feeTerms: feeTerms(cfg),
     checklist: await checklist(held),
     replay,
@@ -211,7 +244,9 @@ async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boo
     },
     addProduct: async p => {
       await starterCategories(held, p.name);
-      productOuts.push(...await addProduct(flowFor(held), { name: p.name, priceKobo: p.priceKobo, stock: p.stock, imageUrl: null }, held.ob.step === 'preview' ? { prefer: 'update' } : undefined));
+      // Adding (products step): the AI gave distinct names, so "Fried rice" is not asked about as maybe
+      // "Jollof Rice". Fixing the list (preview): a clear match is updated.
+      productOuts.push(...await addProduct(flowFor(held), { name: p.name, priceKobo: p.priceKobo, stock: p.stock, imageUrl: null }, { prefer: held.ob.step === 'preview' ? 'update' : 'new' }));
     },
     setLocation: async got => {
       const loc: Location = { city: null, area: null, street: null, landmark: null, ...held.ob.draft?.loc };
@@ -232,10 +267,11 @@ async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boo
     },
   };
 
-  const memory = await loadMemory(c.ctx.db, c.ctx.conversationId);
-  const r = await runAgent({ llm: c.deps.llm, system: signupSystem(), context: signupContext(helpers), memory, message: t, tools: signupTools(helpers), c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.SIGNUP_AGENT_TIMEOUT_MS });
+  const tools = signupTools(helpers);
+  const r = await runAgent({ llm: c.deps.llm, system: signupSystem(), context: signupContext(helpers), memory, message: t, tools, c: null, maxSteps: cfg.AGENT_MAX_STEPS, timeoutMs: cfg.SIGNUP_AGENT_TIMEOUT_MS, actionTools: tools.map(x => x.spec.name).filter(n => n !== 'callMe') });
   const calls = r.calls.filter(x => x.ok);
   c.ob = held.ob; c.business = held.business;
+  log('info', 'signup_agent', { step: stepBefore, now: c.ob.step, calls: r.calls.map(x => `${x.name}${x.ok ? '' : ` ✗ ${x.error ?? ''}`}`).join(', ').slice(0, 200), failed: isFail(r) ? r.failed : null, ms: r.usage.ms });
   if (!calls.length && isFail(r)) {
     log('info', 'signup_agent_fallback', { step: c.ob.step, reason: r.failed, detail: r.detail?.slice(0, 80) });
     // A question is never saved as an answer ("how much una dey charge?" is not a shop name).
@@ -249,12 +285,27 @@ async function signupAssistant(c: Ctx, text: string, input?: Input): Promise<boo
   let words = isFail(r) ? '' : r.text;
   // Something was saved: the step's own message says so. The AI's words stay only when they answer the
   // owner's question or ask about something it couldn't save ("How much is the fried rice?").
-  if (calls.length) { if (!QUESTION.test(t) && !/\?\s*$/.test(words) && r.calls.every(x => x.ok)) words = ''; }
-  else if (!/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // answered a question: the same question again
+  if (calls.length) {
+    const asksAboutFailed = /\?\s*$/.test(words) && r.calls.some(x => !x.ok);
+    if (!QUESTION.test(t) && !asksAboutFailed) words = '';
+    else if (SAVED_CLAIM.test(words) && !asksAboutFailed) words = words.split(/(?<=[.!?])\s+/).filter(x => !SAVED_CLAIM.test(x)).join(' '); // the step says what was saved
+  }
+  else {
+    if (SAVED_CLAIM.test(words)) words = ''; // claims a save that didn't happen
+    // They answered something not asked yet ("we dey deliver too" during the hours): no chit-chat
+    // that sounds saved; this step's question again.
+    if (!QUESTION.test(t) && !/\?\s*$/.test(words)) words = "We'll get to that 👍";
+    if (!/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // answered a question: the same question again
+  }
   if (!shown.length && !/\?\s*$/.test(words)) shown = await capture(() => prompt(held)); // saved quietly (e.g. the owner's name): ask where we are
   const msgs = joinWords(words, shown);
-  for (const m of msgs) await c.reply(m);
+  // Moving on, and the message also answers the next step ("add photos later, we're at 15 Adeniran
+  // Ogunsanya Street"): the next step's question isn't sent; the same message is read for that step.
+  const carry = !depth && c.ob.step !== stepBefore && ASSISTANT_STEPS.has(c.ob.step) && r.calls.some(x => x.ok && x.args?.movingOn === true);
+  const send = carry ? msgs.slice(0, -1) : msgs;
+  for (const m of send) await c.reply(m);
   await saveMemory(c.ctx.db, c.ctx.conversationId, remember(memory, t, msgs.map(textOf).join('\n').slice(0, 600), calls.map(x => x.name)));
+  if (carry && !(await signupAssistant(c, text, input, 1))) for (const m of msgs.slice(-1)) await c.reply(m);
   return true;
 }
 
@@ -853,7 +904,8 @@ async function prompt(c: Ctx): Promise<unknown> {
   // Every question says where they are ("*Step 4 of 6* · …"), once.
   const ask = (content: Out): Promise<unknown> => c.reply(withLabel(content, L));
   switch (c.ob.step) {
-    case 'shop_name': return ask(c.ob.adding ? `What's the new shop or branch called?` : welcomeText(c, 'What\'s your shop called?'));
+    // The welcome only once: after it, just the question.
+    case 'shop_name': return ask(c.ob.adding ? `What's the new shop or branch called?` : c.ob.welcomed ? 'What\'s your shop called?' : welcomeText(c, 'What\'s your shop called?'));
     case 'owner_name': return ask("What's *your* name?");
     case 'products': return ask(`Send your ${listWord(biz)} or price list (PDF, photo or pasted list).\n\nNo list? Type one product, e.g. *${example(biz ?? {})}*.`);
     case 'preview': return ask(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));

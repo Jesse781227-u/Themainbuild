@@ -7,6 +7,7 @@
 // provider asks (retry-after), so each message doesn't wait on them again.
 import type { Config } from '../config';
 import type { AgentTurn, LLMProvider, ToolSpec } from './ai';
+import { log } from '../lib/logger';
 
 const CHAT_TIMEOUT_MS = 30_000;
 const skipUntil = new Map<string, number>(); // `${provider}:${model}` → time it may be asked again
@@ -57,6 +58,22 @@ export function toMessages(system: string, turns: AgentTurn[]): Msg[] {
   return out;
 }
 
+// The same turns with tool calls and results written out as text (for a reply with no tools).
+export function toPlainMessages(system: string, turns: AgentTurn[]): Msg[] {
+  const out: Msg[] = [{ role: 'system', content: system }];
+  const add = (role: 'user' | 'assistant', text: string) => {
+    const last = out[out.length - 1];
+    if (last.role === role && typeof last.content === 'string') last.content += `\n${text}`; else out.push({ role, content: text });
+  };
+  for (const t of turns) {
+    if (t.role === 'user' || t.role === 'assistant') add(t.role, t.text);
+    else if (t.role === 'call') add('assistant', `(I used ${t.name} ${JSON.stringify(t.args ?? {})})`);
+    else add('user', `(Result of ${t.name}: ${JSON.stringify(t.result ?? null).slice(0, 4000)})`);
+  }
+  add('user', '(Now write your reply to them in words only.)');
+  return out;
+}
+
 export function openAiCompatProvider(o: Opts, doFetch: typeof fetch = (...a) => fetch(...a)): LLMProvider | null {
   if (!o.apiKey) return null;
   const models = [...new Set(o.models.map(m => m.trim()).filter(Boolean))];
@@ -99,9 +116,11 @@ export function openAiCompatProvider(o: Opts, doFetch: typeof fetch = (...a) => 
       return call ? { tool: call.function.name, args: parseArgs(call.function.arguments) } : null;
     },
     async converse({ system, turns, tools, mode, timeoutMs }) {
+      // Words only (the final reply): no tools at all, and the earlier calls as plain text. Groq refuses
+      // the whole request when a model calls a tool after tool_choice "none".
       const r = await chat({
-        messages: toMessages(system, turns),
-        ...(tools.length ? { tools: toolsFor(tools), tool_choice: mode === 'text' ? 'none' : 'auto' } : {}),
+        messages: mode === 'text' ? toPlainMessages(system, turns) : toMessages(system, turns),
+        ...(tools.length && mode !== 'text' ? { tools: toolsFor(tools), tool_choice: 'auto' } : {}),
         temperature: 0.5, max_completion_tokens: 1500,
       }, timeoutMs);
       const m = r.choices?.[0]?.message;
@@ -142,7 +161,10 @@ export function chainProviders(list: (LLMProvider | null | undefined)[]): LLMPro
     const able = ps.filter(p => typeof p[key] === 'function');
     let err: unknown = new Error('LLM_FAILED: no provider');
     for (const [i, p] of able.entries()) {
-      try { return await (p[key] as (a: unknown) => Promise<unknown>).call(p, adjust ? adjust(args, i, able.length) : args); } catch (e) { err = e; }
+      try { return await (p[key] as (a: unknown) => Promise<unknown>).call(p, adjust ? adjust(args, i, able.length) : args); } catch (e) {
+        err = e;
+        if (i < able.length - 1) log('warn', 'llm_provider_failed', { call: key, provider: i, error: String(e instanceof Error ? e.message : e).slice(0, 160) });
+      }
     }
     throw err;
   };

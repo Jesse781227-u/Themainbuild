@@ -6,7 +6,7 @@ import type { LLMProvider } from '../src/services/ai';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const cfg = { GROQ_API_KEY: 'gsk_test', GROQ_MODEL: 'openai/gpt-oss-120b', GROQ_FALLBACK_MODEL: 'llama-3.3-70b-versatile' };
+const cfg = { GROQ_API_KEY: 'gsk_test', GROQ_MODEL: 'openai/gpt-oss-120b', GROQ_FALLBACK_MODEL: 'openai/gpt-oss-20b' };
 type Req = { model: string; body: Record<string, unknown> };
 function server(answers: (Response | ((r: Req) => Response))[]) {
   const seen: Req[] = [];
@@ -54,7 +54,7 @@ test('groq: a rate-limited model is skipped for as long as Groq asks; then the b
   const turn = () => groq.converse!({ system: 's', turns: [{ role: 'user', text: 'hi' }], tools: [], mode: 'text', timeoutMs: 5000 });
   assert.equal((await turn()).text, 'Hello 👋');
   assert.equal((await turn()).text, 'Again');
-  assert.deepEqual(seen.map(r => r.model), ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile', 'llama-3.3-70b-versatile'], 'the limited one is not asked again');
+  assert.deepEqual(seen.map(r => r.model), ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-20b'], 'the limited one is not asked again');
   assert.equal(retryAfterMs(new Headers({ 'retry-after': '20' }), ''), 20_000);
   assert.equal(retryAfterMs(new Headers(), 'Rate limit reached on requests per day (RPD)'), 3_600_000);
   assert.equal(groqProvider({ ...cfg, GROQ_API_KEY: undefined }), null, 'no key, no Groq');
@@ -77,4 +77,16 @@ test('chain: Groq first; rate limited or a photo → Gemini; menus only Gemini h
   await llm.readCatalog!({ text: 'jollof 2500' });
   assert.deepEqual(gemini.asked, ['converse', 'chooseTool:https://img/x.jpg', 'readCatalog']);
   assert.equal(chainProviders([null, gemini]), gemini, 'one provider: itself');
+});
+
+test('groq: words only (the final reply) sends no tools, and earlier calls as plain text', async () => {
+  const { seen, doFetch } = server([ok({ content: 'Saved 👍' })]);
+  const groq = groqProvider(cfg, doFetch)!;
+  const turns = [{ role: 'user' as const, text: 'hi' }, { role: 'call' as const, name: 'setHours', args: { mon: 'closed' }, raw: { openaiId: 'c1' } }, { role: 'result' as const, name: 'setHours', result: { saved: true } }];
+  assert.equal((await groq.converse!({ system: 's', turns, tools, mode: 'text', timeoutMs: 5000 })).text, 'Saved 👍');
+  assert.equal(seen[0].body.tools, undefined);
+  assert.equal(seen[0].body.tool_choice, undefined);
+  const msgs = seen[0].body.messages as { role: string; content: string }[];
+  assert.ok(msgs.every(m => m.role !== 'tool'), 'no tool messages');
+  assert.match(msgs.map(m => m.content).join('\n'), /I used setHours[\s\S]*Result of setHours/);
 });
