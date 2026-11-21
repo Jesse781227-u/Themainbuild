@@ -21,10 +21,8 @@ test('go-live: three short messages and nothing else; then the follow-ups one at
   let before = bot.transport.sent.length;
   await bot.drain();
   const sent = bot.transport.sent.slice(before).filter(m => m.to === `+${from}`).map(m => m.content as any);
-  assert.equal(sent.length, 3, 'the live message, the one to forward, the Status line: nothing else in this session');
+  assert.equal(sent.length, 1, 'just the live message: nothing else in this session');
   assert.equal(sent[0].text, "🎉 Ada Thrift is live on +234 803 777 1111!\nYour shop link: https://wa.me/2348037771111\nIf you reply to a customer yourself, I'll step back in that chat.");
-  assert.equal(sent[1].text, 'Hi! 👋 You can now order from Ada Thrift here on WhatsApp, any time. https://wa.me/2348037771111');
-  assert.equal(sent[2].text, 'Post that on your Status and send it to your customers 👆');
   assert.equal((await doc('ownerPhones', `+${from}`)).onboardingStage, 'live');
   assert.equal((await doc('conversations', `admin_${from}`)).onboarding, null, 'signup is over');
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Ada' });

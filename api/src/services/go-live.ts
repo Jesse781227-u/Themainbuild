@@ -1,11 +1,6 @@
-// After the owner connects their number: the go-live kit and the last few (optional) questions.
-//   1. "🎉 <shop> is live!" with the shop link (wa.me/<number>)
-//   2. a Status image ("Now taking orders on WhatsApp 24/7"), /golive/<businessId>.png, whose caption
-//      also says to forward the next message
-//   3. a short announcement to forward to customers
-//   4. questions, one at a time, in the Admin Bot chat (onboarding stage "live"):
-//      profile photo (only if the WhatsApp Business profile has none) → add existing contacts? →
-//      how did you hear about Relay?
+// After the owner connects their number: one message, "🎉 <shop> is live!" with the shop link
+// (wa.me/<number>). No Status image or message to forward (the owner found them unnecessary, 21 Nov).
+// The follow-ups (picture, contacts, photos, how did you hear) come later as nudges (nudges.ts).
 // Everything goes through the outbox, so a closed 24-hour window can't lose it.
 import { C } from '../db';
 import type { Config } from '../config';
@@ -75,12 +70,10 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
 
   const number = business.whatsappDisplayNumber ?? '';
   const link = digitsOf(number) ? `https://wa.me/${digitsOf(number)}` : null;
-  // Three short messages, and nothing else in this session: the picture, photos, contacts and "how did
-  // you hear" come later as single nudges (nudges.ts).
+  // One message, and nothing else in this session (the owner, 21 Nov: "the congratulations you are
+  // live is enough"). The picture, photos, contacts and "how did you hear" come later as nudges.
   const messages: { kind: string; text: string; content?: OutboundContent }[] = [
     { kind: 'golive', text: `🎉 ${business.name} is live${number ? ` on ${number}` : ''}!${link ? `\nYour shop link: ${link}` : ''}\nIf you reply to a customer yourself, I'll step back in that chat.` },
-    { kind: 'golive_announce', text: `Hi! 👋 You can now order from ${business.name} here on WhatsApp, any time.${link ? ` ${link}` : ''}` },
-    { kind: 'golive_status', text: 'Post that on your Status and send it to your customers 👆' },
   ];
   const ids: string[] = [];
   for (const m of messages) {
