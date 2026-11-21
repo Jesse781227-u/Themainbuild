@@ -174,3 +174,15 @@ test('signup: the full list also works at "elsewhere in the city?", even squashe
   assert.match(next[0].text, /^✅ Saved 4 delivery areas/);
   assert.ok(next.some(m => m.options.includes('is:yes')));
 });
+
+test('zones: a PDF list is read from its own text, without the AI; two columns on a line split', async () => {
+  const { pdfText } = await import('../src/services/pdf-text');
+  const text = await pdfText(fs.readFileSync(path.join(__dirname, 'fixtures/delivery-areas.pdf')));
+  assert.ok(text && /Abule Egba/.test(text));
+  const rows = parseZoneList(text!)!;
+  assert.equal(rows.length, 66, 'every area of the two-column table');
+  const fee = (name: string) => rows.find(r => r.name === name)?.feeKobo;
+  assert.deepEqual([fee('Abule Egba'), fee('Ketu'), fee('Sangotedo'), fee('Gbagada Phase 2')], [500_000, 300_000, 700_000, 100_000]);
+  assert.deepEqual(parseZoneList('Yaba ₦3,000 Ikeja ₦3,000\nAjah ₦6,000 Lekki Phase 1 ₦4,000')!.map(r => r.name), ['Yaba', 'Ikeja', 'Ajah', 'Lekki Phase 1']);
+  assert.equal(await pdfText(new Uint8Array([1, 2, 3])), null, 'not a PDF: nothing');
+});

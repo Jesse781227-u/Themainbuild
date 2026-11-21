@@ -11,6 +11,7 @@ import type { Business } from '../domain/business';
 import { listZones, saveZone } from '../services/delivery';
 import { csvToLines, isOldExcel, isSpreadsheet, parseZoneList, tidyArea, xlsxToLines, type ZoneRow } from '../services/zones-import';
 import { buttons, fetchMedia, type BotDeps, type Input } from './common';
+import { pdfText } from '../services/pdf-text';
 import type { OutboundContent } from '../services/channel';
 
 export interface ZonesCtx { db: Firestore; cfg: Config; deps: BotDeps; business: Business; convRef: DocRef }
@@ -32,17 +33,24 @@ export async function startZoneImport(z: ZonesCtx, input: Input, text: string, n
       const mime = input.document?.mimeType ?? media.mimeType;
       if (isSpreadsheet(mime, input.document?.filename)) rows = parseZoneList(await xlsxToLines(media.bytes));
       else if (/^text\//.test(mime)) { const t = new TextDecoder().decode(media.bytes).slice(0, 200_000); rows = parseZoneList(/csv/.test(mime) || /\.csv$/i.test(input.document?.filename ?? '') ? csvToLines(t) : t); }
-      else if (z.deps.llm?.readCatalog) {
-        await notify(input.document ? `📄 Reading ${input.document.filename}…` : '📷 Reading your delivery list…');
-        const items = await z.deps.llm.readCatalog({ file: { mimeType: mime, bytes: media.bytes }, purpose: 'delivery' });
-        const map = new Map<string, ZoneRow>();
-        for (const it of items) {
-          if (!it.name || it.price === null || it.price < 0 || it.price > 500_000) continue;
-          const t = tidyArea(it.name);
-          map.set(t.name.toLowerCase(), { name: t.name, feeKobo: Math.round(it.price * 100), was: t.was });
-        }
-        rows = map.size ? [...map.values()] : null;
-      } else return ["I can't read files or photos right now. Paste the list as a message instead, e.g. *Yaba 3000*, one area per line."];
+      else {
+        // A PDF with text inside: read like a pasted list (no AI); if the rules can't, the text goes
+        // to the AI (Groq can read text); only a photo or a scanned PDF needs the file reader (Gemini).
+        const pdf = /pdf/.test(mime) ? await pdfText(media.bytes) : null;
+        if (pdf) rows = parseZoneList(pdf);
+        if (!rows && z.deps.llm?.readCatalog) {
+          await notify(input.document ? `📄 Reading ${input.document.filename}…` : '📷 Reading your delivery list…');
+          const fromText = pdf ? await z.deps.llm.readCatalog({ text: pdf, purpose: 'delivery' }).catch(() => []) : [];
+          const items = fromText.length ? fromText : await z.deps.llm.readCatalog({ file: { mimeType: mime, bytes: media.bytes }, purpose: 'delivery' });
+          const map = new Map<string, ZoneRow>();
+          for (const it of items) {
+            if (!it.name || it.price === null || it.price < 0 || it.price > 500_000) continue;
+            const t = tidyArea(it.name);
+            map.set(t.name.toLowerCase(), { name: t.name, feeKobo: Math.round(it.price * 100), was: t.was });
+          }
+          rows = map.size ? [...map.values()] : null;
+        } else if (!rows) return ["I can't read files or photos right now. Paste the list as a message instead, e.g. *Yaba 3000*, one area per line."];
+      }
     }
   } catch (e) {
     log('warn', 'zones_read_failed', { businessId: z.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 160) });

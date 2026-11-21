@@ -68,6 +68,9 @@ export function parseZoneList(text: string): ZoneRow[] | null {
 // a new line after every amount that is introduced by ":", "-", "=" or "₦" and followed by a name.
 // ("Gbagada Phase 2: ₦1,000" keeps its 2: it isn't introduced that way.)
 export function unsquash(text: string) {
+  // Two columns on one line, as a PDF table comes out ("Abule Egba ₦5,000 Ketu ₦3,000"): after an
+  // amount written with ₦, a name always starts the next area, on any line.
+  text = text.replace(/(₦\s*\d+(?:,\d{3})*(?:\.\d+)?\s*k?)[ \t]+(?=[A-Za-z])/g, '$1\n');
   if (text.split(/\r?\n/).filter(l => l.trim()).length >= 3) return text;
   const AMT = /((?:[:=–—-]\s*(?:₦|NGN|N)?|₦)\s*\d+(?:,\d{3})*(?:\.\d+)?\s*k?|[:=–—-]\s*free)\s+(?=[A-Za-z])/gi;
   const lines = text.replace(AMT, '$1\n');

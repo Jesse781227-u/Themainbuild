@@ -20,6 +20,7 @@
     "@cf-wasm/photon": "0.4.0",
     "hono": "4.13.16",
     "pdf-lib": "^1.17.1",
+    "unpdf": "^2.2.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

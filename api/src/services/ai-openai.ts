@@ -134,6 +134,18 @@ export function openAiCompatProvider(o: Opts, doFetch: typeof fetch = (...a) => 
       const out = await json(`${prompt}\nReturn a JSON object with exactly these keys, each a string: ${keys.join(', ')}.`, 0.9);
       return Object.fromEntries(keys.filter(k => typeof out[k] === 'string' && (out[k] as string).trim()).map(k => [k, (out[k] as string).trim()]));
     },
+    // Lists as text only (a pasted list, or the text inside a PDF): files and photos go to the next provider.
+    async readCatalog({ file, text, images, businessType, categories, purpose }) {
+      if (file || images?.length || !text) throw new Error(`${o.name.toUpperCase()}_FAILED: text only`);
+      const how = purpose === 'delivery'
+        ? ['This is a list of delivery areas and fees of a small business in Nigeria.', 'Extract every area with its fee: name = the area as written, price = the fee in naira ("3k" is 3000, "₦3,000" is 3000, "free" is 0), category = null.', 'A line may hold two areas (a table with two columns).']
+        : ['Extract every product or service with its price from this menu / price list of a small business in Nigeria.', 'Use section headings as short title-case categories; with no headings, a few sensible categories.', businessType ? `The business type is ${businessType}.` : '', categories?.length ? `Reuse these categories when they fit: ${categories.join(', ')}.` : '', 'Prices in naira ("2.5k" is 2500). Several sizes with prices: one item per size, e.g. "Zobo (50cl)". No price: null.'];
+      const out = await json([...how, 'Only include what is written. Do not invent items, areas or prices. Ignore titles, phone numbers, addresses and notes.', 'Return {"items": [{"name": string, "price": number or null, "category": string or null}]}.', `The list:\n${text.slice(0, 30_000)}`].filter(Boolean).join('\n'), 0);
+      const items = Array.isArray(out.items) ? out.items as Record<string, unknown>[] : [];
+      return items.filter(i => typeof i.name === 'string' && i.name.trim()).slice(0, 300).map(i => ({
+        name: String(i.name).trim(), price: typeof i.price === 'number' && Number.isFinite(i.price) ? i.price : null, category: typeof i.category === 'string' && i.category.trim() ? i.category.trim() : null,
+      }));
+    },
     async pickPairs({ shop, shopType, anchor, candidates }) {
       const out = await json([
         `A customer at "${shop}" (a small ${shopType.replace(/_/g, ' ')} business in Nigeria) just added this to their cart: ${JSON.stringify(anchor)}.`,

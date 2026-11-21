@@ -19,6 +19,7 @@ import { slowJob } from '../services/presence';
 import { attachMatched, type ImportPhotos } from '../services/import-photos';
 import { suggestStatus } from '../services/status-tips';
 import { parseProduct, type FlowCtx, type Out } from './products-flow';
+import { pdfText } from '../services/pdf-text';
 
 export interface ImportItem { name: string; priceKobo: number; category: string; stock: number | null; description: string; imageUrl?: string | null }
 export interface ImportDraft {
@@ -298,11 +299,23 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     const photoUrls = await storePhotos(f, photos);
     // The products first (fast); the photos are matched to them in the background (slow).
     const llm = f.deps.llm;
-    const raw = await slowJob(() => llm.readCatalog!({ file: { mimeType, bytes: media.bytes }, businessType: BUSINESS_TYPES.find(t => t.id === f.business.category)?.label, categories: cats }), {
-      react,
-      ok: r => r.length > 0,
-      stillWorking: () => notify(`Still reading your ${input.document ? 'file' : 'photo'}… ${input.document ? 'it\'s a big one, ' : ''}almost there.`),
-    });
+    const businessType = BUSINESS_TYPES.find(t => t.id === f.business.category)?.label;
+    let raw: Awaited<ReturnType<NonNullable<typeof llm.readCatalog>>>;
+    try {
+      raw = await slowJob(() => llm.readCatalog!({ file: { mimeType, bytes: media.bytes }, businessType, categories: cats }), {
+        react,
+        ok: r => r.length > 0,
+        stillWorking: () => notify(`Still reading your ${input.document ? 'file' : 'photo'}… ${input.document ? 'it\'s a big one, ' : ''}almost there.`),
+      });
+    } catch (e) {
+      // The file reader is busy or down: a PDF's own text, read by the rules or by a text-only model.
+      const text = mimeType === 'application/pdf' ? await pdfText(media.bytes) : null;
+      if (!text) throw e;
+      log('info', 'catalog_read_from_pdf_text', { businessId: f.business.id, error: String(e instanceof Error ? e.message : e).slice(0, 120) });
+      const typed = parsePastedMenu(text);
+      if (typed) return await offer(f, { items: typed.slice(0, MAX_ITEMS).map(i => ({ ...i, category: i.category || defaultCategory(f) })), skippedNoPrice: [], source: 'file' });
+      raw = await llm.readCatalog!({ text, businessType, categories: cats });
+    }
     const { items, skippedNoPrice } = cleanItems(raw, defaultCategory(f));
     if (!items.length) {
       return { out: [input.imageId && !input.document
