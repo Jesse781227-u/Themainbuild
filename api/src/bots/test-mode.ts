@@ -46,7 +46,7 @@ export async function runTest(ctx: AdminContext, deps: BotDeps, businessId: stri
 export async function exitTest(ctx: AdminContext, readyToConnect: boolean, reply: (c: OutboundContent | string) => Promise<unknown>, opts: { quiet?: boolean } = {}) {
   await ctx.db.set(ctx.db.doc(C.conversations, ctx.conversationId), { testMode: null }, { merge: true });
   if (opts.quiet) return reply("You're back with Relay 👋");
-  if (readyToConnect) return reply(buttons("You're back with Relay 👋 That's exactly what your customers will see. Ready to connect your WhatsApp number?", [['ob:connect', 'Connect now'], ['test:start', 'Test again']]));
+  if (readyToConnect) return reply("You're back with Relay 👋 That's exactly what your customers will see."); // the Connect button follows (admin.ts)
   return reply("You're back with Relay 👋 Send HELP to see what I can do, or TEST to try your shop again.");
 }
 

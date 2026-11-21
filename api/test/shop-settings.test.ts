@@ -85,3 +85,20 @@ test('admin: HOURS, AFTER HOURS, POLICIES and FEE change the settings any time',
   assert.equal((await doc('businesses', fx.a.id)).feePayer, 'owner');
   assert.match((await say('Relay fee', 'act:fee'))[0].text, /Who should pay it\?/, 'settings are in the MENU now, not in HELP');
 });
+
+test('admin: the defaults signup no longer asks can be changed any time (NAME, PREP, OTHER STATES, GREETING)', async () => {
+  const bot = new Bot();
+  const o = fx.a.ownerPhone.slice(1);
+  const say = (text: string, choice?: string) => bot.send('admin', { from: o, text, choice });
+  await db.update(db.doc('businesses', fx.a.id), { shipsInterstate: false, interstatePricing: null });
+  assert.match((await say('name Tola Bello'))[0].text, /I'll call you Tola/);
+  assert.match((await say('prep'))[0].text, /Prep time: \*.+\*\. To change it, send e\.g\. \*PREP 30 minutes\*/);
+  assert.match((await say('prep 45 minutes'))[0].text, /✅ Prep time: 45 minutes/);
+  assert.match((await say('delivery'))[0].text, /Other states: no \(\*OTHER STATES\* to change\)/);
+  const states = await say('other states');
+  assert.deepEqual(states[0].options, ['act:osquote', 'act:osno']);
+  assert.match((await say('Yes, I quote per order', 'act:osquote'))[0].text, /other states can order/);
+  const biz = (await db.get(db.doc('businesses', fx.a.id)))!;
+  assert.deepEqual([biz.ownerName, biz.prepTime, biz.shipsInterstate, biz.interstatePricing], ['Tola Bello', '45 minutes', true, 'quote']);
+  assert.match(JSON.stringify((await say('greeting'))[0].content), /Pick a message/);
+});

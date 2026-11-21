@@ -9,7 +9,7 @@ import { findStuckEvents } from './inbound';
 import { releaseExpiredHolds } from './orders';
 import { findStuckOutbox } from './outbox';
 import { enqueue } from './queue';
-import { connectReminders, dayTwoNudges } from './nudges';
+import { afterLiveNudges, connectReminders } from './nudges';
 import { getConfig } from '../config';
 import { dueStatusReports } from './status-posts';
 import { abandonedCarts, releaseQueuedSends } from './reach';
@@ -34,7 +34,7 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   }
   if (event.cron === CRON_DAILY_SUMMARY) {
     const ids = await queueDailySummaries(db, now);
-    const nudges = await dayTwoNudges(db, now);
+    const nudges: string[] = []; // the old "day 2" tips: now the photos nudge after go-live (afterLiveNudges)
     // Smart Reach: Relay's suggestions, regulars / win-back, and Monday's weekly summary.
     const cfg = getConfig(env);
     const reach = [...(await dailyReach(db, cfg, { enqueue: jobs => enqueue(env, jobs) }, now)), ...(await weeklySummaries(db, now))];
@@ -49,7 +49,7 @@ export async function runScheduled(event: ScheduledEventLike, env: Env) {
   const released = await releaseExpiredHolds(db, now);
   const events = await findStuckEvents(db, now);
   const outbox = await findStuckOutbox(db, now);
-  const reminders = await connectReminders(db, getConfig(env), now);
+  const reminders = [...(await connectReminders(db, getConfig(env), now)), ...(await afterLiveNudges(db, now).catch(() => []))];
   const statusReports = await dueStatusReports(db, now);
   // Smart Reach: updates that waited for 8am, and carts left for an hour.
   const cfg = getConfig(env);

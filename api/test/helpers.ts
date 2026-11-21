@@ -169,9 +169,10 @@ export async function seedCart(id: string, businessId: string, customerId: strin
   await db.set(db.doc('carts', id), { id, businessId, customerId, channel: 'whatsapp', items, expiresAt, updatedAt: now() });
 }
 
-// Signup for tests that only need a shop: name → one typed product → preview → (type) → no photos →
-// location → hours → pickup → default policies. Stops at "ready" (Test my shop / Connect now), or
-// with until: 'linked', after the connect link. Returns the business id and the last replies.
+// Signup for tests that only need a shop (v3): name → one typed product → That's all → address and
+// hours in one reply → pickup → who pays. Ends on "ready" with the [Connect my number] link (until
+// 'linked' is the same now: the link comes with "ready"). A type, if given, is set on the shop.
+// Returns the business id and the last replies.
 export async function signUp(bot: Bot, from: string, o: { shop?: string; product?: string; type?: string; name?: string; until?: 'ready' | 'linked'; fee?: 'customer' | 'owner' } = {}) {
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: o.name ?? 'Tayo' });
   await say('hi');
@@ -179,25 +180,11 @@ export async function signUp(bot: Bot, from: string, o: { shop?: string; product
   const card = await say(o.product ?? 'Gift box 5000');
   const pick = card.flatMap(m => m.options).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
   if (pick) await say('Category', pick); // the category wasn't clear: take the first
-  let last = await say("That's all", 'prod:done');
-  last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', `btype:${o.type ?? 'other'}`);
-  if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
-  await say('Lagos, Ikeja');
-  await say('No pickup address', 'loc:nostreet');
-  await say('Yes', 'loc:ok');
-  last = await say('8am-9pm');
-  last = await say('Yes, every day', 'hrs:same');
-  if (last.some(m => m.options.some(id => id.startsWith('prep:')))) last = await say('30–60 min', 'prep:1');
-  await say('Pickup', 'dl:pickup');
-  last = await say('Use these', 'pol:use');
-  last = await say('Use defaults', 'msgs:default');
-  last = await say('Who pays', `fee:${o.fee ?? 'customer'}`);
-  if (o.until === 'linked') {
-    await say('Connect now', 'ob:connect');
-    await say('Yes', 'wa:yes');
-    last = await say('Yes', 'fb:yes');
-  }
+  await say("That's all", 'prod:done');
+  await say('Ikeja, Lagos · 8am-9pm');
+  await say('Pickup only', 'dl:pickup');
+  const last = await say('Who pays', `fee:${o.fee ?? 'customer'}`);
   const businessId = (await doc('ownerPhones', `+${from}`)).activeBusinessId as string;
+  if (o.type) await db.update(db.doc('businesses', businessId), { category: o.type });
   return { businessId, last };
 }

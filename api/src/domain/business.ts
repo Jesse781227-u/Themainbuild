@@ -47,6 +47,8 @@ export interface Business {
   whatsappDisplayNumber?: string | null;
   messagesEdited?: boolean;           // owner changed a drafted customer message (day-2 nudge)
   firstSaleAt?: string | null; nudgedAt?: string | null;
+  // Go-live time, and the follow-up nudges sent after it (each once; last = the latest of them).
+  wentLiveAt?: string | null; nudges?: { picture?: string; contacts?: string; photos?: string; source?: string; last?: string } | null;
   createdAt: string; updatedAt: string;
 }
 

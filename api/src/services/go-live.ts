@@ -17,7 +17,7 @@ import type { Business } from '../domain/business';
 import type { OutboundContent } from './channel';
 import { adminConversationId } from './conversations';
 import { trackStep } from './onboarding-events';
-import { liveQuestion, type Onboarding } from '../bots/onboarding';
+// (the go-live questions are nudges now: nudges.ts)
 import { posterPng, shopColour, wrap } from './placeholder';
 import { resolveSender } from './channel';
 import { submitTemplates } from './templates';
@@ -75,13 +75,12 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
 
   const number = business.whatsappDisplayNumber ?? '';
   const link = digitsOf(number) ? `https://wa.me/${digitsOf(number)}` : null;
-  const step: Onboarding['step'] = business.profilePhotoUrl ? 'live_contacts' : 'live_photo';
+  // Three short messages, and nothing else in this session: the picture, photos, contacts and "how did
+  // you hear" come later as single nudges (nudges.ts).
   const messages: { kind: string; text: string; content?: OutboundContent }[] = [
-    // Short (the owner's rule: 1–3 lines a message).
-    { kind: 'golive', text: `🎉 ${business.name} is live${number ? ` on ${number}` : ''}!${link ? `\nYour shop link: ${link}` : ''}\nReply to a customer yourself and the assistant steps back in that chat.` },
-    { kind: 'golive_status', text: 'Post this on your Status 👆', content: { type: 'image', link: `${cfg.API_BASE_URL}${goLivePath(business.id)}`, caption: 'Post this on your Status 👆 and forward the next message to your customers.' } },
+    { kind: 'golive', text: `🎉 ${business.name} is live${number ? ` on ${number}` : ''}!${link ? `\nYour shop link: ${link}` : ''}\nIf you reply to a customer yourself, I'll step back in that chat.` },
     { kind: 'golive_announce', text: `Hi! 👋 You can now order from ${business.name} here on WhatsApp, any time.${link ? ` ${link}` : ''}` },
-    { kind: 'golive_q', text: 'A few last questions', content: liveQuestion(step, business) ?? undefined },
+    { kind: 'golive_status', text: 'Post that on your Status and send it to your customers 👆' },
   ];
   const ids: string[] = [];
   for (const m of messages) {
@@ -93,8 +92,9 @@ export async function goLive(db: Firestore, cfg: Config, opts: { businessId: str
     if (created) ids.push(id);
   }
   if (!ids.length) return; // already done (a repeated signup callback)
-  const ob: Onboarding = { stage: 'live', step, businessId: business.id, welcomed: true, nameSet: true, lastSeenAt: at };
-  await db.set(db.doc(C.conversations, adminConversationId(business.ownerPhone)), { onboarding: ob }, { merge: true });
+  // Signup is over: the owner chat is the everyday Admin Bot now. wentLiveAt times the nudges.
+  await db.set(db.doc(C.conversations, adminConversationId(business.ownerPhone)), { onboarding: null }, { merge: true });
+  await db.update(db.doc(C.businesses, business.id), { wentLiveAt: at, updatedAt: at });
   await db.set(db.doc(C.ownerPhones, business.ownerPhone), { onboardingStage: 'live' }, { merge: true });
   await trackStep(db, { ownerPhone: business.ownerPhone, businessId: business.id, step: 'connect', event: 'completed' });
   await trackStep(db, { ownerPhone: business.ownerPhone, businessId: business.id, step: 'live', event: 'entered' });

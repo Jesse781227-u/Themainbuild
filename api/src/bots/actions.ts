@@ -32,6 +32,8 @@ import { listCategories } from '../services/catalog';
 import { helpFor, runTool, type AdminToolName, type ToolCtx } from './admin-tools';
 import { buttons, findProducts, list, sectionList } from './common';
 import { messagesMenu } from './messages-flow';
+import { CONTACTS_ASK, PHOTOS_TIP, PICTURE_ASK } from '../services/nudges';
+import { connectButton, ownerNameFrom, profileName } from './onboarding';
 import { payoutHistory, startVerify, startWithdraw, walletView } from './wallet-flow';
 import { handleShops } from './shops';
 import { handleSettings } from './settings';
@@ -281,7 +283,18 @@ async function delivery(c: ActionCtx): Promise<Out | Out[]> {
   const form = flowId(c.cfg, 'delivery');
   if (form) return flowMessage('delivery', form, c.business.id, `${zones.length ? `You deliver to ${zones.length} area${zones.length === 1 ? '' : 's'}.` : 'No delivery prices yet.'} Tap below to add areas and prices, or send *DELIVERY LIST* to upload them all.`);
   const how = c.business.fulfilment === 'pickup' ? 'Pickup only.' : zones.length ? `Delivery prices:\n${zones.map(z => `• ${z.name}: ${z.feeKobo ? formatKobo(z.feeKobo) : 'free'}${z.timeframe ? `, ${z.timeframe}` : ''}`).join('\n')}${c.business.shipsInterstate && c.business.interstatePricing === 'quote' ? '\n• Other states: you quote per order' : ''}` : 'No delivery prices yet.';
-  return [`${how}`.slice(0, 3800), buttons('Add one with e.g. *delivery zone Lekki, 1500, same day*, or send your whole list at once.', [['act:zonesupload', 'Send my price list'], ['act:menu', 'Menu']])];
+  // (when they do, the list above already says how other states are priced)
+  const states = c.business.shipsInterstate ? '*OTHER STATES* to change other states.' : 'Other states: no (*OTHER STATES* to change).';
+  return [`${how}\n\n${states}`.slice(0, 3800), buttons('Add one with e.g. *delivery zone Lekki, 1500, same day*, or send your whole list at once.', [['act:zonesupload', 'Send my price list'], ['act:menu', 'Menu']])];
+}
+
+// OTHER STATES: signup sets "no" (v3); this changes it.
+async function otherStates(c: ActionCtx): Promise<Out> {
+  return buttons(`Do you send orders to other states? Now: *${c.business.shipsInterstate ? 'yes' : 'no'}*.`, [['act:osquote', 'Yes, I quote per order'], ['act:osno', 'No, just nearby']]);
+}
+async function setOtherStates(c: ActionCtx, on: boolean): Promise<Out> {
+  await c.db.update(c.db.doc(C.businesses, c.business.id), { shipsInterstate: on, interstatePricing: on ? 'quote' : null, updatedAt: new Date().toISOString() });
+  return on ? '✅ Customers in other states can order; you quote the delivery price per order.' : '✅ Nearby only: no orders from other states.';
 }
 
 // "Send my price list": the next message (a paste, spreadsheet, document or photo) is the delivery list.
@@ -525,7 +538,34 @@ export const ACTIONS: OwnerAction[] = [
   { id: 'messages', command: 'messages', hint: 'Choose the messages customers get from your shop', menu: { section: 'Settings', title: 'Messages' }, aliases: ['messages', 'my messages', 'customer messages'], async run() { return messagesMenu(); } },
   { id: 'policies', hint: 'Your returns and refunds policy (the shop assistant answers from it)', menu: { section: 'Settings', title: 'Shop policies', description: 'Returns and refunds; the assistant answers from them' }, aliases: ['policies', 'policy', 'my policies'], next: [['policyedit', 'Change policies'], ['menu', 'Menu']], async run(c) { const r = (await handleSettings(c.db, c.cfg, c.business, 'policies', null)) ?? 'No policies set.'; return typeof r === 'string' ? r.replace(/\n\nTo change them send \*policies:\* followed by your own words\.$/, '') : r; } },
   { id: 'zonesupload', hint: 'Upload all your delivery areas and prices at once', aliases: ['delivery list', 'upload delivery', 'delivery prices list', 'upload delivery prices', 'send delivery list'], run: zonesUpload },
-  { id: 'tone', hint: 'How the shop assistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
+  // What signup sets by default (v3), each changeable here; and the follow-ups from after go-live.
+  { id: 'name', command: 'name', hint: 'What Relay calls you, e.g. NAME Tola', aliases: ['name', 'my name', 'change name', 'change my name'], next: [['menu', 'Menu']],
+    async run(c) {
+      const name = c.arg ? profileName(ownerNameFrom(c.arg)) : null;
+      if (!name) return `I call you *${c.business.ownerName ?? 'nothing yet'}*. To change it, send e.g. *NAME Tola*.`;
+      await c.db.update(c.db.doc(C.businesses, c.business.id), { ownerName: name, updatedAt: new Date().toISOString() });
+      await c.db.set(c.db.doc(C.ownerPhones, c.ownerPhone), { ownerName: name }, { merge: true });
+      return `👍 I'll call you ${name.split(' ')[0]}.`;
+    } },
+  { id: 'prep', command: 'prep', hint: 'How long an order takes to get ready, e.g. PREP 30 minutes', aliases: ['prep', 'prep time', 'preparation time', 'ready time'], next: [['menu', 'Menu']],
+    async run(c) {
+      const t = c.arg?.trim().slice(0, 40);
+      if (!t || !/\d|hour|min/i.test(t)) return `Prep time: *${c.business.prepTime ?? 'not set'}*. To change it, send e.g. *PREP 30 minutes*.`;
+      await c.db.update(c.db.doc(C.businesses, c.business.id), { prepTime: t, updatedAt: new Date().toISOString() });
+      return `✅ Prep time: ${t}.`;
+    } },
+  { id: 'otherstates', hint: 'Whether you send orders to other states', aliases: ['other states', 'interstate', 'other state', 'ship to other states', 'outside lagos'], run: otherStates },
+  { id: 'osquote', hint: 'Yes, other states (quoted per order)', next: [['delivery', 'Delivery'], ['menu', 'Menu']], run: c => setOtherStates(c, true) },
+  { id: 'osno', hint: 'No other states', next: [['delivery', 'Delivery'], ['menu', 'Menu']], run: c => setOtherStates(c, false) },
+  { id: 'connect', hint: 'Connect your WhatsApp number to go live', aliases: ['connect', 'connect my number', 'connect number', 'go live', 'connect link'],
+    async run(c) { return c.business.status === 'active' ? `✅ ${c.business.name} is already live.` : connectButton(c.db, c.cfg, c.business); } },
+  { id: 'greeting', command: 'greeting', hint: 'The greeting and thank-you messages customers get', aliases: ['greeting', 'greetings', 'welcome message', 'greeting message', 'my greeting'], async run() { return messagesMenu(); } },
+  { id: 'picture', command: 'picture', hint: "Your shop's WhatsApp picture: send a logo or a photo", aliases: ['picture', 'profile picture', 'profile photo', 'shop picture', 'logo', 'dp'],
+    async run(c) { await askFollowUp(c, 'live_photo'); return PICTURE_ASK(); } },
+  { id: 'photos', command: 'photos', hint: 'Add photos to your products', aliases: ['photos', 'product photos', 'add photos', 'pictures'], async run() { return PHOTOS_TIP; } },
+  { id: 'contacts', command: 'contacts', hint: 'Add the contacts already on your number to your customer list', aliases: ['contacts', 'import contacts', 'add contacts', 'my contacts', 'add my contacts'],
+    async run(c) { await askFollowUp(c, 'live_contacts'); return CONTACTS_ASK(); } },
+  { id: 'tone', hint: 'How the shopassistant sounds to your customers', menu: { section: 'Settings', title: 'Assistant tone', description: 'Friendly, professional or street' }, aliases: ['tone', 'assistant tone', 'change tone', 'my tone'], next: [['menu', 'Menu']], run: toneMenu },
   { id: 'settone', hint: 'Set the assistant tone', run: setTone },
   { id: 'fee', hint: "Who pays Relay's 4.5% fee: you or your customers", menu: { section: 'Settings', title: "Relay's fee" }, aliases: ['fee', 'fees', 'relay fee', 'service fee'], async run(c) { return (await handleSettings(c.db, c.cfg, c.business, 'fee', null))!; } },
   { id: 'close', command: 'close', hint: 'Pause your shop for a while: customers can look but not order', aliases: ['close', 'close shop', 'close my shop', 'pause', 'pause shop', 'pause my shop'], run: pause,
@@ -572,6 +612,11 @@ export const ACTIONS: OwnerAction[] = [
 
 export const actionById = (id: string) => ACTIONS.find(a => a.id === id) ?? null;
 
+// PICTURE / CONTACTS: the same one question as the nudge after go-live (its answer is read there).
+async function askFollowUp(c: ActionCtx, step: 'live_photo' | 'live_contacts') {
+  await c.db.set(c.db.doc(C.conversations, c.admin.conversationId), { onboarding: { stage: 'live', step, businessId: c.business.id, welcomed: true, nameSet: true, lastSeenAt: new Date().toISOString() } }, { merge: true });
+}
+
 // "/sales", "Sales", "how much did I make today?", "soldout pink top" → the action (and its argument).
 export function matchAction(raw: string): { action: OwnerAction; arg: string | null } | null {
   const t = raw.trim().replace(/^\//, '').replace(/[.!?]+$/, '').replace(/\s+/g, ' ').toLowerCase();
@@ -581,7 +626,7 @@ export function matchAction(raw: string): { action: OwnerAction; arg: string | n
   // A command with something after it: "/receipt RLY-ABCDE", "soldout pink crop top", "close 3".
   const m = /^(\w+)\s+(.+)$/.exec(t);
   if (m) {
-    const a = ACTIONS.find(x => x.command === m[1] && ['soldout', 'receipt', 'close'].includes(x.id));
+    const a = ACTIONS.find(x => x.command === m[1] && ['soldout', 'receipt', 'close', 'name', 'prep'].includes(x.id));
     if (a) return { action: a, arg: a.id === 'receipt' ? m[2].toUpperCase() : a.id === 'close' ? (/^\d+$/.test(m[2]) ? m[2] : null) : raw.trim().replace(/^\/?\w+\s+/, '') };
   }
   return null;
@@ -638,7 +683,7 @@ export async function handleActionTap(choiceId: string, c: Omit<ActionCtx, 'arg'
 // shop's own products.
 export function helpText(business: Pick<Business, 'name' | 'category'>, products: { name: string; priceKobo: number }[] = []) {
   const name = example(business, products, { nameOnly: true });
-  return `Tap *Menu* to see everything, or type / for the commands.\n\nOr just say it (voice notes work too):\n• add ${example(business, products)}\n• restock ${name} 5\n• RLY-ABCDE paid\n• how much did I make today?`;
+  return `Tap *Menu* to see everything, or type / for the commands.\n\nOr just say it (voice notes work too):\n• add ${example(business, products)}\n• restock ${name} 5\n• RLY-ABCDE paid\n• how much did I make today?\n\nSettings: *NAME*, *PREP*, *HOURS*, *AFTER HOURS*, *DELIVERY*, *POLICIES*, *GREETING*, *FEE*, *PICTURE*, *PHOTOS*, *CONTACTS*\nTry your shop: *TEST* · A real person: *CALL*`;
 }
 
 // ── WhatsApp's own command list and ice breakers (npm run sync:commands) ──

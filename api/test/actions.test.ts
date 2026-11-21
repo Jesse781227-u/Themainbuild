@@ -17,7 +17,7 @@ const rows = (m: { content: unknown }) => ((m.content as { interactive: { action
 
 test('commands: the registry makes a valid WhatsApp command list, and a bad entry stops the sync', () => {
   const p = commandsPayload();
-  assert.deepEqual(p.commands.map(c => c.command_name), ['menu', 'add', 'products', 'soldout', 'orders', 'export', 'receipt', 'sales', 'wallet', 'withdraw', 'owing', 'customers', 'status', 'reach', 'campaign', 'hours', 'delivery', 'messages', 'close', 'switch', 'test', 'call']);
+  assert.deepEqual(p.commands.map(c => c.command_name), ['menu', 'add', 'products', 'soldout', 'orders', 'export', 'receipt', 'sales', 'wallet', 'withdraw', 'owing', 'customers', 'status', 'reach', 'campaign', 'hours', 'delivery', 'messages', 'name', 'prep', 'greeting', 'picture', 'photos', 'contacts', 'close', 'switch', 'test', 'call']);
   assert.ok(p.commands.length <= 30);
   for (const c of p.commands) { assert.match(c.command_name, /^[a-z0-9_]{1,32}$/); assert.ok(c.command_description.length <= 256); assert.doesNotMatch(c.command_description, /\p{Extended_Pictographic}/u); }
   assert.ok(p.prompts.length <= 4 && p.prompts.every(x => x.length <= 80));
@@ -28,7 +28,7 @@ test('commands: the registry makes a valid WhatsApp command list, and a bad entr
     ACTIONS.pop();
   }
   for (let i = 0; i < 10; i++) ACTIONS.push({ id: `x${i}`, command: `x${i}`, hint: 'x', run: async () => null });
-  assert.throws(() => commandsPayload(), /32 commands \(WhatsApp allows 30\)/);
+  assert.throws(() => commandsPayload(), /38 commands \(WhatsApp allows 30\)/);
   ACTIONS.splice(ACTIONS.length - 10, 10);
 });
 
@@ -71,7 +71,8 @@ test('menu: "hi" opens one flat list (most jobs one tap away); Settings and Help
   assert.deepEqual(huh[0].options, ['act:menu', 'act:help']);
   const help = await bot.send('admin', { from: owner(), text: '/help' });
   assert.match(help[0].text, /^Tap \*Menu\* to see everything, or type \/ for the commands\./);
-  assert.ok(help[0].text.length < 250, 'HELP is short: the MENU has the rest');
+  assert.ok(help[0].text.length < 450, 'HELP is short: the MENU has the rest');
+  for (const cmd of ['NAME', 'PREP', 'HOURS', 'AFTER HOURS', 'DELIVERY', 'POLICIES', 'GREETING', 'FEE', 'PICTURE', 'PHOTOS', 'CONTACTS', 'TEST', 'CALL']) assert.ok(help[0].text.includes(`*${cmd}*`), `HELP lists ${cmd}`);
   assert.match(help[0].text, /restock Product biz-a 5/);
 });
 
@@ -119,7 +120,7 @@ test('ice breakers: "See how Relay works" explains before signup; "Talk to a per
   const how = await bot.send('admin', { from: fresh, text: 'See how Relay works', name: 'Bayo' });
   assert.match(how[0].text, /^Relay runs your shop on your own WhatsApp number/);
   assert.deepEqual(how[0].options, ['ob:begin', 'ob:call']);
-  assert.match((await bot.send('admin', { from: fresh, choice: 'ob:begin', text: 'Set up my shop', name: 'Bayo' }))[0].text, /^Welcome to Relay, Bayo[\s\S]*Step 1 of 6/);
+  assert.match((await bot.send('admin', { from: fresh, choice: 'ob:begin', text: 'Set up my shop', name: 'Bayo' }))[0].text, /^Hi Bayo 👋 I'll set up your WhatsApp shop[\s\S]*What's your shop called\?[\s\S]*terms/);
   assert.match((await bot.send('admin', { from: '2348035551313', text: 'Talk to a person' }))[0].text, /A real person from Relay/);
   assert.ok(!ICE_BREAKERS.includes('Open my menu'));
 });
@@ -128,7 +129,7 @@ test('sync: the command list goes to the Admin Bot number; Meta errors are repor
   const { syncCommands } = await import('../src/services/automation');
   const calls: { url: string; body: any; auth: string }[] = [];
   const ok = (async (url: string, init: RequestInit) => { calls.push({ url, body: JSON.parse(String(init.body)), auth: String((init.headers as Record<string, string>).authorization) }); return Response.json({ success: true }); }) as unknown as typeof fetch;
-  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 22, prompts: 3 });
+  assert.deepEqual(await syncCommands({ graphVersion: 'v21.0', phoneNumberId: '123', accessToken: 'secret-token' }, ok), { commands: 28, prompts: 3 });
   assert.equal(calls[0].url, 'https://graph.facebook.com/v21.0/123/conversational_automation');
   assert.equal(calls[0].body.commands[0].command_name, 'menu');
   assert.deepEqual(calls[0].body.prompts, ['Set up my shop', 'See how Relay works', 'Talk to a person']);

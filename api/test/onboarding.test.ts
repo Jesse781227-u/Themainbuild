@@ -13,6 +13,7 @@ before(async () => { await clearFirestore(); fx = await seed(); });
 
 const OWNER = '2348035551111';
 const opts = (m: { options: string[] }[]) => m.flatMap(x => x.options);
+const body = (m: { text: string; content?: unknown }) => ((m.content as { interactive?: { body?: { text: string } } })?.interactive?.body?.text ?? m.text);
 const conv = (phone: string) => doc('conversations', `admin_${phone}`);
 
 test('parsing: prices, stock and size words in product lines', () => {
@@ -53,178 +54,127 @@ DRINKS
 Zobo 700
 Chapman 1500`;
 
-test('onboarding v2: hi → shop name → menu → preview → location → hours → delivery → policies → ready → connect link', async () => {
+test('onboarding v3: hey → name → menu → Looks good → address + hours → delivery list → fee → Connect, in 7 owner messages', async () => {
   const bot = new Bot();
   const say = (text: string, choice?: string) => bot.send('admin', { from: OWNER, text, choice, name: 'Ada Obi 🌸' });
-  const hi = await say('Hi');
-  assert.match(hi[0].text, /^Welcome to Relay, Ada 👋[\s\S]*about 5 minutes[\s\S]*agree to our Terms: https?:\/\/\S+\/terms\nStuck\? Reply \*CALL\*\.[\s\S]*\*Step 1 of 6\* · What's your shop called\?$/);
+  const all: { text: string }[] = [];
+  let count = 0;
+  const owner = async (text: string, choice?: string) => { count++; const r = await say(text, choice); all.push(...r); return r; };
+
+  const hi = await owner('hey');
+  assert.match(hi[0].text, /^Hi Ada 👋 I'll set up your WhatsApp shop so customers can order and pay without you answering every chat\. Takes about 3 minutes\.\n\nWhat's your shop called\?\n\nBy continuing you agree to our terms: https?:\/\/\S+\/terms$/);
+  assert.doesNotMatch(hi[0].text, /CALL/, 'no "Reply CALL" in the welcome (HELP has it)');
+  // (not counted: what an owner might also send)
   assert.match((await say('add Jollof rice, 2500, 10'))[0].text, /looks like a product/);
-  assert.equal((await say('?'))[0].text, "*Step 1 of 6* · Sorry, what's your shop called?", 'junk gets a short re-ask, not the whole welcome');
+  assert.equal((await say('?'))[0].text, "Sorry, what's your shop called?");
 
-  const products = await say("Mama Ada's Kitchen");
-  assert.match(products[0].text, /^\*Step 2 of 6\* · Send your menu or price list \(PDF, photo or pasted list\)\./);
-  const owner = await doc('ownerPhones', `+${OWNER}`);
-  const bizId = owner.activeBusinessId;
+  const menu = await owner("Mama Ada's Kitchen");
+  assert.equal(menu[0].text, 'Love it. Send me your menu: a PDF, a photo, or just type it out.');
+  const bizId = (await doc('ownerPhones', `+${OWNER}`)).activeBusinessId;
   let biz = await doc('businesses', bizId);
-  assert.deepEqual([biz.name, biz.ownerName, biz.status, biz.termsVersion, biz.feePayer], ["Mama Ada's Kitchen", 'Ada Obi', 'onboarding', '2026-11-19', 'customer'], 'owner name from the WhatsApp profile, not asked');
-  assert.ok(biz.termsAcceptedAt);
-  assert.deepEqual(owner.businessIds, [bizId]);
+  assert.deepEqual([biz.name, biz.ownerName, biz.status, biz.feePayer], ["Mama Ada's Kitchen", 'Ada Obi', 'onboarding', 'customer'], 'owner name from the WhatsApp profile, not asked');
 
-  const summary = await say(MENU);
-  assert.match(summary[0].text, /I found \*6 products\* in 3 categories/);
-  const added = await say('Add all 6', 'imp:all');
-  assert.match(added[0].text, /^Done ✅ Added 6 products in 3 categories: Meals · Snacks · Drinks\.\n\nHere's what your customers will see 👇$/, 'one confirmation, not two');
-  assert.equal((added[1].content as any).interactive.type, 'carousel', 'the real carousel');
-  assert.match(added[1].text, /Hi, welcome to Mama Ada's Kitchen 👋/);
-  assert.deepEqual(added[2].options, ['ok:yes', 'ok:fix', 'prod:more']);
-  // The preview's buttons work: the owner can open a section.
-  const meals = await say('See Meals', added[1].options[0]);
-  assert.equal((meals[0].content as any).interactive.type, 'carousel');
-  assert.match(meals[0].text, /Meals/);
-  assert.deepEqual(meals[1].options, ['ok:yes', 'ok:fix', 'prod:more']);
+  const summary = await owner(MENU);
+  assert.equal(body(summary[0]), 'Got it! 6 items in 3 sections: Meals, Snacks and Drinks.');
+  assert.deepEqual(summary[0].options, ['imp:all', 'imp:list']);
+  // [See full list] (optional): everything by section, then the choice again.
+  const full = await say('See full list', 'imp:list');
+  assert.match(full[0].text, /^\*Meals\* \(2\)\n• Jollof rice & chicken: ₦3,500\n• Fried rice & turkey: ₦4,000/);
+  assert.deepEqual(full.at(-1)!.options, ['imp:all', 'imp:fix']);
+
+  // Words for the button ("yeah, add them" = Looks good): saved, and straight on.
+  const place = await owner('yeah, add them');
+  assert.equal(place.length, 1);
+  assert.equal(place[0].text, "Where's the shop, and when are you open?\ne.g. 16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7");
+  assert.equal((await db.query('products', [['businessId', '==', bizId]])).length, 6);
   biz = await doc('businesses', bizId);
-  assert.deepEqual([biz.category, biz.businessTypeInferred], ['food_beverage', true], 'the menu tells us it is food: no type question');
+  assert.equal(biz.category, 'food_beverage', 'the type from the menu, never asked');
 
-  assert.match((await say('Fix something', 'ok:fix'))[0].text, /send the product with the new price/);
-  assert.match((await say('Zobo 800'))[0].text, /^Updated \*Zobo\*: ₦700 → ₦800$/);
-  // Part of the name is enough when it's clearly one product: updated, not added again.
-  const fixed = await say('jollof rice 4000');
-  assert.match(fixed[0].text, /^Updated \*Jollof rice & chicken\*: ₦3,500 → ₦4,000$/);
-  assert.deepEqual(fixed[1].options, ['ok:yes', 'ok:fix', 'ok:see']);
-  // Delete during signup: the Yes button deletes, then back to the question.
-  const ask = await say('delete meat pie');
-  assert.match(ask[0].text, /^Delete \*Meat pie\* \(₦800\)\? Customers won't see it any more\.\n/);
-  assert.deepEqual(ask[0].options, ['yes', 'no']);
-  assert.equal(ask.length, 1, 'the signup question waits until they answer');
-  const gone = await say('Yes, delete it', 'yes');
-  assert.match(gone[0].text, /^🗑️ Deleted \*Meat pie\*\. You now have 5 products\.\n/);
-  assert.deepEqual(gone[1].options, ['ok:yes', 'ok:fix', 'prod:more'], 'back to where they were');
-  assert.equal((await db.query('products', [['businessId', '==', bizId]])).filter(p => !p.deletedAt).length, 5);
-  // A new name says so.
-  const fresh = await say('kunu 600');
-  assert.match(JSON.stringify(fresh), /Added new product \*Kunu\* ₦600 in Drinks/);
-  const photos = await say('Looks right', 'ok:yes');
-  assert.match(photos[0].text, /6 products have no photo yet[\s\S]*up to 5/);
-  // Commands work at every step, then the step's question comes back.
-  const list = await say('PRODUCTS');
-  assert.match(list[0].text, /\*Meals\*\n• Fried rice & turkey — ₦4,000/);
-  assert.doesNotMatch(list[0].text, /no stock count/);
-  assert.deepEqual(list[1].options, ['ph:skip']);
-  assert.deepEqual(photos[0].options, ['ph:skip']);
+  const delivery = await owner('16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7');
+  assert.equal(delivery.length, 1, 'both saved with ✅ lines, no Yes/Change');
+  assert.equal(body(delivery[0]), "✅ 16 Atunrase Estate, Gbagada, Lagos\n✅ Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\n\nDo you deliver? Send your area price list, or type one price if it's the same everywhere.");
+  assert.deepEqual(delivery[0].options, ['dl:pickup']);
 
-  assert.match((await say('Skip for now', 'ph:skip'))[0].text, /^\*Step 3 of 6\* · Where is Mama Ada's Kitchen\?/);
-  const street = await say("it's in Lagos, Yaba, near Tejuosho market");
-  assert.match(street[0].text, /What's the street or building in Yaba\?/);
-  const where = await say('12 Herbert Macaulay Way');
-  assert.match(where[0].text, /^\*Step 3 of 6\* · 📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?\n/);
-  assert.deepEqual(where[0].options, ['loc:ok', 'loc:fix']);
-  assert.match((await say('Yes', 'loc:ok'))[0].text, /^\*Step 4 of 6\* · What time do you open and close/);
-  const same = await say('8am - 9pm');
-  assert.match(same[0].text, /8am–9pm\. Same every day\?/);
-  assert.deepEqual(same[0].options, ['hrs:same', 'hrs:perday', 'hrs:closed']);
-  assert.match((await say('Closed some days', 'hrs:closed'))[0].text, /Which days are you closed/);
-  const check = await say('Sunday');
-  assert.match(check[0].text, /^\*Step 4 of 6\* · Mon–Sat 8am–9pm · Sun closed\. Correct\?/, 'confirmed before saving');
-  assert.deepEqual(check[0].options, ['hrv:ok', 'hrv:change']);
-  const prep = await say('Yes', 'hrv:ok');
-  assert.match(prep[0].text, /✅ Mon–Sat 8am–9pm · Sun closed\. When you're closed, customers can still order for later/);
-  assert.match(prep[1].text, /How long does an order usually take to prepare/, 'food shops get the prep-time question');
-  const delivery = await say('30–60 min', 'prep:1');
-  assert.match(delivery[0].text, /^\*Step 5 of 6\* · How do customers get their orders\?/);
-  assert.match((await say('Both', 'dl:both'))[0].text, /delivery within Yaba/);
-  assert.match((await say('1,500'))[0].text, /elsewhere in Lagos/);
-  assert.match((await say('3k'))[0].text, /other states/);
-  assert.deepEqual((await say('Yes', 'is:yes'))[0].options, ['is:flat', 'is:quote']);
-  const policies = await say('I quote per order', 'is:quote');
-  assert.equal(policies[0].text, '✅ Delivery: ₦1,500 within Yaba · ₦3,000 elsewhere in Lagos · other states: you quote per order. Pickup is free.');
-  assert.match(policies[1].text, /what most food shops use\):\n\n• No returns on food\./);
-  // Optional: how the shop talks to customers. Three samples each for the three that matter most.
-  const offer = await say('Use these', 'pol:use');
-  assert.deepEqual(offer[0].options, ['msgs:choose', 'msgs:default']);
-  const welcome = await say('Choose messages', 'msgs:choose');
-  assert.match(welcome[0].text, /^\*Step 5 of 6\* · Message 1 of 3 · \*Welcome\* — sent as the first reply to a new customer\.\n\nNow:\n[\s\S]*\*Option 1\* \(warm and chatty\)\n[\s\S]*\*Option 2\* \(short and professional\)\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?\n\n\*Option 3\* \(playful, with a light Naija touch\)/);
-  assert.deepEqual(welcome[1].options, ['msgpick:welcome:1', 'msgpick:welcome:2', 'msgpick:welcome:3', 'msgedit:welcome', 'msgkeep:welcome']);
-  const thanks = await say('Option 2', 'msgpick:welcome:2');
-  assert.match(thanks[0].text, /^Saved ✅ Here's exactly how customers will see your \*welcome\* message:\n\nWelcome to \*Mama Ada's Kitchen\*\. How can we help you today\?$/);
-  assert.match(thanks[1].text, /^\*Step 5 of 6\* · Message 2 of 3 · \*Thank you after payment\*/);
-  // Their own words: checked, shown, then saved.
-  await say('Write my own', 'msgedit:paymentThanks');
-  assert.match((await say('Thanks {custmer}! Got your {total}.'))[0].text, /I don't know \{custmer\}/);
-  const mine = await say('Thanks {customer_name}! We got your {total} for {order_id} 🙏');
-  assert.match(mine[0].text, /^Here's how customers will see it:\n\nThanks Ada! We got your ₦12,500 for RLY-7KQ2M 🙏/);
-  assert.deepEqual(mine[0].options, ['msgsave:paymentThanks', 'msgedit:paymentThanks']);
-  const third = await say('Save', 'msgsave:paymentThanks');
-  assert.match(third[1].text, /^\*Step 5 of 6\* · Message 3 of 3 · \*Showing what you sell\*/);
-  const fee = await say('Keep the current one', 'msgkeep:menuIntro');
-  assert.match(fee.map(m => m.text).join('\n'), /Messages done 👍/);
-  biz = await doc('businesses', bizId);
-  assert.equal(biz.messages.welcome, "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
-  assert.equal(biz.messages.paymentThanks, 'Thanks {customer_name}! We got your {total} for {order_id} 🙏');
-  assert.equal(biz.messages.menuIntro, undefined, 'kept the default');
-  // Who pays the fee comes before TEST, so the pretend order shows the right total.
-  assert.match(fee.at(-1)!.text, /^\*Step 6 of 6\* · You only pay when you get paid: \*4\.5% of each sale, at most ₦4,000\*\. Nothing upfront or monthly\./);
-  fee[0] = fee.at(-1)!;
+  const fee = await owner('Gbagada 1000\nYaba 3000\nIkeja 3000\nEbutte Metta 3000\nLekki Phase 1 4000');
+  assert.equal(fee.length, 1, 'saved straight away: no Save/Cancel, no full list');
+  assert.equal(body(fee[0]), 'Saved 5 areas, ₦1,000–₦4,000. I fixed 1 spelling (like Ebutte Metta → Ebute Metta). Send *DELIVERY* anytime to check or edit them.\n\nLast thing: Relay costs nothing upfront. We take 4.5% of each sale (max ₦4,000), only when you get paid. Who pays it?');
   assert.deepEqual(fee[0].options, ['fee:customer', 'fee:owner']);
-  const ready = await say("I'll pay it", 'fee:owner');
-  assert.equal(ready[0].text, "👍 You'll pay the fee — customers see your prices only.");
-  assert.match(ready[1].text, /^\*Step 6 of 6\* · Mama Ada's Kitchen is ready 🎉 Try it as a customer first/);
-  assert.deepEqual(ready[1].options, ['test:start', 'ob:connect']);
-  assert.equal((await doc('businesses', bizId)).feePayer, 'owner');
-  // TEST: the welcome they picked (option 2) is the first thing a customer gets for "hi".
-  const test = await say('Test my shop', 'test:start');
-  assert.equal(test[1].text.split('\n')[0], "Welcome to *Mama Ada's Kitchen*. How can we help you today?");
-  assert.deepEqual(test[1].options, ['menu', 'ask', 'act:exittest'], 'no carousel on a plain hi; in test mode, the way back instead of tracking');
-  assert.match(test[1].text, /\n\n🧪 Test mode · type EXIT to go back/);
-  await say('EXIT');
 
+  const ready = await owner("I'll pay", 'fee:owner');
+  assert.equal(ready.length, 1, 'no separate fee confirmation');
+  const cta = (ready[0].content as any).interactive;
+  assert.equal(cta.type, 'cta_url');
+  assert.equal(cta.body.text, "Done 🎉 Mama Ada's Kitchen is ready. Connect your WhatsApp number to go live. Meta will ask you to log into Facebook.\n\nWant to try it as a customer first? Reply *TEST*.");
+  assert.equal(cta.action.parameters.display_text, 'Connect my number');
+  assert.match(cta.action.parameters.url, /\/connect\/[A-Za-z0-9]+$/);
+
+  assert.ok(count <= 7, `${count} owner messages from "hey" to the Connect button`);
+  assert.ok(all.every(m => !/Step \d+ of/.test(m.text)), 'no step counter anywhere');
+  assert.ok(all.every(m => m.text.split('\n').length <= 8), 'no long messages');
+
+  // What isn't asked any more: defaults, each with its command.
   biz = await doc('businesses', bizId);
-  assert.deepEqual([biz.city, biz.area, biz.address, biz.landmark, biz.prepTime, biz.fulfilment, biz.shipsInterstate, biz.interstatePricing], ['Lagos', 'Yaba', '12 Herbert Macaulay Way', 'Tejuosho Market', '30–60 min', 'both', true, 'quote']);
-  assert.deepEqual([biz.hours.mon, biz.hours.sun], [{ open: '08:00', close: '21:00' }, null]);
+  assert.deepEqual([biz.city, biz.area, biz.address, biz.fulfilment, biz.shipsInterstate, biz.afterHours, biz.prepTime, biz.feePayer], ['Lagos', 'Gbagada', '16 Atunrase Estate', 'both', false, 'orders', '15–30 min', 'owner']);
+  assert.deepEqual([biz.hours.mon, biz.hours.sat, biz.hours.sun], [{ open: '08:00', close: '19:00' }, { open: '10:00', close: '19:00' }, null]);
   assert.match(biz.policies.returns, /No returns on food/);
   const zones = await db.query('deliveryZones', [['businessId', '==', bizId]]);
-  assert.deepEqual(zones.map(z => [z.match, z.feeKobo]).sort(), [['Lagos', 300_000], ['Yaba', 150_000]]);
+  assert.deepEqual(zones.map(z => z.name).sort(), ['Ebute Metta', 'Gbagada', 'Ikeja', 'Lekki Phase 1', 'Yaba']);
 
-  assert.match((await say('Connect now', 'ob:connect'))[0].text, /WhatsApp Business/);
-  const unsure = await say('Not sure', 'wa:unsure');
-  assert.match(unsure[0].text, /WhatsApp Business has a "B" on it/);
-  assert.deepEqual(unsure[0].options, ['wa:hasb', 'wa:nob']);
-  const switching = await say('No B', 'wa:nob');
-  assert.match(switching[0].text, /Switching is free and keeps your chats[\s\S]*Tap \*I've switched\*/);
-  assert.deepEqual(switching[0].options, ['wa:done', 'ob:call']);
-  const fb = await say("I've switched", 'wa:done');
-  assert.match(fb[0].text, /^\*Step 6 of 6\* · Can you log into Facebook\? Meta uses it to set up your business account\./);
-  assert.match((await say('No', 'fb:no'))[0].text, /Create a free one at facebook.com/);
-  const link = await say('I have one now', 'fb:now');
-  assert.match(link[0].text, /^Last step: connect your number with Facebook 👇\n\S*\/connect\/[A-Za-z0-9]+\nThe link works for 24 hours\.$/);
-  assert.equal((await conv(OWNER)).onboarding, null, 'the everyday Admin Bot from here');
-  assert.equal((await doc('ownerPhones', `+${OWNER}`)).onboardingStage, 'connect');
-  assert.match((await say('products'))[0].text, /\*Meals\*[\s\S]*Jollof rice & chicken/);
+  // TEST, then EXIT: back to the Connect button.
+  await say('TEST');
+  const back = await say('EXIT');
+  assert.equal((back.at(-1)!.content as any).interactive?.type, 'cta_url');
+  assert.match((await say('products'))[0].text, /\*Meals\*[\s\S]*Jollof rice & chicken/, 'commands work at "ready"');
 
   const events = await db.query('onboardingEvents', [['ownerPhone', '==', `+${OWNER}`]]);
   const seen = new Set(events.map(e => `${e.step}:${e.event}`));
-  for (const s of ['basics:entered', 'shop_name:completed', 'products:entered', 'preview:completed', 'location:entered', 'hours:entered', 'delivery:entered', 'connect:entered', 'connect_link:entered']) assert.ok(seen.has(s), `analytics: ${s}`);
+  for (const s of ['basics:entered', 'shop_name:completed', 'products:entered', 'products:completed', 'location:entered', 'delivery:entered', 'connect:entered', 'connect_link:entered']) assert.ok(seen.has(s), `analytics: ${s}`);
+});
+
+test('onboarding v3: only one of address and hours → the other is asked; pickup only; one price for everywhere; a doubtful time is checked', async () => {
+  const bot = new Bot();
+  const from = '2348035551112';
+  const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Bola' });
+  await say('hi'); await say('Bola Bags'); await say('Leather tote 18000'); await say("That's all", 'prod:done');
+  const hours = await say('12 Admiralty Way, Lekki');
+  assert.equal(hours[0].text, '✅ 12 Admiralty Way, Lekki, Lagos\n\nAnd what time do you open and close?');
+  const delivery = await say('9am to 6pm');
+  assert.match(delivery[0].text, /^✅ Every day 9am–6pm\n\nDo you deliver\?/);
+  const fee = await say('2000 everywhere');
+  assert.match(fee[0].text, /^✅ Delivery is ₦2,000 everywhere\.\n\nLast thing:/);
+
+  const other = '2348035551113';
+  const say2 = (text: string, choice?: string) => bot.send('admin', { from: other, text, choice, name: 'Kemi' });
+  await say2('hi'); await say2('Kemi Cakes'); await say2('Red velvet 15000'); await say2("That's all", 'prod:done');
+  const address = await say2('Mon–Sat 10am to 6pm');
+  assert.equal(address[0].text, "✅ Mon–Sat 10am–6pm · Sun closed\n\nAnd where's the shop? e.g. *16 Atunrase Estate, Gbagada*");
+  const doubt = await say2('Yaba · 8am to 7am');
+  assert.match(doubt[0].text, /8am to 7pm, or open overnight until 7am\?/, 'a doubtful time is checked, not saved');
+  const pick = await say2('8am–7pm', doubt[0].options[0]);
+  assert.match(pick.map(m => m.text).join('\n'), /Do you deliver\?/);
+  const paid = await say2('Pickup only', 'dl:pickup');
+  assert.match(paid[0].text, /^✅ Pickup only\.\n\nLast thing:/);
 });
 
 test('onboarding v2: a menu as the very first message is read straight away; the name is asked meanwhile', async () => {
   const bot = new Bot();
   const from = '2348035554444';
   const first = await bot.send('admin', { from, text: 'Suya 3000\nAsun 4500\nChapman 1500', name: '' });
-  assert.match(first[0].text, /I found \*3 products\*/);
-  assert.deepEqual(first[0].options, ['imp:all', 'imp:cancel']);
-  assert.match(first[1].text, /^Welcome to Relay 👋[\s\S]*While you check that list: what's your shop called\?$/);
-  const added = await bot.send('admin', { from, choice: 'imp:all', text: 'Add all 3', name: '' });
-  assert.match(added[0].text, /Added 3 products/);
-  assert.match(added[1].text, /\*Step 1 of 6\* · Now, what's your shop called\?/);
-  assert.match((await bot.send('admin', { from, text: 'Suya Spot', name: '' }))[0].text, /what's \*your\* name\?/, 'no WhatsApp profile name: asked once');
-  const preview = await bot.send('admin', { from, text: 'My name is Musa', name: '' });
-  assert.equal(preview[0].text, 'Nice to meet you, Musa! 👋');
-  assert.match(preview[1].text, /✅ 3 products/);
+  assert.match(body(first[0]), /^Got it! 3 items\./);
+  assert.deepEqual(first[0].options, ['imp:all', 'imp:list']);
+  assert.match(first[1].text, /^Hi 👋 I'll set up your WhatsApp shop[\s\S]*While you check that list: what's your shop called\?\n\nBy continuing you agree to our terms/);
+  const added = await bot.send('admin', { from, choice: 'imp:all', text: 'Looks good', name: '' });
+  assert.equal(added.length, 1);
+  assert.equal(added[0].text, "Saved ✅ Now, what's your shop called?");
+  assert.equal((await bot.send('admin', { from, text: 'Suya Spot', name: '' }))[0].text, 'And what should I call you?', 'no WhatsApp profile name: asked once');
+  const place = await bot.send('admin', { from, text: 'My name is Musa', name: '' });
+  assert.equal(place[0].text, "Nice to meet you, Musa! Where's the shop, and when are you open?\ne.g. 16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7", 'the menu is in: straight to the address');
   const biz = await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId);
   assert.deepEqual([biz.name, biz.ownerName], ['Suya Spot', 'Musa']);
   assert.ok(biz.termsAcceptedAt, 'terms accepted when they replied');
 });
 
-test('onboarding v2: unclear products ask the business type; typed products work without a menu', async () => {
+test('onboarding v3: typed products work without a menu; the type and photos are never asked', async () => {
   const bot = new Bot();
   const from = '2348035556666';
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Bisi' });
@@ -234,12 +184,11 @@ test('onboarding v2: unclear products ask the business type; typed products work
   assert.match(card[0].text, /\*Mystery box\*\n₦5,000 · Products/);
   assert.deepEqual(card[1].options, ['prod:done']);
   await say('Gift hamper 12k');
-  const preview = await say("That's all", 'prod:done');
-  assert.match(preview[0].text, /✅ 2 products\./);
-  const type = await say('Looks right', 'ok:yes');
-  assert.match(type[0].text, /What kind of business is Bisi Gifts/);
-  assert.ok(type[0].options.includes('btype:general_services'));
-  assert.match((await say('Other', 'btype:other'))[0].text, /^\*Step 2 of 6\* · 📷 \*Gift hamper\* and \*Mystery box\* have no photo yet/);
+  const place = await say("That's all", 'prod:done');
+  assert.equal(place.length, 1);
+  assert.match(place[0].text, /^Where's the shop, and when are you open\?/);
+  const biz = await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId);
+  assert.equal(biz.category, 'other', 'unclear: left as "other", not asked');
 });
 
 test('onboarding v2: coming back after a break offers Continue or Start over; start over clears drafts', async () => {
@@ -249,26 +198,25 @@ test('onboarding v2: coming back after a break offers Continue or Start over; st
   await say('hi');
   await say('Bola Bakes');
   await say('Cupcakes 500\nBirthday cake 15000');
-  await say('Add all 2', 'imp:all');
-  await say('Looks right', 'ok:yes');
+  await say('Looks good', 'imp:all');
   const businessId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
   const stale = async () => db.set(db.doc('conversations', `admin_${from}`), { onboarding: { ...(await conv(from)).onboarding, lastSeenAt: new Date(Date.now() - 2 * 3600_000).toISOString() } }, { merge: true });
 
   await stale();
   const back = await say('hello');
-  assert.match(back[0].text, /Welcome back, Bola\. You were on \*your products\*\. Continue\?/);
+  assert.match(back[0].text, /Welcome back, Bola\. You were on \*your address and hours\*\. Continue\?/);
   assert.deepEqual(back[0].options, ['ob:continue', 'ob:restart']);
-  assert.match((await say('Yes', 'ob:continue'))[0].text, /no photo yet/);
-  await say('Skip', 'ph:skip');
+  assert.match((await say('Yes', 'ob:continue'))[0].text, /^Where's the shop, and when are you open\?/);
+  await say('Yaba, Lagos · 9am to 6pm');
   await stale();
-  assert.match((await say('hi'))[0].text, /You were on \*your location\*/);
+  assert.match((await say('hi'))[0].text, /You were on \*delivery\*/);
 
   const restart = await say('Start over', 'ob:restart');
   assert.match(restart[0].text, /starting again[\s\S]*What's your shop called/);
   assert.equal(await doc('ownerPhones', `+${from}`), null, 'the half-made shop is gone');
   assert.equal(await doc('businesses', businessId), null);
   assert.equal((await db.query('products', [['businessId', '==', businessId]])).length, 0);
-  assert.match((await say('Bola Bakes 2'))[0].text, /Step 2 of 6/);
+  assert.match((await say('Bola Bakes 2'))[0].text, /^Love it\. Send me your menu/);
 });
 
 test('onboarding v2: old conversations map onto the new steps', () => {
@@ -287,8 +235,8 @@ test('shops: a second shop on the same number, SWITCH between them, data kept ap
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Kunle' });
   const { businessId: first } = await signUp(bot, from, { shop: 'Kunle Kicks', product: 'White sneakers 30k', name: 'Kunle', until: 'linked' });
   assert.match((await say('new shop'))[0].text, /Add another shop or branch\?/);
-  assert.match((await say('Yes, add one', 'newshop:yes'))[0].text, /Step 1 of 6\* · What's the new shop or branch called/);
-  assert.match((await say('Kunle Kicks Ikeja'))[0].text, /Step 2 of 6/);
+  assert.equal((await say('Yes, add one', 'newshop:yes'))[0].text, "What's the new shop or branch called?");
+  assert.match((await say('Kunle Kicks Ikeja'))[0].text, /Send me your menu/);
   const owner = await doc('ownerPhones', `+${from}`);
   const second = owner.activeBusinessId;
   assert.notEqual(second, first);
@@ -312,21 +260,9 @@ test('shops: a second shop on the same number, SWITCH between them, data kept ap
 async function signUpRest(bot: Bot, from: string) {
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Kunle' });
   await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
-  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
-  await say('Lagos, Ikeja');
-  await say('No pickup address', 'loc:nostreet');
-  await say('Yes', 'loc:ok');
-  await say('Mon-Sat 9am-7pm, Sun closed');
-  await say('Yes', 'hrv:ok');
-  await say('Pickup', 'dl:pickup');
-  await say('Skip', 'pol:skip');
-  await say('Use defaults', 'msgs:default');
-  await say('My customers', 'fee:customer');
-  await say('Connect now', 'ob:connect');
-  await say('Yes', 'wa:yes');
-  await say('Yes', 'fb:yes');
+  await say('Ikeja, Lagos · Mon-Sat 9am-7pm, Sun closed');
+  await say('Pickup only', 'dl:pickup');
+  await say('Customers pay', 'fee:customer');
 }
 
 test('admin: an owner who is already set up gets a greeting, not "didn\'t understand"', async () => {
@@ -394,7 +330,7 @@ test('file check: a kitchen that sends a clothing list is asked once; the exampl
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Teniola' });
   await say('hi');
   const step2 = await say("Mama Tee's Kitchen");
-  assert.match(step2[0].text, /Send your menu[\s\S]*e\.g\. \*Jollof rice & chicken 3500\*/, 'a kitchen gets a food example');
+  assert.equal(step2[0].text, 'Love it. Send me your menu: a PDF, a photo, or just type it out.');
   const check = await say(THRIFT);
   assert.equal(check.length, 1);
   assert.match(check[0].text, /^Quick check 👀 Your shop is called \*Mama Tee's Kitchen\*, but this file looks like \*clothing, shoes and bags\*\. Did you send the right file\?/);
@@ -403,14 +339,15 @@ test('file check: a kitchen that sends a clothing list is asked once; the exampl
   assert.match((await say('Change shop name', 'imp:rename'))[0].text, /What's your shop called\? I'll keep the products/);
   const renamed = await say("Tee's Thrift");
   assert.match(renamed[0].text, /Done ✅ Your shop is now \*Tee's Thrift\*/);
-  assert.match(renamed[1].text, /I found \*6 products\*/);
+  assert.match(body(renamed[1]), /^Got it! 6 items/);
   const bizId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
   assert.equal((await doc('businesses', bizId)).name, "Tee's Thrift");
-  await say('Add all 6', 'imp:all');
+  // [Change something]: saved, then how to fix it, with an example from their own list.
+  const fix = await say('Change something', 'imp:fix');
   assert.equal((await doc('businesses', bizId)).category, 'fashion_retail');
-  const fix = await say('Change something', 'ok:fix');
   assert.doesNotMatch(fix[0].text, /Jollof/);
   assert.match(fix[0].text, /e\.g\. \*[A-Z][^*]+ \d+\*/, 'an example from their own list');
+  assert.deepEqual(fix[0].options, ['ok:yes']);
 });
 
 test('file check: "Yes, it\'s my stock" sets the type; "Send another file" drops the list; vague names never warn', async () => {
@@ -424,17 +361,17 @@ test('file check: "Yes, it\'s my stock" sets the type; "Send another file" drops
   assert.equal((await conv(from)).importDraft, null);
   await say(THRIFT);
   const mine = await say("Yes, it's my stock", 'imp:mine');
-  assert.match(mine[0].text, /I found \*6 products\*/);
+  assert.match(body(mine[0]), /^Got it! 6 items/);
   assert.equal((await doc('businesses', (await doc('ownerPhones', `+${from}`)).activeBusinessId)).category, 'fashion_retail');
 
   const other = new Bot();
   const vague = '2348035550001';
   await other.send('admin', { from: vague, text: 'hi', name: 'Tee' });
   await other.send('admin', { from: vague, text: "Tee's Place", name: 'Tee' });
-  assert.match((await other.send('admin', { from: vague, text: THRIFT, name: 'Tee' }))[0].text, /^I found \*6 products\*/);
+  assert.match(body((await other.send('admin', { from: vague, text: THRIFT, name: 'Tee' }))[0]), /^Got it! 6 items/);
 });
 
-test('location: "yaba", then the area again with a landmark, then the street; a typed fix at the read-back', async () => {
+test('location: a known area is saved straight away; an unknown one is read back, fixable in words', async () => {
   const bot = new Bot();
   const from = '2348035550002';
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Teniola' });
@@ -442,16 +379,26 @@ test('location: "yaba", then the area again with a landmark, then the street; a 
   await say("Tee's Thrift");
   await say('Plaid Flannel Shirt 6500');
   await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
-  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
-  assert.match((await say('yaba'))[0].text, /What's the street or building in Yaba\?/);
-  assert.match((await say("it's in Lagos, Yaba, near Tejuosho market"))[0].text, /What's the street or building in Yaba\?/, 'not taken as the street');
-  const back = await say('12 Herbert Macaulay Way');
-  assert.match(back[0].text, /📍 12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?/);
-  const fixed = await say('15 Herbert Macaulay Way');
-  assert.match(fixed[0].text, /📍 15 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market\. Is that right\?/);
-  assert.match((await say('Yes', 'loc:ok'))[0].text, /Step 4 of 6/);
+  // An area Relay knows, with a landmark: saved, then only the hours are asked.
+  const hours = await say("it's in Lagos, Yaba, near Tejuosho market");
+  assert.equal(hours[0].text, '✅ Yaba, Lagos — near Tejuosho Market\n\nAnd what time do you open and close?');
+
+  const other = '2348035550004';
+  const say2 = (text: string, choice?: string) => bot.send('admin', { from: other, text, choice, name: 'Tunde' });
+  await say2('hi'); await say2('Tunde Tools'); await say2('Hammer 4500'); await say2("That's all", 'prod:done');
+  // An area it doesn't know: read back (the hours sent with it are saved, with a ✅ line).
+  const back = await say2('5 Church Street, Ogudu Village, Lagos · 9am to 6pm');
+  assert.equal(body(back[0]), '✅ Every day 9am–6pm\n\n📍 5 Church Street, Ogudu Village, Lagos. Is that right?');
+  assert.deepEqual(back[0].options, ['loc:ok', 'loc:fix']);
+  const fixed = await say2('7 Church Street');
+  assert.match(body(fixed[0]), /📍 7 Church Street, Ogudu Village, Lagos\. Is that right\?/);
+  const next = await say2('Yes', 'loc:ok');
+  assert.match(body(next[0]), /^✅ 7 Church Street, Ogudu Village, Lagos\n\nDo you deliver\?/);
+  // A known area in another city ("Sango" is in Ibadan): read back too.
+  const third = '2348035550005';
+  const say3 = (text: string, choice?: string) => bot.send('admin', { from: third, text, choice, name: 'Femi' });
+  await say3('hi'); await say3('Femi Phones'); await say3('Charger 3000'); await say3("That's all", 'prod:done');
+  assert.deepEqual((await say3('12 Idiroko Road, Sango Ota, Ogun · 9am to 6pm'))[0].options, ['loc:ok', 'loc:fix']);
 });
 
 test('hours at signup: the reported message is checked, not saved as "Every day 8am–7am"', async () => {
@@ -462,21 +409,13 @@ test('hours at signup: the reported message is checked, not saved as "Every day 
   await say('Mayschills');
   await say('Plaid shirt 6500');
   await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Fashion', 'btype:fashion_retail');
-  if (last.some(m => m.options.includes('ph:skip'))) await say('Skip', 'ph:skip');
-  await say('Lagos, Yaba');
-  await say('No pickup address', 'loc:nostreet');
-  await say('Yes', 'loc:ok');
   const q1 = await say('8AM to 7AM on weekdays and 10am to 7am on saturdays');
-  assert.match(q1[0].text, /^\*Step 4 of 6\* · Mon–Fri: 8am to 7pm, or open overnight until 7am\?/);
-  await say('8am–7pm', 'hrv:alt');
-  const sunday = await say('10am–7pm', 'hrv:alt');
-  assert.match(sunday[0].text, /And Sunday\?/);
-  const check = await say('Closed', 'hrv:closed');
-  assert.match(check[0].text, /Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\. Correct\?/);
+  assert.match(body(q1[0]), /^Mon–Fri: 8am to 7pm, or open overnight until 7am\?/);
   const bizId = (await doc('ownerPhones', `+${from}`)).activeBusinessId;
-  assert.equal((await doc('businesses', bizId)).hours ?? null, null, 'nothing saved before Yes');
-  assert.match((await say('Yes', 'hrv:ok'))[0].text, /✅ Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\./);
+  assert.equal((await doc('businesses', bizId)).hours ?? null, null, 'nothing saved while a time is doubtful');
+  await say('8am–7pm', 'hrv:alt');
+  const done = await say('10am–7pm', 'hrv:alt');
+  // Both doubts settled: saved (Sunday wasn't named: closed), then the missing address.
+  assert.equal(done[0].text, "✅ Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\n\nAnd where's the shop? e.g. *16 Atunrase Estate, Gbagada*");
   assert.deepEqual((await doc('businesses', bizId)).hours.sun, null);
 });

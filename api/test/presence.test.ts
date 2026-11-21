@@ -49,6 +49,6 @@ test('menu reading: ⏳ then ✅ on the owner\'s file', async () => {
   f.deps.fetch = (async () => (call++ === 0 ? Response.json({ url: 'https://media/x', mime_type: 'application/pdf' }) : new Response(new Uint8Array([37, 80, 68, 70])))) as unknown as typeof fetch;
   const input = { text: '', choiceId: null, imageId: null, audioId: null, document: { id: 'doc1', mimeType: 'application/pdf', filename: 'menu.pdf' } };
   const out = await handleImport(f, input, '', 'token', async () => {}, async e => { reactions.push(e); });
-  assert.match(JSON.stringify(out!.out[0]), /I found \*1 product\*/);
+  assert.match(JSON.stringify(out!.out[0]), /Got it! 1 item\./);
   assert.deepEqual(reactions, ['⏳', '✅']);
 });

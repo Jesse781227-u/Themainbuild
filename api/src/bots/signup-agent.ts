@@ -29,8 +29,8 @@ export interface SignupHelpers {
   callMe: (reason: string) => Promise<void>;
 }
 
-const LOCATION: Step[] = ['city', 'area', 'street', 'location_confirm'];
-const HOURS: Step[] = ['hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review'];
+const LOCATION: Step[] = ['place', 'city', 'area', 'street', 'location_confirm'];
+const HOURS: Step[] = ['place', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review'];
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 
 export function signupSystem() {

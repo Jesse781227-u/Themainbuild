@@ -1,17 +1,18 @@
-// Owner onboarding by chat (v2): the owner sees their own shop working within about 90 seconds and
-// finishes in about 5 minutes.
-//   1 basics    shop name (owner name comes from the WhatsApp profile; asked only if missing)
-//   2 products  menu/PDF/photo/pasted list, or typed products → summary + the real carousel
-//               → business type (only if the products don't make it clear) → photos for top sellers
-//   3 location  city, then area ("Lagos, Yaba" in one message works)
-//   4 hours     opening and closing times (+ prep time for food)
-//   5 delivery  pickup / delivery prices / other states, then shop policies
-//   6 connect   TEST as a customer, who pays Relay's fee, two quick checks, the connect link
-//   live        after connecting: profile photo (if missing), existing contacts, how they heard of Relay
+// Owner onboarding by chat (v3, 21 Nov 2026): about 7 owner replies from "hey" to the connect button.
+//   shop_name   welcome + "What's your shop called?" (owner name from the WhatsApp profile; asked
+//               only when it's missing or not a name)
+//   products    the menu (PDF, photo, typed): one short summary [Looks good] [See full list]
+//   place       address and opening hours in one reply; clear answers are saved with ✅ lines, a
+//               missing one is asked for, a doubtful one gets [Yes, that's right] [Fix it]
+//   delivery    [Pickup only], one price for everywhere, or a price list (saved straight away)
+//   fee_payer   who pays Relay's fee [Customers pay] [I'll pay]
+//   ready       [Connect my number] (and TEST to try it first)
+// No step counter. Prep time, policies, greetings, after-hours and other states get defaults
+// (applyDefaults), each changeable by its command. Picture, photos, contacts and "how did you
+// hear" come after go-live as single nudges (services/nudges.ts), never during signup.
 // A menu sent as the very first message is read straight away; the shop name is asked meanwhile.
-// One question per message, buttons or lists wherever there's a choice, everything editable later.
 // An owner who comes back after a break is asked whether to continue or start over.
-import { feeTerms } from '../services/orders';
+import { feeRate, feeTerms } from '../services/orders';
 import { C } from '../db';
 import { BUSINESS_TYPES, type Business, type BusinessCategory } from '../domain/business';
 import type { Product } from '../domain/commerce';
@@ -25,14 +26,14 @@ import { addShop, removeShop } from '../services/owners';
 import { trackStep } from '../services/onboarding-events';
 import { inferBusinessType } from '../services/business-type';
 import { example, exampleType } from '../services/shop-type';
-import { closeDays, DAYS, describeHours, sameEveryDay, validHours, type Hours } from '../services/hours';
+import { closeDays, DAYS, describeHours, readWeek, sameEveryDay, validHours, type Hours } from '../services/hours';
 import { answerHours, hoursDraftFrom, hoursQuestion, readHoursText, type HoursDraft } from './hours-review';
 import { conversational, isFail, runAgent } from './agent';
 import { loadMemory, remember, saveMemory } from './agent-memory';
 import { amountsIn, signupContext, signupSystem, signupTools, type SignupHelpers } from './signup-agent';
 import { defaultPolicies, policyText } from '../services/policies';
-import { listZones, saveZone } from '../services/delivery';
-import { describeLocation, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
+import { listZones, quoteDelivery, saveZone } from '../services/delivery';
+import { describeLocation, knownArea, knownCity, parseLocation, tidyPlace, type Location } from '../services/location';
 import { openTicket } from '../services/support';
 import { buttons, findProducts, list, NO, storeProfilePhoto, YES, type BotDeps, type Input } from './common';
 import { handleImport, parsePastedMenu } from './catalog-import';
@@ -42,11 +43,13 @@ import { log } from '../lib/logger';
 import { parseAdminCommand } from './intent';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type Out, type ProductFlowState } from './products-flow';
 import { categoryCarousel, productCarousel, productDetails } from './product-cards';
-import { answerZoneImport, startZoneImport } from './zones-flow';
+import { answerZoneImport, importZonesNow, startZoneImport } from './zones-flow';
+import { CONTACTS_ASK, PICTURE_ASK, SOURCE_ASK } from '../services/nudges';
 
 export type Stage = 'basics' | 'products' | 'location' | 'hours' | 'delivery' | 'connect' | 'live';
 export type Step =
   | 'shop_name' | 'owner_name'
+  | 'place'
   | 'products' | 'preview' | 'type' | 'photos'
   | 'city' | 'area' | 'street' | 'location_confirm'
   | 'hours' | 'hours_same' | 'hours_perday' | 'hours_closed' | 'hours_review' | 'prep' | 'prep_custom'
@@ -60,7 +63,7 @@ export interface Onboarding {
   businessId?: string | null;          // the shop being set up (an owner can add more shops later)
   adding?: boolean;                    // NEW SHOP: this owner already has a shop
   welcomed?: boolean; nameSet?: boolean; typeConfident?: boolean;
-  draft?: { city?: string; hours?: Hours; hoursReview?: HoursDraft | null; loc?: Location; streetAsked?: boolean };
+  draft?: { city?: string; hours?: Hours; hoursReview?: HoursDraft | null; loc?: Location; streetAsked?: boolean; ticks?: string[]; connectLink?: string };
   lastSeenAt?: string; resumeAsked?: boolean; productsAdded?: number; photosAdded?: number;
   photosId?: string | null;            // photos from the uploaded file, being matched in the background
   msgIndex?: number;                   // which of SIGNUP_MESSAGES the owner is choosing wording for
@@ -68,15 +71,16 @@ export interface Onboarding {
 
 const RESUME_AFTER_MS = 30 * 60_000;
 const STEP_OF: Record<Exclude<Stage, 'live'>, number> = { basics: 1, products: 2, location: 3, hours: 4, delivery: 5, connect: 6 };
-const STAGE_LABEL: Record<Stage, string> = { basics: 'your shop name', products: 'your products', location: 'your location', hours: 'your opening hours', delivery: 'delivery and policies', connect: 'connecting your WhatsApp number', live: 'the last few questions' };
+const STAGE_LABEL: Record<Stage, string> = { basics: 'your shop name', products: 'your products', location: 'your address and hours', hours: 'your opening hours', delivery: 'delivery', connect: 'the last step', live: 'the last few questions' };
 const DONE = /^(done|i'?m done|finish(ed)?|that'?s all|that'?s it|next|continue|no more)$/i;
 const SKIP = /^(skip|later|not now|no)$/i;
 const MAX_TOP_PHOTOS = 5;
 const PREP_TIMES = ['15–30 min', '30–60 min', '1 hr+'];
-const SOURCES = [['src:friend', 'A friend'], ['src:instagram', 'Instagram'], ['src:status', 'WhatsApp Status'], ['src:event', 'An event'], ['src:other', 'Somewhere else']] as const;
+const SOURCES = [['src:friend', 'A friend'], ['src:instagram', 'Instagram'], ['src:other', 'Other']] as const;
 
 const typeOf = (id?: string) => BUSINESS_TYPES.find(t => t.id === id);
-const stepLabel = (stage: Stage) => (stage === 'live' ? '' : `*Step ${STEP_OF[stage]} of 6* · `);
+// No step counter any more (v3): kept as a no-op so the old call sites read the same.
+const stepLabel = (_stage: Stage) => '';
 const first = (name?: string | null) => name?.split(' ')[0] ?? '';
 
 // A usable first name from the WhatsApp profile ("Ada Obi 🌸" → "Ada Obi"); null if there isn't one.
@@ -143,9 +147,11 @@ export async function handleOnboarding(c: Ctx, text: string, choiceId: string | 
       if (imported) {
         if (imported.created > 0) {
           await setOb(c, { productsAdded: (c.ob.productsAdded ?? 0) + imported.created });
-          if (!c.ob.nameSet) { await sendAll(c, imported.out); return c.reply(`${stepLabel('basics')}Now, what's your shop called?`); }
-          // One message: "Done ✅ Added 24 products in 4 categories… here's what customers see" (not two).
-          return showPreview(c, { added: imported.created });
+          if (!c.ob.nameSet) return c.reply("Saved ✅ Now, what's your shop called?");
+          // [Change something]: saved, then fixed in words before moving on.
+          if (choiceId === 'imp:fix') { await inferType(c); await setStage(c, 'products', 'preview'); return c.reply(buttons(fixHint(c, await listProducts(c.ctx.db, c.business.id)), [['ok:yes', 'Looks good']])); }
+          // [Looks good]: straight on (the summary already said what's in it; TEST shows the shop).
+          return afterProducts(c);
         }
         await sendAll(c, imported.out);
         // The menu is being checked (Add all / Cancel); ask the name meanwhile.
@@ -187,7 +193,7 @@ function yesTap(c: Ctx, text: string): string | null {
 // The AI reads the reply and saves it through the same fixed step (as the tap or plain text that
 // step expects), so every check stays. Replies the tools produce are held, then sent after the AI's
 // words in one go; the code, never the AI, asks the next question.
-const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit', 'msg_offer', 'msg_pick', 'ready', 'fee_payer', 'check_wa', 'check_fb']);
+const ASSISTANT_STEPS = new Set<Step>(['shop_name', 'owner_name', 'place', 'products', 'preview', 'type', 'photos', 'city', 'area', 'street', 'location_confirm', 'hours', 'hours_same', 'hours_perday', 'hours_closed', 'hours_review', 'prep', 'prep_custom', 'delivery', 'fee_local', 'fee_city', 'interstate', 'interstate_pricing', 'interstate_fee', 'policies', 'policies_edit', 'msg_offer', 'msg_pick', 'ready', 'fee_payer', 'check_wa', 'check_fb']);
 
 // The buttons or list rows a question shows ({ id, title, description }).
 type Option = { id: string; title: string; description?: string };
@@ -221,6 +227,15 @@ const GREEDY = new Set<Step>(['shop_name', 'owner_name', 'city', 'area', 'street
 // sundays" is for the AI, not the fixed reader that only knows "Closed").
 function fixedReads(step: Step, t: string, options: Option[]): boolean {
   const words = t.split(/\s+/).length;
+  // Address and hours: the rules read it whole when each part they find is clear
+  // ("Ikeja, Lagos · 8am-9pm"); anything doubtful or chatty goes to the assistant.
+  if (step === 'place') {
+    const { address, hours } = splitPlaceHours(t);
+    const loc = address ? clearLocation(parseLocation(address)) : null;
+    const week = hours ? readWeek(hours) : null;
+    const hoursClear = !!week && !week.doubts.length && !week.orphan;
+    return (!!address || !!hours) && (!address || !!loc) && (!hours || hoursClear);
+  }
   if (conversational(t.toLowerCase())) return false;
   const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   switch (step) {
@@ -288,14 +303,26 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
     setLocation: async got => {
       const loc: Location = { city: null, area: null, street: null, landmark: null, ...held.ob.draft?.loc };
       for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k]) loc[k] = k === 'city' ? knownCity(got[k]!) ?? tidyPlace(got[k]!) : tidyPlace(got[k]!);
+      // The area's city when it's known and none was given ("Gbagada" → Lagos).
+      if (loc.area && !loc.city) loc.city = knownArea(loc.area);
       await setOb(held, { draft: { ...held.ob.draft, loc, ...(got.street ? { streetAsked: true } : {}) } });
+      // At "address and hours": a clear address is saved quietly, so the hours tool can follow and
+      // one message carries both ✅ lines (sent after the tools, below).
+      if (held.ob.step === 'place') {
+        const clear = clearLocation(loc);
+        if (clear) await saveLoc(held, clear);
+        return held.ob.step;
+      }
       shown = await capture(() => nextLocation(held));
       return held.ob.step;
     },
     setHours: async days => {
       const draft = hoursDraftFrom(days);
       if (!draft) return false;
-      shown = await capture(() => review(held, draft));
+      // Clear: saved with a ✅ line and on to what's missing; doubtful: checked first.
+      const clear = clearHours(draft);
+      if (clear) { await saveHoursQuiet(held, clear); shown = await capture(() => placeNext(held)); }
+      else shown = await capture(() => review(held, draft));
       return true;
     },
     callMe: async reason => {
@@ -323,6 +350,12 @@ async function signupAssistant(c: Ctx, text: string, input?: Input, depth = 0): 
 
   // Products typed in words: their cards, then one "send the next one" (not one per product).
   if (productOuts.length && !calls.some(x => x.name === 'productsDone')) shown = [...await capture(() => afterTyped(held, productOuts)), ...(calls.some(x => x.name !== 'addProduct') ? shown : [])];
+  // "Address and hours": the address alone was saved (or is doubtful): its ✅ line or read-back, then
+  // what's missing.
+  if (stepBefore === 'place' && held.ob.step === 'place' && !shown.length && calls.length) {
+    const doubtful = held.ob.draft?.loc;
+    shown = await capture(() => (doubtful?.area && doubtful.city ? nextLocation(held) : placeNext(held)));
+  }
   c.ob = held.ob;
   let words = isFail(r) ? '' : r.text;
   // Something was saved: the step's own message says so. The AI's words stay only when they answer the
@@ -395,24 +428,23 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       } else await createShop(c, name);
       await setOb(c, { nameSet: true });
       await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'shop_name', event: 'completed' });
-      if (!c.business!.ownerName) { await setOb(c, { step: 'owner_name' }); return c.reply(`${stepLabel('basics')}Lovely name! And what's *your* name?`); }
+      if (!c.business!.ownerName) { await setOb(c, { step: 'owner_name' }); return c.reply('And what should I call you?'); }
       return afterBasics(c);
     }
     case 'owner_name': {
       const name = profileName(ownerNameFrom(text));
-      if (!name || choiceId) return c.reply(`${stepLabel('basics')}What's your name? (Just so I know what to call you.)`);
+      if (!name || choiceId) return c.reply('What should I call you?');
       await c.ctx.db.update(c.ctx.db.doc(C.businesses, c.business!.id), { ownerName: name, updatedAt: now.toISOString() });
       c.business!.ownerName = name;
       await c.ctx.db.set(c.ctx.db.doc(C.ownerPhones, c.ctx.ownerPhone), { ownerName: name }, { merge: true });
-      await c.reply(`Nice to meet you, ${first(name)}! 👋`);
-      return afterBasics(c);
+      return afterBasics(c, `Nice to meet you, ${first(name)}! `);
     }
 
     case 'products': {
       const f = flowFor(c);
       if (choiceId === 'prod:done' || (!choiceId && DONE.test(text.trim()))) {
-        if (!(await listProducts(c.ctx.db, c.business!.id)).length) return c.reply(`Add at least one product first. Send its name and price, e.g. *${example(c.business!)}*.`);
-        return showPreview(c);
+        if (!(await listProducts(c.ctx.db, c.business!.id)).length) return c.reply(`Add at least one product first, e.g. *${example(c.business!)}*.`);
+        return afterProducts(c);
       }
       if (choiceId === 'prod:more') return c.reply('Send the next product: its name and price, with a photo if you have one.');
       if (choiceId?.startsWith('pok:')) return c.reply(buttons('👍 Saved. Send the next product, or tap *That\'s all*.', [['prod:done', "That's all"]]));
@@ -420,7 +452,7 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       if (handled) return afterTyped(c, handled);
       if (passToAdmin(text)) return 'pass';
       const parsed = parseProduct(text);
-      if (!parsed) return c.reply(`Send a product as its name and price, e.g. *${example(c.business!, await listProducts(c.ctx.db, c.business!.id))}*, or send your ${listWord(c.business!)} as a PDF or photo.${(c.ob.productsAdded ?? 0) > 0 ? ' Tap *That\'s all* when you\'re done.' : ''}`);
+      if (!parsed) return c.reply(`${MENU_ASK} e.g. *${example(c.business!, await listProducts(c.ctx.db, c.business!.id))}*${(c.ob.productsAdded ?? 0) > 0 ? '\nTap *That\'s all* when you\'re done.' : ''}`);
       await starterCategories(c, parsed.name);
       return afterTyped(c, await addProduct(f, { ...parsed, imageUrl: await imageUrl() }));
     }
@@ -435,13 +467,13 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       if (choiceId === 'prod:more') { await setOb(c, { step: 'products' }); return c.reply('Send the next product: its name and price, with a photo if you have one. Tap *That\'s all* when you\'re done.'); }
       if (choiceId === 'ok:see') return showPreview(c, { again: true });
       const handled = await handleProductInput(flowFor(c), choiceId, text);
-      if (handled) { await sendAll(c, handled); if (choiceId?.startsWith('pmatch:') || choiceId?.startsWith('pcat:')) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks right now'], ['ok:fix', 'Change something'], ['ok:see', 'See my shop again']])); return; }
+      if (handled) { await sendAll(c, handled); if (choiceId?.startsWith('pmatch:') || choiceId?.startsWith('pcat:')) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks good']])); return; }
       if (choiceId?.startsWith('cat:') || choiceId?.startsWith('more:') || choiceId?.startsWith('cats:') || choiceId?.startsWith('buy:') || choiceId?.startsWith('det:') || choiceId === 'menu') return previewTap(c, choiceId);
       if (passToAdmin(text)) return 'pass';
       const parsed = parseProduct(text);
       if (parsed) {
         await sendAll(c, await addProduct(flowFor(c), { ...parsed, imageUrl: await imageUrl() }, { prefer: 'update' }));
-        if (!c.state.productDraft) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks right now'], ['ok:fix', 'Change something'], ['ok:see', 'See my shop again']]));
+        if (!c.state.productDraft) return c.reply(buttons('Anything else to change?', [['ok:yes', 'Looks good']]));
         return;
       }
       return prompt(c);
@@ -479,11 +511,20 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       return prompt(c);
     }
 
+    // Address and hours in one reply ("16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7"): what's
+    // clear is saved with a ✅ line, what's missing is asked for, what's doubtful is read back.
+    case 'place': {
+      if (choiceId || text.trim().length < 2) return prompt(c);
+      return placeAnswer(c, text);
+    }
+
     // Location: whatever they send is split into area, city, street and landmark; anything missing is
-    // asked for, then it's read back before saving. The address is also where pickup customers go.
+    // asked for; a known area is saved straight away, an unknown one is read back first.
     case 'city': case 'area': case 'street': {
       if (choiceId === 'loc:nostreet') { await setOb(c, { draft: { ...c.ob.draft, streetAsked: true } }); return nextLocation(c); }
       if (choiceId || text.trim().length < 2) return prompt(c);
+      // Hours sent with it ("Yaba · 8am to 7am"): both read, as at the first question.
+      if (splitPlaceHours(text).hours) return placeAnswer(c, text);
       const got = parseLocation(text);
       const loc: Location = { city: null, area: null, street: null, landmark: null, ...c.ob.draft?.loc };
       for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k] && (!loc[k] || c.ob.step === 'city')) loc[k] = got[k];
@@ -500,7 +541,7 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       return nextLocation(c);
     }
     case 'location_confirm': {
-      if (choiceId === 'loc:fix' || (!choiceId && /^(no|fix|wrong|change)/i.test(text.trim()))) { await setOb(c, { step: 'city', draft: { ...c.ob.draft, loc: undefined, streetAsked: false } }); return c.reply('No problem. Send the full address again, e.g. *12 Herbert Macaulay Way, Yaba, Lagos*.'); }
+      if (choiceId === 'loc:fix' || (!choiceId && /^(no|fix|wrong|change)/i.test(text.trim()))) { await setOb(c, { step: 'city', draft: { ...c.ob.draft, loc: undefined, streetAsked: false } }); return c.reply('No problem. Send the address again, e.g. *16 Atunrase Estate, Gbagada*.'); }
       if (choiceId === 'loc:ok' || (!choiceId && /^(yes|correct|right|ok(ay)?|that'?s right)\b/i.test(text.trim()))) return saveLocation(c);
       // A correction typed instead ("12 Herbert Macaulay Way", "near the market"): merged, read back again.
       if (!choiceId && text.trim().length >= 3) {
@@ -518,9 +559,9 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
     case 'hours': case 'hours_perday': {
       const draft = choiceId ? null : await readHoursText(text, c.deps.llm);
       if (!draft) return c.reply('I couldn\'t read that. Try *8am – 9pm*, or *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.');
-      // One time for every day: "Same every day?" is the check.
-      const allSame = !draft.missing.length && !draft.doubts.length && DAYS.every(d => JSON.stringify(draft.week[d]) === JSON.stringify(draft.week.mon)) && !!draft.week.mon && c.ob.step === 'hours';
-      if (allSame) { await setOb(c, { step: 'hours_same', draft: { ...c.ob.draft, hours: sameEveryDay(draft.week.mon!) } }); return prompt(c); }
+      // Clear hours are saved with a ✅ line (days not named are closed); doubtful ones are checked.
+      const clear = clearHours(draft);
+      if (clear) return saveHours(c, clear);
       return review(c, draft);
     }
     case 'hours_same': {
@@ -546,6 +587,9 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       if (!r) return c.reply(hoursQuestion(draft));
       if ('restart' in r) { await setOb(c, { step: 'hours', draft: { ...c.ob.draft, hoursReview: null } }); return c.reply('OK, send your hours again, e.g. *Mon–Fri 8am–6pm, Sat 10am–4pm, Sun closed*.'); }
       if ('done' in r) { await setOb(c, { draft: { ...c.ob.draft, hoursReview: null } }); return saveHours(c, r.done); }
+      // The doubt is settled: saved now, no second "Correct?" (days not named are closed).
+      const settled = r.draft.asking ? null : clearHours(r.draft);
+      if (settled) return saveHours(c, settled);
       return review(c, r.draft);
     }
     case 'prep': {
@@ -561,22 +605,41 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       return savePrep(c, t);
     }
 
+    // "Do you deliver?" [Pickup only] / one price for everywhere / a price list (saved straight away).
     case 'delivery': {
-      const how = choiceId === 'dl:pickup' ? 'pickup' : choiceId === 'dl:deliver' ? 'delivery' : choiceId === 'dl:both' ? 'both' : /^pick/i.test(text) ? 'pickup' : /^both/i.test(text) ? 'both' : /deliver/i.test(text) ? 'delivery' : null;
-      if (!how) return prompt(c);
-      await patchBusiness(c, { fulfilment: how });
-      if (how === 'pickup') return toPolicies(c);
-      await setOb(c, { step: 'fee_local' });
-      return prompt(c);
+      const t = text.trim();
+      if (choiceId === 'dl:pickup' || (!choiceId && !input?.document && !input?.imageId && /^(pick ?up( only)?|only pick ?up|no( delivery)?|we don'?t deliver|no,? (we )?(don'?t|dont) deliver|collection only)\b/i.test(t))) {
+        await patchBusiness(c, { fulfilment: 'pickup', shipsInterstate: false, interstatePricing: null });
+        return toFee(c, '✅ Pickup only.');
+      }
+      if (choiceId === 'dl:deliver' || choiceId === 'dl:both') { await patchBusiness(c, { fulfilment: 'both' }); return c.reply('Send your area price list, or type one price if it\'s the same everywhere.'); }
+      if (choiceId) return prompt(c);
+      const flat = input?.document || input?.imageId ? null : flatFee(t);
+      if (flat !== null) {
+        await addZone(c, 'Everywhere', '', flat, 0);
+        await patchBusiness(c, { fulfilment: 'both', shipsInterstate: false, interstatePricing: null });
+        return toFee(c, flat ? `✅ Delivery is ${formatKobo(flat)} everywhere.` : '✅ Delivery is free everywhere.');
+      }
+      const zones = { db: c.ctx.db, cfg: c.ctx.cfg, deps: c.deps, business: c.business!, convRef: c.ctx.db.doc(C.conversations, c.ctx.conversationId) };
+      const got = await importZonesNow(zones, input ?? ({ text, choiceId: null, imageId: null, audioId: null, document: null } as Input), text, c.reply);
+      if (!got) return c.reply(buttons(`Sorry, I didn't catch that. ${DELIVERY_ASK}`, [['dl:pickup', 'Pickup only']]));
+      if ('say' in got) return c.reply(got.say);
+      // All the areas are in one state: no "other states" question (DELIVERY changes it).
+      await patchBusiness(c, { fulfilment: 'both', shipsInterstate: false, interstatePricing: null });
+      // The list doesn't cover the shop's own area: that one price, then the fee.
+      const own = c.business!.area;
+      if (own && !(await quoteDelivery(c.ctx.db, c.business!.id, [own, c.business!.city].filter(Boolean).join(', '), 'self_arranged'))) {
+        await setOb(c, { step: 'fee_local' });
+        return c.reply(`${got.line}\n\nHow much is delivery around ${own}? Type 0 if it's free.`);
+      }
+      return toFee(c, got.line);
     }
     case 'fee_local': {
-      const list = await deliveryList(c, text, choiceId, input);
-      if (list) return list === 'shown' ? undefined : prompt(c);
-      const fee = feeFrom(text);
-      if (fee === null || choiceId) return c.reply(`How much is delivery within ${c.business!.area ?? 'your area'}? Send an amount, e.g. *1500*, or *0* if it's free.`);
+      const fee = choiceId ? null : feeFrom(text);
+      if (fee === null) return c.reply(`How much is delivery around ${c.business!.area ?? 'your area'}? Type 0 if it's free.`);
       await addZone(c, c.business!.area ?? 'Nearby', c.business!.area ?? '', fee, 2);
-      await setOb(c, { step: 'fee_city' });
-      return prompt(c);
+      if (!c.business!.fulfilment || c.business!.fulfilment === 'pickup') await patchBusiness(c, { fulfilment: 'both' });
+      return toFee(c, `✅ ${fee ? formatKobo(fee) : 'Free'} around ${c.business!.area ?? 'your area'}.`);
     }
     case 'fee_city': {
       const list = await deliveryList(c, text, choiceId, input);
@@ -635,31 +698,22 @@ async function fixedStep(c: Ctx, text: string, choiceId: string | null, imageUrl
       return prompt(c);
     }
 
+    // Signup is done but for connecting: everything goes to the everyday Admin Bot (commands, NEW SHOP,
+    // questions); "connect" or the old button shows [Connect my number] again. TEST is a command.
     case 'ready': {
-      if (choiceId === 'ob:connect' || /^(connect|connect now|next|continue)$/i.test(text.trim())) { await setOb(c, { step: 'check_wa' }); return prompt(c); }
-      return prompt(c);
+      if (choiceId === 'ob:connect' || /^(connect( my number| now)?|link|go live)$/i.test(text.trim())) return prompt(c);
+      return 'pass';
     }
     case 'fee_payer': {
       const payer = choiceId === 'fee:customer' ? 'customer' : choiceId === 'fee:owner' ? 'owner' : null;
       if (!payer) return prompt(c);
+      // No separate confirmation (FEE changes it later): straight to the connect button.
       await patchBusiness(c, { feePayer: payer });
-      await c.reply(payer === 'owner' ? "👍 You'll pay the fee — customers see your prices only." : "👍 Your customers pay the fee — it's added to their total as a small service fee.");
-      await setOb(c, { step: 'ready' });
-      return prompt(c);
+      await applyDefaults(c);
+      return sendReady(c);
     }
-    case 'check_wa': {
-      if (choiceId === 'wa:yes' || choiceId === 'wa:done' || choiceId === 'wa:hasb') { await setOb(c, { step: 'check_fb' }); return prompt(c); }
-      if (choiceId === 'wa:unsure') return c.reply(buttons('WhatsApp Business has a "B" on its icon. Does yours?', [['wa:hasb', 'It has a B'], ['wa:nob', 'No B']]));
-      if (choiceId === 'wa:no' || choiceId === 'wa:nob') {
-        return c.reply(buttons("Switching is free and keeps your chats: back up your chats, install *WhatsApp Business*, and verify the same number.\n\nTap *I've switched* when done, or *Call me* for help.", [['wa:done', "I've switched"], ['ob:call', 'Call me']]));
-      }
-      return prompt(c);
-    }
-    case 'check_fb': {
-      if (choiceId === 'fb:yes' || choiceId === 'fb:now') return sendConnectLink(c);
-      if (choiceId === 'fb:no') return c.reply(buttons('Meta needs a Facebook login to set up your business account. Create a free one at facebook.com, or tap *Call me* for help.', [['fb:now', 'I have one now'], ['ob:call', 'Call me']]));
-      return prompt(c);
-    }
+    // v3: no "WhatsApp Business?" / "Facebook?" questions; the connect page explains both.
+    case 'check_wa': case 'check_fb': return sendReady(c);
     case 'live_photo': case 'live_contacts': case 'live_source':
       return live(c, text, choiceId, input);
   }
@@ -672,7 +726,7 @@ const listWord = (b: Pick<Business, 'category' | 'name'> | null) => (b && exampl
 
 function welcomeText(c: Ctx, question: string) {
   const name = c.business?.ownerName ?? profileName(c.ctx.event.contactName);
-  return `Welcome to Relay${name ? `, ${first(name)}` : ''} 👋 Let's set up your WhatsApp shop. It takes about 5 minutes.\n\nBy continuing you agree to our Terms: ${c.ctx.cfg.API_BASE_URL}/terms\nStuck? Reply *CALL*.\n\n${stepLabel('basics')}${question}`;
+  return `Hi${name ? ` ${first(name)}` : ''} 👋 I'll set up your WhatsApp shop so customers can order and pay without you answering every chat. Takes about 3 minutes.\n\n${question}\n\nBy continuing you agree to our terms: ${c.ctx.cfg.API_BASE_URL}/terms`;
 }
 
 async function createShop(c: Ctx, name: string | null) {
@@ -692,12 +746,33 @@ async function createShop(c: Ctx, name: string | null) {
   await trackStep(ctx.db, { ownerPhone: ctx.ownerPhone, businessId: id, step: 'basics', event: 'entered' });
 }
 
-async function afterBasics(c: Ctx) {
+async function afterBasics(c: Ctx, lead = 'Love it. ') {
   // A menu was already added while the name was asked.
-  if ((c.ob.productsAdded ?? 0) > 0) return showPreview(c);
-  if (c.state.importDraft?.items.length) { await setStage(c, 'products', 'products'); return c.reply(`Thanks${c.business!.ownerName ? `, ${first(c.business!.ownerName)}` : ''}! Now tap *Add all* on the list above to add your products.`); }
+  if ((c.ob.productsAdded ?? 0) > 0) return afterProducts(c, lead === 'Love it. ' ? '' : lead);
+  if (c.state.importDraft?.items.length) { await setStage(c, 'products', 'products'); return c.reply(`${lead}Now tap *Looks good* on the list above to add your products.`); }
   await setStage(c, 'products', 'products');
-  return prompt(c);
+  return c.reply(`${lead}${MENU_ASK}`);
+}
+
+const MENU_ASK = 'Send me your menu: a PDF, a photo, or just type it out.';
+const PLACE_ASK = "Where's the shop, and when are you open?\ne.g. 16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7";
+const DELIVERY_ASK = 'Do you deliver? Send your area price list, or type one price if it\'s the same everywhere.';
+
+// Products are in: the type is guessed quietly (never asked), photos come after go-live, and the next
+// question is the address and hours together.
+async function afterProducts(c: Ctx, lead = '') {
+  await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'products', event: 'completed' });
+  await inferType(c);
+  await setStage(c, 'location', 'place');
+  return c.reply(`${lead}${PLACE_ASK}`);
+}
+
+// The business type from the products themselves (never asked); left "other" when unclear.
+async function inferType(c: Ctx) {
+  if (c.business!.category !== 'other' || c.business!.businessTypeInferred) return;
+  const [cats, products] = await Promise.all([listCategories(c.ctx.db, c.business!.id), listProducts(c.ctx.db, c.business!.id)]);
+  const guess = inferBusinessType(products.map(p => ({ name: p.name, category: cats.find(x => x.id === p.categoryId)?.name })));
+  if (guess.confident && guess.type) await patchBusiness(c, { category: guess.type, businessTypeInferred: true });
 }
 
 // Products typed one by one: the first one decides the starter categories, so the owner isn't asked.
@@ -775,59 +850,199 @@ async function previewTap(c: Ctx, choiceId: string) {
 }
 
 
-async function afterPreview(c: Ctx) {
-  await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'preview', event: 'completed' });
-  if (c.business!.category === 'other' && !c.business!.businessTypeInferred) { await setOb(c, { step: 'type' }); return prompt(c); }
-  return toPhotos(c);
+// "Change something" after a list: how, in one line ([Looks good] when done).
+function fixHint(c: Ctx, ps: Product[]) {
+  const name = example(c.business!, ps, { nameOnly: true });
+  const p = ps.find(x => x.name === name);
+  return `Saved. To change a price send it, e.g. *${example(c.business!, ps, { price: p ? Math.round(p.priceKobo / 100) + 500 : undefined })}*. To remove one: *delete ${name}*.`;
 }
 
-async function toPhotos(c: Ctx) {
-  const products = await listProducts(c.ctx.db, c.business!.id);
-  if (products.every(p => p.images.length)) return toLocation(c);
-  // Photos from their file are still being matched: don't ask for photos now.
-  if (c.ob.photosId && (await c.ctx.db.get(c.ctx.db.doc(C.importPhotos, c.ob.photosId)))?.status === 'pending') return toLocation(c);
-  await setOb(c, { step: 'photos' });
-  return prompt(c);
-}
+// v3: no business-type question and no photos before launch (both come later on their own).
+async function afterPreview(c: Ctx) { return afterProducts(c); }
 
-async function toLocation(c: Ctx) { await setStage(c, 'location', 'city'); return prompt(c); }
+// v3: photos come after go-live; these old steps go straight on.
+async function toPhotos(c: Ctx) { return afterProducts(c); }
+async function toLocation(c: Ctx) { return afterProducts(c); }
 
 const LANDMARK_RE = /[\s,]+(near|opposite|beside|close to|behind|next to)\s+.+$/i;
 
-// Asks for whatever's still missing (area, then city, then street), then reads it all back.
+// ── Address and hours ──
+// "16 Atunrase Estate, Gbagada · Mon–Fri 8–7, Sat 10–7": the parts with days or times are the hours,
+// the rest is the address (either order, either may be missing).
+const HOURS_PART = /\b(mon|tue|wed|thu|fri|sat|sun|week ?days?|week ?ends?|daily|every ?day|closed?|open|24 ?hours)/i;
+const TIME_RANGE = /\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a|p)?\s*(?:-|–|—|to|till|til|until)\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a|p)?\b/i;
+export function splitPlaceHours(text: string): { address: string; hours: string } {
+  // A comma starts the hours when what follows has a day, "daily", "closed"… or a time range.
+  const parts = text.split(/\s*[·•|\n;]\s*|,\s*(?=[^,]*(?:\b(?:mon|tue|wed|thu|fri|sat|sun|week|daily|every|closed|open)|\d{1,2}\s*(?:am|pm)?\s*(?:-|–|to|till)\s*\d))/i).map(p => p.trim()).filter(Boolean);
+  const address: string[] = [], hours: string[] = [];
+  for (const p of parts) {
+    const timeish = HOURS_PART.test(p) || (TIME_RANGE.test(p) && !/[a-z]{3,}/i.test(p.replace(TIME_RANGE, '').replace(/\b(am|pm|to|till|until|from|we|are|open|daily)\b/gi, '')));
+    (timeish ? hours : address).push(p.replace(/^(we'?re|we are|we dey|i'?m|it'?s|at|in)\s+/i, ''));
+  }
+  return { address: address.join(', '), hours: hours.join(', ') };
+}
+
+// Hours with nothing doubtful: the week (days not named are closed). null: they need checking.
+function clearHours(d: HoursDraft): Hours | null {
+  if (d.doubts.length || d.orphan) return null;
+  if (!Object.keys(d.week).length) return null;
+  return validHours(Object.fromEntries(DAYS.map(day => [day, d.week[day] ?? null])));
+}
+
+// A complete address in an area Relay knows: saved without asking. Otherwise null.
+function clearLocation(loc: Partial<Location> | undefined): Location | null {
+  if (!loc?.area || !loc.city) return null;
+  // Known, and in the city given ("Sango" is an Ibadan area: "Sango Ota, Ogun" is read back).
+  const city = knownArea(loc.area);
+  return city && city.toLowerCase() === loc.city.toLowerCase() ? { city: loc.city, area: loc.area, street: loc.street ?? null, landmark: loc.landmark ?? null } : null;
+}
+
+async function placeAnswer(c: Ctx, text: string) {
+  const { address, hours } = splitPlaceHours(text);
+  let doubtfulLoc: Location | null = null, doubtfulHours: HoursDraft | null = null;
+  if (address) {
+    const got = parseLocation(address);
+    const loc: Location = { city: null, area: null, street: null, landmark: null, ...c.ob.draft?.loc };
+    for (const k of ['city', 'area', 'street', 'landmark'] as const) if (got[k]) loc[k] = got[k];
+    const clear = clearLocation(loc);
+    if (clear) await saveLoc(c, clear);
+    else if (loc.area || loc.street) { doubtfulLoc = loc; await setOb(c, { draft: { ...c.ob.draft, loc } }); }
+  }
+  if (hours) {
+    const draft = await readHoursText(hours, c.deps.llm);
+    const clear = draft ? clearHours(draft) : null;
+    if (clear) await saveHoursQuiet(c, clear);
+    else if (draft) doubtfulHours = draft;
+  }
+  // Doubtful: only that one is read back (with the ✅ lines for what was saved).
+  if (doubtfulLoc) {
+    if (!doubtfulLoc.area || !doubtfulLoc.city) return nextLocation(c);
+    const ticks = takeTicks(c);
+    await setStage(c, 'location', 'location_confirm');
+    if (doubtfulHours) await setOb(c, { draft: { ...c.ob.draft, hoursReview: doubtfulHours } });
+    return c.reply(buttons(`${ticks}📍 ${describeLocation(doubtfulLoc)}. Is that right?`, [['loc:ok', 'Yes, that\'s right'], ['loc:fix', 'Fix it']]));
+  }
+  if (doubtfulHours) return review(c, doubtfulHours);
+  if (!c.ob.draft?.ticks?.length) return c.reply(`Sorry, I didn't catch that. ${PLACE_ASK}`);
+  return placeNext(c);
+}
+
+// The ✅ lines for what was just saved, sent with the next question (one message).
+function addTick(c: Ctx, line: string) { c.ob = { ...c.ob, draft: { ...c.ob.draft, ticks: [...(c.ob.draft?.ticks ?? []), line] } }; }
+function takeTicks(c: Ctx) {
+  const t = c.ob.draft?.ticks ?? [];
+  c.ob = { ...c.ob, draft: { ...c.ob.draft, ticks: [] } };
+  return t.length ? `${t.join('\n')}\n\n` : '';
+}
+
+async function saveLoc(c: Ctx, loc: Location) {
+  await patchBusiness(c, { city: loc.city!.slice(0, 60), area: loc.area!.slice(0, 60), address: loc.street?.slice(0, 120) ?? null, landmark: loc.landmark?.slice(0, 80) ?? null });
+  addTick(c, `✅ ${describeLocation(loc)}`);
+  await setOb(c, { draft: { ...c.ob.draft, loc: undefined, streetAsked: false } });
+}
+async function saveHoursQuiet(c: Ctx, hours: Hours) {
+  // Orders after hours stay on by default (AFTER HOURS changes it); not mentioned here.
+  await patchBusiness(c, { hours, afterHours: c.business!.afterHours ?? 'orders' });
+  addTick(c, `✅ ${describeHours(hours)}`);
+  await setOb(c, { draft: { ...c.ob.draft, hoursReview: null } });
+}
+
+// What's still missing (address, then hours), then "Do you deliver?".
+async function placeNext(c: Ctx) {
+  const b = c.business!;
+  const ticks = takeTicks(c); // cleared before the step is saved, so they're sent once
+  if (!b.area) { await setStage(c, 'location', 'city'); return c.reply(`${ticks}And where's the shop? e.g. *16 Atunrase Estate, Gbagada*`); }
+  if (!b.hours) { await setStage(c, 'hours', 'hours'); return c.reply(`${ticks}And what time do you open and close?`); }
+  await setStage(c, 'delivery', 'delivery');
+  return c.reply(buttons(`${ticks}${DELIVERY_ASK}`, [['dl:pickup', 'Pickup only']]));
+}
+
+// Asks for what's missing (area, then city); a known area is saved, an unknown one is read back.
 async function nextLocation(c: Ctx) {
   const loc = c.ob.draft?.loc;
-  const next: Step = !loc?.area ? 'area' : !loc.city ? 'city' : !loc.street && !c.ob.draft?.streetAsked ? 'street' : 'location_confirm';
-  await setOb(c, { step: next });
+  if (!loc?.area || !loc.city) { await setOb(c, { step: !loc?.area ? 'area' : 'city' }); return prompt(c); }
+  const clear = clearLocation(loc);
+  if (clear) { await saveLoc(c, clear); return placeNext(c); }
+  await setOb(c, { step: 'location_confirm' });
   return prompt(c);
 }
 
 async function saveLocation(c: Ctx) {
   const loc = c.ob.draft?.loc;
   if (!loc?.area || !loc.city) { await setOb(c, { step: 'city' }); return prompt(c); }
-  await patchBusiness(c, { city: loc.city.slice(0, 60), area: loc.area.slice(0, 60), address: loc.street?.slice(0, 120) ?? null, landmark: loc.landmark?.slice(0, 80) ?? null });
-  await setStage(c, 'hours', 'hours');
-  return prompt(c);
+  await saveLoc(c, { city: loc.city, area: loc.area, street: loc.street ?? null, landmark: loc.landmark ?? null });
+  // Hours sent with the address and also doubtful: checked next.
+  const pending = c.ob.draft?.hoursReview;
+  if (pending && !c.business!.hours) return review(c, pending);
+  return placeNext(c);
 }
 
 async function review(c: Ctx, draft: HoursDraft) {
+  const ticks = takeTicks(c);
   await setOb(c, { step: 'hours_review', draft: { ...c.ob.draft, hoursReview: draft } });
-  return c.reply(withLabel(hoursQuestion(draft), stepLabel('hours')));
+  const q = hoursQuestion(draft);
+  return c.reply(ticks ? withLabel(q, ticks) : q);
 }
 
 async function saveHours(c: Ctx, hours: Hours) {
-  await patchBusiness(c, { hours, afterHours: c.business!.afterHours ?? 'orders' });
-  await c.reply(`✅ ${describeHours(hours)}. When you're closed, customers can still order for later (*AFTER HOURS* to change).`);
-  if (c.business!.category === 'food_beverage') { await setOb(c, { step: 'prep' }); return prompt(c); }
-  await setStage(c, 'delivery', 'delivery');
-  return prompt(c);
+  await saveHoursQuiet(c, hours);
+  return placeNext(c);
 }
 
 async function savePrep(c: Ctx, label: string) {
   await patchBusiness(c, { prepTime: label });
-  await setStage(c, 'delivery', 'delivery');
-  return prompt(c);
+  return placeNext(c);
 }
+
+// One price for everywhere: "1500", "0", "free", "₦2k everywhere". Not "Yaba 3000" (an area).
+function flatFee(t: string): number | null {
+  const s = t.trim().toLowerCase();
+  if (/^(0|free|free delivery|nothing|zero)$/.test(s)) return 0;
+  const bare = nairaToKobo(s.replace(/^(₦|n)\s*/, '').replace(/\s*naira$/, ''));
+  if (bare !== null && bare >= 0 && bare <= 100_000_000) return bare;
+  if (/\b(everywhere|all areas|anywhere|same (price|everywhere)|flat|any area)\b/.test(s)) return feeFrom(s);
+  return null;
+}
+
+// "Last thing": who pays Relay's fee.
+async function toFee(c: Ctx, line: string) {
+  await setStage(c, 'connect', 'fee_payer');
+  const cfg = c.ctx.cfg;
+  const cap = formatKobo(cfg.FEE_CAP_KOBO + (cfg.PROCESSOR_FEE_BPS ? cfg.PROCESSOR_FEE_CAP_KOBO : 0));
+  return c.reply(buttons(`${line ? `${line}\n\n` : ''}Last thing: Relay costs nothing upfront. We take ${feeRate(cfg)} of each sale (max ${cap}), only when you get paid. Who pays it?`, [['fee:customer', 'Customers pay'], ['fee:owner', "I'll pay"]]));
+}
+
+// What signup no longer asks, set quietly (each one has its command): prep time and policies for food
+// shops, orders after hours on, no shipping to other states.
+async function applyDefaults(c: Ctx) {
+  const b = c.business!;
+  const food = b.category === 'food_beverage';
+  await patchBusiness(c, {
+    prepTime: b.prepTime ?? (food ? '15–30 min' : null),
+    policies: b.policies !== undefined ? b.policies : food ? defaultPolicies('food_beverage') : null,
+    afterHours: b.afterHours ?? 'orders',
+    shipsInterstate: b.shipsInterstate ?? false,
+  });
+}
+
+// "Done 🎉 … [Connect my number]": the link opens the connect page (24 hours). TEST tries the shop first.
+// From here the owner uses the everyday Admin Bot (signup is closed; ownerPhones.onboardingStage stays
+// "connect" until the number is connected). CONNECT, or EXIT after TEST, shows the button again.
+async function sendReady(c: Ctx) {
+  const link = await createSignupSession(c.ctx.db, c.ctx.cfg, c.business!.id);
+  await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'connect_link', event: 'entered' });
+  await setStage(c, 'connect', 'ready');
+  await c.ctx.db.set(c.ctx.db.doc(C.conversations, c.ctx.conversationId), { onboarding: null }, { merge: true });
+  return c.reply(readyMessage(c.business!.name, link));
+}
+// The [Connect my number] message with a fresh link (CONNECT, and after TEST).
+export async function connectButton(db: AdminContext['db'], cfg: AdminContext['cfg'], business: Pick<Business, 'id' | 'name'>) {
+  return readyMessage(business.name, await createSignupSession(db, cfg, business.id));
+}
+export const readyMessage = (name: string, link: string): OutboundContent => ({
+  type: 'interactive',
+  interactive: { type: 'cta_url', body: { text: `Done 🎉 ${name} is ready. Connect your WhatsApp number to go live. Meta will ask you to log into Facebook.\n\nWant to try it as a customer first? Reply *TEST*.` }, action: { name: 'cta_url', parameters: { display_text: 'Connect my number', url: link } } },
+});
 
 const feeFrom = (text: string) => {
   const t = text.trim().toLowerCase();
@@ -863,34 +1078,21 @@ async function addZone(c: Ctx, name: string, match: string, feeKobo: number, pri
   await saveZone(c.ctx.db, { id: `${c.business!.id}_${randomId(6).replace(/[^A-Za-z0-9]/g, 'x')}`, businessId: c.business!.id, name: name.slice(0, 60), match: match.slice(0, 60), feeKobo, timeframe: '', active: true, priority });
 }
 
+// The old in-between steps (other states, policies, messages) finish into the fee question, for
+// chats that were halfway through the previous flow.
 async function toPolicies(c: Ctx) {
-  // The delivery prices, read back once they're all set.
+  const parts: string[] = [];
   if (c.business!.fulfilment !== 'pickup') {
     const zones = await listZones(c.ctx.db, c.business!.id);
     const fee = (k: number) => (k ? formatKobo(k) : 'free');
-    const local = zones.find(z => z.priority === 2), city = zones.find(z => z.priority === 1), other = zones.find(z => z.priority === 0 && !z.match);
-    const parts = [
-      local ? `${fee(local.feeKobo)} within ${local.name}` : null,
-      city ? `${fee(city.feeKobo)} elsewhere in ${city.name}` : null,
-      c.business!.shipsInterstate ? `other states: ${other ? fee(other.feeKobo) : 'you quote per order'}` : null,
-    ].filter(Boolean);
-    if (parts.length) await c.reply(`✅ Delivery: ${parts.join(' · ')}.${c.business!.fulfilment === 'both' ? ' Pickup is free.' : ''}`);
+    const local = zones.find(z => z.priority === 2), city = zones.find(z => z.priority === 1);
+    if (local) parts.push(`${fee(local.feeKobo)} within ${local.name}`);
+    if (city) parts.push(`${fee(city.feeKobo)} elsewhere in ${city.name}`);
   }
-  await setOb(c, { step: 'policies' });
-  return prompt(c);
+  return toFee(c, parts.length ? `✅ Delivery: ${parts.join(' · ')}.` : '');
 }
-// Who pays Relay's fee comes before TEST, so the pretend order already shows the right total.
-async function toMessages(c: Ctx) { await setOb(c, { step: 'msg_offer' }); return prompt(c); }
-async function toReady(c: Ctx) { await setStage(c, 'connect', 'fee_payer'); return prompt(c); }
-
-async function sendConnectLink(c: Ctx) {
-  const link = await createSignupSession(c.ctx.db, c.ctx.cfg, c.business!.id);
-  await trackStep(c.ctx.db, { ownerPhone: c.ctx.ownerPhone, businessId: c.business!.id, step: 'connect_link', event: 'entered' });
-  // From here the owner uses the everyday Admin Bot; ownerPhones.onboardingStage stays "connect"
-  // until the number is connected (then the go-live questions come).
-  await c.ctx.db.set(c.ctx.db.doc(C.conversations, c.ctx.conversationId), { onboarding: null }, { merge: true });
-  return c.reply(`Last step: connect your number with Facebook 👇\n${link}\nThe link works for 24 hours.`);
-}
+async function toMessages(c: Ctx) { return toFee(c, ''); }
+async function toReady(c: Ctx) { return toFee(c, ''); }
 
 // ── After go-live: optional questions; anything else goes to the Admin Bot ──
 async function live(c: Ctx, text: string, choiceId: string | null, input?: Input): Promise<unknown> {
@@ -900,25 +1102,24 @@ async function live(c: Ctx, text: string, choiceId: string | null, input?: Input
     case 'live_photo': {
       if (input?.imageId && c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN) {
         const url = await storeProfilePhoto(c.ctx.cfg, c.deps, c.ctx.cfg.ADMIN_BOT_ACCESS_TOKEN, input.imageId, biz.id).catch(e => { log('warn', 'profile_photo_failed', { error: String(e instanceof Error ? e.message : e).slice(0, 120) }); return null; });
-        if (!url) return c.reply(buttons('Sorry, I couldn\'t save that photo. Try again, or skip for now.', [['lp:skip', 'Skip the picture']]));
+        if (!url) return c.reply(buttons('Sorry, I couldn\'t save that photo. Try again, or skip for now.', [['lp:skip', 'Skip']]));
         await patchBusiness(c, { profilePhotoUrl: url });
-        await c.reply('Lovely ✅ That\'s your shop\'s picture now.');
-      } else if (choiceId !== 'lp:skip') return 'pass';
-      await setOb(c, { step: 'live_contacts' });
-      return livePrompt(c);
+        return finishLive(c, 'Lovely ✅ That\'s your shop\'s picture now.');
+      }
+      if (choiceId !== 'lp:skip') return 'pass';
+      return finishLive(c, 'OK 👍 Send *PICTURE* any time.');
     }
+    // Each follow-up is one question (a nudge after go-live, or its command): answered, it's done.
     case 'live_contacts': {
       if (choiceId !== 'lc:yes' && choiceId !== 'lc:no') return 'pass';
       await patchBusiness(c, { importContacts: choiceId === 'lc:yes' });
-      await c.reply(choiceId === 'lc:yes' ? 'Done ✅ Your existing customers will appear in *CUSTOMERS* as WhatsApp shares them.' : 'OK, only people who order through Relay will be in your customer list.');
-      await setOb(c, { step: 'live_source' });
-      return livePrompt(c);
+      return finishLive(c, choiceId === 'lc:yes' ? 'Done ✅ They\'ll appear in *CUSTOMERS* as WhatsApp shares them.' : 'OK 👍 Only people who order will be in your customer list.');
     }
     case 'live_source': {
       const pick = SOURCES.find(([id]) => id === choiceId);
       if (!pick) return 'pass';
       await patchBusiness(c, { acquisitionSource: pick[0].slice(4) });
-      return finishLive(c, 'Thank you! 🙏 Send *HELP* any time to see what I can do.');
+      return finishLive(c, 'Thank you! 🙏');
     }
     default: return 'pass';
   }
@@ -931,11 +1132,11 @@ async function finishLive(c: Ctx, text: string) {
   return c.reply(text);
 }
 
-// The go-live questions, used right after connecting (go-live.ts) and when re-asked.
-export function liveQuestion(step: Step, business: Pick<Business, 'name'>): OutboundContent | null {
-  if (step === 'live_photo') return buttons(`Your WhatsApp Business profile has no picture yet. Send one for ${business.name}: your logo or a nice photo of your shop or products.`, [['lp:skip', 'Skip the picture']]);
-  if (step === 'live_contacts') return buttons('WhatsApp can share the contacts and recent chats already on your shop\'s number. Add those people to your customer list (*CUSTOMERS*)? Only you see them, and you can remove them any time.', [['lc:yes', 'Yes, add them'], ['lc:no', 'No, leave them out']]);
-  if (step === 'live_source') return list('Last one, and optional: how did you hear about Relay?', 'How I found Relay', SOURCES.map(([id, title]) => ({ id, title })), 'How you found us');
+// The follow-up questions (nudges.ts sends them after go-live; PICTURE and CONTACTS ask them again).
+export function liveQuestion(step: Step, _business: Pick<Business, 'name'>): OutboundContent | null {
+  if (step === 'live_photo') return PICTURE_ASK();
+  if (step === 'live_contacts') return CONTACTS_ASK();
+  if (step === 'live_source') return SOURCE_ASK();
   return null;
 }
 
@@ -953,9 +1154,10 @@ async function prompt(c: Ctx): Promise<unknown> {
   switch (c.ob.step) {
     // The welcome only once: after it, just the question.
     case 'shop_name': return ask(c.ob.adding ? `What's the new shop or branch called?` : c.ob.welcomed ? 'What\'s your shop called?' : welcomeText(c, 'What\'s your shop called?'));
-    case 'owner_name': return ask("What's *your* name?");
-    case 'products': return ask(`Send your ${listWord(biz)} or price list (PDF, photo or pasted list).\n\nNo list? Type one product, e.g. *${example(biz ?? {})}*.`);
-    case 'preview': return ask(buttons('Does your shop look right?', [['ok:yes', 'Looks right'], ['ok:fix', 'Change something'], ['prod:more', 'Add more products']]));
+    case 'owner_name': return ask('And what should I call you?');
+    case 'products': return ask(MENU_ASK);
+    case 'place': return ask(PLACE_ASK);
+    case 'preview': return ask(buttons(fixHint(c, biz ? await listProducts(c.ctx.db, biz.id) : []).replace(/^Saved\. /, ''), [['ok:yes', 'Looks good']]));
     case 'type': return ask(list(`What kind of business is ${biz?.name ?? 'it'}?`, 'Pick business type', BUSINESS_TYPES.map(t => ({ id: `btype:${t.id}`, title: t.label })), 'Business type'));
     case 'photos': {
       const without = biz ? (await listProducts(c.ctx.db, biz.id)).filter(p => !p.images.length) : [];
@@ -966,15 +1168,15 @@ async function prompt(c: Ctx): Promise<unknown> {
     case 'city': {
       const area = c.ob.draft?.loc?.area;
       if (area) return ask(`Which city or state is *${area}* in?`);
-      return ask(`Where is ${biz?.name ?? 'your shop'}? e.g. *12 Herbert Macaulay Way, Yaba, Lagos*\nPickup customers get this address.`);
+      return ask("And where's the shop? e.g. *16 Atunrase Estate, Gbagada*");
     }
-    case 'area': return ask(`Which area${c.ob.draft?.loc?.city ? ` in ${c.ob.draft.loc.city}` : ''} is ${biz?.name ?? 'your shop'} in? e.g. *Yaba*`);
+    case 'area': return ask(`Which area${c.ob.draft?.loc?.city ? ` of ${c.ob.draft.loc.city}` : ''} is that in? e.g. *Gbagada*`);
     case 'street': {
       const loc = c.ob.draft?.loc;
       return ask(buttons(`What's the street or building in ${loc?.area ?? 'your area'}? e.g. *12 Herbert Macaulay Way*`, [['loc:nostreet', 'No pickup address']]));
     }
     case 'location_confirm': return ask(buttons(`📍 ${describeLocation(c.ob.draft?.loc ?? {})}. Is that right?`, [['loc:ok', 'Yes, that\'s right'], ['loc:fix', 'Fix it']]));
-    case 'hours': return ask(`What time do you open and close? e.g. *8am – 9pm*, or *Mon–Fri 8am–6pm, Sun closed*`);
+    case 'hours': return ask('And what time do you open and close? e.g. *Mon–Fri 8–7, Sat 10–7*');
     case 'hours_same': {
       const h = validHours(c.ob.draft?.hours);
       return ask(buttons(`${h ? `${describeHours(h).replace(/^Every day /, '')}. ` : ''}Same every day?`, [['hrs:same', 'Yes, every day'], ['hrs:perday', 'No, set per day'], ['hrs:closed', 'Closed some days']]));
@@ -984,8 +1186,8 @@ async function prompt(c: Ctx): Promise<unknown> {
     case 'hours_review': return c.ob.draft?.hoursReview ? ask(hoursQuestion(c.ob.draft.hoursReview)) : ask('What time do you open and close? e.g. *8am – 9pm*');
     case 'prep': return ask(list('How long does an order usually take to prepare?', 'Pick prep time', [...PREP_TIMES.map((t, i) => ({ id: `prep:${i}`, title: t })), { id: 'prep:custom', title: 'Something else' }], 'Prep time'));
     case 'prep_custom': return ask('How long does an order usually take? e.g. *45 minutes*');
-    case 'delivery': return ask(buttons(`How do customers get their orders?`, [['dl:pickup', 'Pickup only'], ['dl:deliver', 'Delivery only'], ['dl:both', 'Pickup & delivery']]));
-    case 'fee_local': return ask(`How much is delivery within ${biz?.area ?? 'your area'}? e.g. *1500*, or *0* if free.\n\nHave a full list of areas and prices? Paste it or send the spreadsheet, PDF or photo.`);
+    case 'delivery': return ask(buttons(DELIVERY_ASK, [['dl:pickup', 'Pickup only']]));
+    case 'fee_local': return ask(`How much is delivery around ${biz?.area ?? 'your area'}? Type 0 if it's free.`);
     case 'fee_city': return ask(buttons(`And elsewhere in ${biz?.city ?? 'your city'}? e.g. *3000*\n\nOr paste your full list of areas and prices (or send the spreadsheet, PDF or photo).`, [['fc:no', `Only ${(biz?.area ?? 'my area').slice(0, 15)}`]]));
     case 'interstate': return ask(buttons('Do you send orders to other states?', [['is:yes', 'Yes, other states'], ['is:no', 'No, just nearby']]));
     case 'interstate_pricing': return ask(buttons('How do you charge for other states?', [['is:flat', 'One flat price'], ['is:quote', 'I quote per order']]));
@@ -1003,10 +1205,10 @@ async function prompt(c: Ctx): Promise<unknown> {
       await ask(first);
       return sendAll(c, rest);
     }
-    case 'ready': return ask(buttons(`${biz?.name ?? 'Your shop'} is ready 🎉 Try it as a customer first (pretend payment, real receipt), then connect your number.`, [['test:start', 'Test my shop'], ['ob:connect', 'Connect my number']]));
-    case 'fee_payer': return ask(buttons(`You only pay when you get paid: *${feeTerms(c.ctx.cfg)}*. Nothing upfront or monthly.\n\nWho pays it? You can change this with *FEE*.`, [['fee:customer', 'My customers pay'], ['fee:owner', "I'll pay the fee"]]));
-    case 'check_wa': return ask(buttons('Is your shop\'s number on the *WhatsApp Business* app (the one with a "B")?', [['wa:yes', "Yes, it's Business"], ['wa:no', 'No, regular WhatsApp'], ['wa:unsure', 'Not sure']]));
-    case 'check_fb': return ask(buttons('Can you log into Facebook? Meta uses it to set up your business account.', [['fb:yes', 'Yes, I can log in'], ['fb:no', 'No Facebook account']]));
+    case 'ready': return sendReady(c);
+    case 'fee_payer': return toFee(c, '');
+    case 'check_wa': case 'check_fb': return sendReady(c);
+
     case 'live_photo': case 'live_contacts': case 'live_source': return livePrompt(c);
   }
 }
@@ -1028,7 +1230,7 @@ function passToAdmin(text: string) {
 
 // Steps whose answer is free text: only the one-word commands count there.
 const FREE_TEXT: Step[] = ['msg_pick', 'owner_name', 'city', 'area', 'street', 'location_confirm', 'prep_custom', 'policies_edit', 'fee_local', 'fee_city', 'interstate_fee', 'msg_custom'];
-const ONE_WORD = /^(help|products|my products|fee|hours|policies|messages|orders|categories|after ?hours|customers|commands)$/i;
+const ONE_WORD = /^(help|products|my products|fee|hours|policies|messages|orders|categories|after ?hours|customers|commands|delivery|name|prep|greeting|picture|photos|contacts)$/i;
 function isCommand(text: string, step: Step) {
   const t = text.trim().replace(/[.!]+$/, '');
   if (ONE_WORD.test(t)) return true;

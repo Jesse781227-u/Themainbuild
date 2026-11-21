@@ -35,41 +35,33 @@ const opts = (m: { options: string[] }[]) => m.flatMap(x => x.options);
 const texts = (m: { text: string }[]) => m.map(x => x.text).join('\n---\n');
 const shopOf = async (phone: string) => (await db.query('businesses', [['ownerPhone', '==', `+${phone}`]]))[0] as unknown as Business;
 
-// Short plain answers (the fixed steps) up to the hours question.
-async function toHours(bot: Bot, from: string) {
+// Short plain answers (the fixed steps) up to "Where's the shop, and when are you open?".
+async function toPlace(bot: Bot, from: string) {
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
   await say('hi');
   await say('Ada Store');
   const card = await say('Gift box 5000');
   const pick = opts(card).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
   if (pick) await say('Category', pick);
-  await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (opts(last).some(id => id.startsWith('btype:'))) last = await say('Type', 'btype:other');
-  if (opts(last).includes('ph:skip')) await say('Skip for now', 'ph:skip');
-  await say('Lagos, Ikeja');
-  await say('No pickup address', 'loc:nostreet');
-  return say('Yes', 'loc:ok');
+  return say("That's all", 'prod:done');
 }
 
 before(async () => { await clearFirestore(); });
 
-test('signup assistant: "8 to 7 on weedays and 10 to 7 on saturday" → Sunday asked, then the usual check', async () => {
+test('signup assistant: "8 to 7 on weedays and 10 to 7 on saturday" plus the address → both saved, one message', async () => {
   const llm = scripted();
   const bot = new Bot(llm);
   const from = '2348035550101';
-  assert.match(texts(await toHours(bot, from)), /What time do you open and close/);
+  assert.match(texts(await toPlace(bot, from)), /Where's the shop, and when are you open\?/);
   const week = { mon: '08:00-19:00', tue: '08:00-19:00', wed: '08:00-19:00', thu: '08:00-19:00', fri: '08:00-19:00', sat: '10:00-19:00', sun: 'unknown' };
-  llm.steps.push({ call: [['setHours', week]] }, { say: '👍' });
-  const r = await bot.send('admin', { from, text: '8 to 7 on weedays and 10 to 7 on saturday' });
+  llm.steps.push({ call: [['setLocation', { street: '16 Atunrase Estate', area: 'Gbagada' }], ['setHours', week]] }, { say: '👍' });
+  const r = await bot.send('admin', { from, text: 'we dey 16 atunrase estate gbagada, 8 to 7 on weedays and 10 to 7 on saturday' });
   assert.equal(r.length, 1, 'one message, not two');
-  assert.match(r[0].text, /And Sunday\?/);
+  assert.match(r[0].text, /^✅ 16 Atunrase Estate, Gbagada, Lagos\n✅ Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\n\nDo you deliver\?/);
   assert.doesNotMatch(r[0].text, /👍/, 'the AI\'s "👍" isn\'t sent on top of the next question');
-  assert.deepEqual(opts(r), ['hrv:closed', 'hrv:same', 'hrv:diff']);
-  assert.ok(llm.seen[0].tools.includes('setHours') && !llm.seen[0].tools.includes('setShopName'), 'only the tools for this step');
-  const check = await bot.send('admin', { from, text: 'Closed', choice: 'hrv:closed' });
-  assert.match(texts(check), /Mon–Fri 8am–7pm · Sat 10am–7pm · Sun closed\. Correct\?/);
-  assert.equal((await shopOf(from)).hours ?? null, null, 'nothing saved before Yes');
+  assert.ok(llm.seen[0].tools.includes('setHours') && llm.seen[0].tools.includes('setLocation') && !llm.seen[0].tools.includes('setShopName'), 'only the tools for this step');
+  const shop = await shopOf(from);
+  assert.deepEqual([shop.area, shop.hours?.sat, shop.hours?.sun], ['Gbagada', { open: '10:00', close: '19:00' }, null]);
 });
 
 test('signup assistant: a question mid-signup is answered, then the same question again', async () => {
@@ -115,17 +107,18 @@ test('signup assistant: the AI down (quota) → the fixed step reads it, as befo
   const llm = scripted();
   const bot = new Bot(llm);
   const from = '2348035550104';
-  await toHours(bot, from);
+  await toPlace(bot, from);
   llm.steps.push({ fail: true });
   const r = await bot.send('admin', { from, text: 'we dey open 8am to 9pm every day of the week' });
-  assert.match(texts(r), /Same every day\?/);
+  assert.equal(r[0].text, "✅ Every day 8am–9pm\n\nAnd where's the shop? e.g. *16 Atunrase Estate, Gbagada*");
 });
 
 test('signup assistant: short plain answers skip the AI; a button step offers the buttons as a choice', async () => {
   const llm = scripted();
   const bot = new Bot(llm);
-  await toHours(bot, '2348035550105');
-  assert.equal(llm.seen.length, 0, 'plain answers like "Ada Store" and "Lagos, Ikeja" never called the model');
+  await toPlace(bot, '2348035550105');
+  await bot.send('admin', { from: '2348035550105', text: 'Ikeja, Lagos · 8am-9pm', name: 'Tayo' });
+  assert.equal(llm.seen.length, 0, 'plain answers like "Ada Store" and "Ikeja, Lagos · 8am-9pm" never called the model');
   const h = { step: 'fee_payer', message: 'make customers pay am', business: null, options: [{ id: 'fee:customer', title: 'My customers pay' }, { id: 'fee:owner', title: "I'll pay the fee" }] } as unknown as SignupHelpers;
   assert.deepEqual(signupTools(h).map(t => t.spec.name), ['pickOption', 'callMe']);
   assert.deepEqual(amountsIn('jollof na 2.5k, fried rice ₦3,000 and 1500 for small chops'), [2500, 3000, 1500]);
@@ -145,30 +138,28 @@ test('signup assistant: names, places and times must come from the owner, not fr
   assert.ok(await hours.run({ mon: '09:00-17:00', sun: 'closed' }, null));
 });
 
-test('signup assistant: words at a question with buttons ("we no dey open sunday", "make my customers pay am") work like the tap', async () => {
+test('signup assistant: words at a question with buttons ("we close by 7 in the evening", "make my customers pay am") work like the tap', async () => {
   const llm = scripted();
   const bot = new Bot(llm);
   const from = '2348035550106';
-  await toHours(bot, from);
-  await bot.send('admin', { from, text: 'Mon-Fri 8am-7pm, Sat 10am-7pm' });          // fixed reader: Sunday is asked
-  // A short plain sentence at the buttons [Closed] [Same as Mon–Fri] [Different hours] goes to the AI.
-  llm.steps.push({ call: [['pickOption', { option: 'Closed' }]] });
-  const check = await bot.send('admin', { from, text: 'we dont open sundays' });
-  assert.ok(llm.seen.at(-1)!.tools.includes('pickOption'));
-  assert.match(llm.seen.at(-1)!.system, /Buttons on screen[^\n]*"Closed"/);
-  assert.match(texts(check), /Sun closed\. Correct\?/);
-  // The exact button words stay instant (no AI).
-  const before = llm.seen.length;
-  await bot.send('admin', { from, text: 'Yes' });
-  assert.equal(llm.seen.length, before);
-  // On to who pays the fee, then the owner says it in words.
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
-  let last = await say('Pickup', 'dl:pickup');
-  if (opts(last).some(id => id.startsWith('prep:'))) last = await say('30–60 min', 'prep:1');
-  await say('Use these', 'pol:use');
-  await say('Use defaults', 'msgs:default');
-  llm.steps.push({ call: [['pickOption', { option: 'My customers pay' }]] });
-  const paid = await say('make my customers pay am abeg');
-  assert.match(texts(paid), /Your customers pay the fee/);
+  await toPlace(bot, from);
+  const doubt = await say('Yaba · 8am to 7am');                                       // a doubtful time: [8am–7pm] [Overnight]
+  assert.deepEqual(opts(doubt), ['hrv:alt', 'hrv:night']);
+  // A sentence at the buttons goes to the AI, which taps the one meant.
+  llm.steps.push({ call: [['pickOption', { option: '8am–7pm' }]] });
+  const next = await say('no o, we close by 7 in the evening');
+  assert.ok(llm.seen.at(-1)!.tools.includes('pickOption'));
+  assert.match(llm.seen.at(-1)!.system, /Buttons on screen[^\n]*"8am–7pm"/);
+  assert.match(texts(next), /✅ Every day 8am–7pm[\s\S]*Do you deliver\?/);
+  // A button's own words stay instant (no AI).
+  const before = llm.seen.length;
+  const fee = await say('Pickup only');
+  assert.equal(llm.seen.length, before);
+  assert.match(texts(fee), /Last thing:/);
+  // Who pays, in words.
+  llm.steps.push({ call: [['pickOption', { option: 'Customers pay' }]] });
+  const ready = await say('make my customers pay am abeg');
+  assert.match(texts(ready), /is ready/);
   assert.equal((await shopOf(from)).feePayer, 'customer');
 });

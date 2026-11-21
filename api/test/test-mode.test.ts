@@ -9,10 +9,11 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   const bot = new Bot();
   const from = '2348036661111';
   const { businessId, last } = await signUp(bot, from, { shop: 'Tolu Treats', product: 'Chin chin 1500' });
-  assert.deepEqual(last.at(-1)!.options, ['test:start', 'ob:connect']);
+  assert.equal((last.at(-1)!.content as any).interactive.type, 'cta_url', 'signup ends on [Connect my number]');
+  assert.match(last.at(-1)!.text, /Reply \*TEST\*/);
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tolu' });
 
-  const start = await say('Test my shop', 'test:start');
+  const start = await say('TEST');
   assert.match(start[0].text, /🧪 \*Test mode\.\* You're now a customer of Tolu Treats/);
   assert.match(start[1].text, /Tolu Treats|Chin chin/, 'the shop greets the owner like a customer');
   assert.ok(start.every(m => m.phoneNumberId === 'pn-admin'), 'replies come from the Relay chat');
@@ -40,10 +41,10 @@ test('TEST: the owner shops in their own shop from the Relay chat; nothing real 
   assert.equal((await db.query('customers', [['businessId', '==', businessId]])).length, 0);
 
   const back = await say('EXIT');
-  assert.match(back[0].text, /You're back with Relay 👋[\s\S]*Ready to connect/);
-  assert.deepEqual(back[0].options, ['ob:connect', 'test:start']);
+  assert.equal(back[0].text, "You're back with Relay 👋 That's exactly what your customers will see.");
+  assert.equal((back[1].content as any).interactive.type, 'cta_url', 'then [Connect my number] again');
   assert.equal((await doc('conversations', `admin_${from}`)).testMode, null);
-  assert.match((await say('Connect now', 'ob:connect'))[0].text, /Is your shop's number on the \*WhatsApp Business\* app/, 'signup carries on where it was');
+  assert.equal(((await say('connect'))[0].content as any).interactive.action.parameters.display_text, 'Connect my number', 'CONNECT shows it any time');
 });
 
 test('TEST: when the owner pays the fee, customers see the shop\'s prices only', async () => {

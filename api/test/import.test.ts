@@ -53,8 +53,11 @@ test('import: an owner pastes a menu, sees the summary, taps Add all', async () 
   const bot = new Bot();
   const o = fx.a.ownerPhone.slice(1);
   const preview = await bot.send('admin', { from: o, text: MENU });
-  assert.match(preview[0].text, /I found \*4 products\* in 2 categories\.\n\n\*Rice Dishes\* \(2\)\n• Jollof rice: ₦2,500[\s\S]*\*Drinks\* \(2\)[\s\S]*Chapman: ₦1,500 \(12 in stock\)/);
-  assert.deepEqual(opts(preview), ['imp:all', 'imp:cancel']);
+  assert.match(preview[0].text, /^Got it! 4 items in 2 sections: Rice Dishes and Drinks\./, 'a short summary: the section names, not the items');
+  assert.deepEqual(opts(preview), ['imp:all', 'imp:list']);
+  const full = await bot.send('admin', { from: o, choice: 'imp:list', text: 'See full list' });
+  assert.match(full[0].text, /\*Rice Dishes\* \(2\)\n• Jollof rice: ₦2,500[\s\S]*\*Drinks\* \(2\)[\s\S]*Chapman: ₦1,500/);
+  assert.deepEqual(full.at(-1)!.options, ['imp:all', 'imp:fix']);
   assert.equal((await listProducts(db, fx.a.id)).length, 1, 'nothing saved before Add all');
 
   assert.match((await bot.send('admin', { from: o, choice: 'imp:all', text: 'Add all 4' }))[0].text, /Done ✅ Added 4 products in 2 categories/);
@@ -68,9 +71,10 @@ test('import: an owner pastes a menu, sees the summary, taps Add all', async () 
 
   // Sending the menu again with new prices updates instead of duplicating; Cancel saves nothing.
   const again = await bot.send('admin', { from: o, text: 'Jollof rice 3000\nFried rice 3000' });
-  assert.match(again[0].text, /All already in your shop: they get the new price\.[\s\S]*Jollof rice: ₦3,000\n/, 'notes first; no (update) on every line when all are updates');
+  assert.match(again[0].text, /All already in your shop: they get the new price\./, 'updates, not duplicates');
   const mixed = await bot.send('admin', { from: o, text: 'Jollof rice 3000\nPuff puff 200' });
-  assert.match(mixed[0].text, /1 already in your shop: it gets the new price[\s\S]*Jollof rice: ₦3,000 \(update\)[\s\S]*Puff puff: ₦200\n/);
+  assert.match(mixed[0].text, /1 already in your shop: it gets the new price/);
+  assert.match((await bot.send('admin', { from: o, choice: 'imp:list', text: 'See full list' }))[0].text, /Jollof rice: ₦3,000 \(update\)[\s\S]*Puff puff: ₦200/);
   assert.match((await bot.send('admin', { from: o, choice: 'imp:cancel', text: 'Cancel' }))[0].text, /Nothing was added/);
   assert.equal(products.find(p => p.name === 'Jollof rice')!.priceKobo, 250_000);
 });
@@ -93,12 +97,12 @@ test('import: a PDF menu is read by the AI and set up during signup', async () =
   const input: Input = { text: '', choiceId: null, imageId: null, audioId: null, document: { id: mediaId, mimeType: 'application/pdf', filename: 'menu.pdf' } };
   const notes: unknown[] = [];
   const read = await handleImport(f, input, '', 'token', async o => { notes.push(o); });
-  assert.match(String(notes[0]), /Reading menu\.pdf/);
+  assert.equal(String(notes[0]), 'Reading it now…');
   assert.equal(seen[0].mimeType, 'application/pdf');
   assert.deepEqual(seen[0].categories, ['General'], 'the model is told the existing categories');
   const text = JSON.stringify(read!.out[0]);
-  assert.match(text, /I found \*2 products\* in 2 categories/);
-  assert.match(text, /No price found for: Market price fish/);
+  assert.match(text, /Got it! 2 items in 2 sections/);
+  assert.match(text, /Market price fish had no price, so I've left it off for now\./);
 
   const added = await handleImport(f, { ...input, document: null, choiceId: 'imp:all' }, '', 'token', async () => {});
   assert.equal(added!.created, 2);

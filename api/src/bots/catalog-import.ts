@@ -119,29 +119,39 @@ async function saveDraft(f: FlowCtx, draft: ImportDraft | null) {
 const defaultCategory = (f: FlowCtx) => BUSINESS_TYPES.find(t => t.id === f.business.category)?.starters[0] ?? 'Products';
 
 // The summary the owner confirms: grouped by category, existing names marked as updates.
+// The short summary (the owner's rule: no long lists unless asked): "Got it! 122 items in 6 sections:
+// Juices, Smoothies, … Zobo and Kunu had no price, so I've left them off for now." [Looks good] [See full list]
 async function preview(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
+  const sections = [...new Set(draft.items.map(i => i.category))];
+  const names = (xs: string[], max: number) => (xs.length <= max ? xs.join(', ').replace(/, ([^,]*)$/, ' and $1') : `${xs.slice(0, max).join(', ')} and ${xs.length - max} more`);
+  const n = draft.items.length;
+  const skipped = draft.skippedNoPrice;
+  const existing = new Set((await listProducts(f.db, f.business.id)).map(p => p.name.toLowerCase()));
+  const updates = draft.items.filter(i => existing.has(i.name.toLowerCase())).length;
+  const text = [
+    `Got it! ${n} item${n === 1 ? '' : 's'}${sections.length > 1 ? ` in ${sections.length} sections: ${names(sections, 8)}` : ''}.`,
+    updates ? `${updates === n ? 'All' : updates} already in your shop: ${updates === 1 ? 'it gets' : 'they get'} the new price.` : '',
+    skipped.length ? `\n${names(skipped, 3)} had no price, so I've left ${skipped.length === 1 ? 'it' : 'them'} off for now.` : '',
+  ].filter(Boolean).join('\n').trim();
+  return [buttons(text.slice(0, 1000), [['imp:all', 'Looks good'], ['imp:list', 'See full list']])];
+}
+
+// [See full list]: everything, by section (split into WhatsApp-size messages), then the choice again.
+async function fullList(f: FlowCtx, draft: ImportDraft): Promise<Out[]> {
   const existing = new Set((await listProducts(f.db, f.business.id)).map(p => p.name.toLowerCase()));
   const groups = new Map<string, ImportItem[]>();
   for (const it of draft.items) groups.set(it.category, [...(groups.get(it.category) ?? []), it]);
-  const updates = draft.items.filter(i => existing.has(i.name.toLowerCase())).length;
   const lines: string[] = [];
   for (const [cat, list] of groups) {
-    lines.push(`\n*${cat}* (${list.length})`);
-    for (const it of list.slice(0, 8)) lines.push(`• ${it.name}: ${formatKobo(it.priceKobo)}${it.stock !== null ? ` (${it.stock} in stock)` : ''}${existing.has(it.name.toLowerCase()) ? ' (update)' : ''}`);
-    if (list.length > 8) lines.push(`…and ${list.length - 8} more`);
+    lines.push(`*${cat}* (${list.length})`);
+    for (const it of list) lines.push(`• ${it.name}: ${formatKobo(it.priceKobo)}${existing.has(it.name.toLowerCase()) ? ' (update)' : ''}`);
+    lines.push('');
   }
-  // The notes go first and the product list last, so cutting to WhatsApp's 1,024 characters only
-  // ever shortens the list.
-  const withPhotos = draft.items.filter(i => i.imageUrl).length;
-  const notes = [
-    withPhotos ? `📷 ${withPhotos === draft.items.length ? 'All' : withPhotos} come${withPhotos === 1 ? 's' : ''} with a photo from your file.` : '',
-    updates ? `${updates === draft.items.length ? 'All' : updates} already in your shop: ${updates === 1 ? 'it gets' : 'they get'} the new price${withPhotos ? ' and photo' : ''}.` : '',
-    draft.skippedNoPrice.length ? `No price found for: ${draft.skippedNoPrice.slice(0, 10).join(', ')}${draft.skippedNoPrice.length > 10 ? '…' : ''}. Add those one by one.` : '',
-  ].filter(Boolean);
-  const list = updates === draft.items.length ? lines.map(l => l.replace(/ \(update\)$/, '')) : lines;
-  let text = `I found *${draft.items.length} product${draft.items.length === 1 ? '' : 's'}* in ${groups.size} categor${groups.size === 1 ? 'y' : 'ies'}.${notes.length ? `\n\n${notes.join('\n')}` : ''}\n${list.join('\n')}`;
-  if (text.length > 1000) text = `${text.slice(0, 990).replace(/\n[^\n]*$/, '')}\n…`; // WhatsApp button messages allow 1,024 characters
-  return [buttons(text, [['imp:all', `Add all ${draft.items.length}`.slice(0, 20)], ['imp:cancel', "Don't add these"]])];
+  const pages: string[] = [];
+  let page = '';
+  for (const l of lines) { if ((page + l).length > 3500) { pages.push(page.trim()); page = ''; } page += `${l}\n`; }
+  if (page.trim()) pages.push(page.trim());
+  return [...pages, buttons('Does that look right?', [['imp:all', 'Looks good'], ['imp:fix', 'Change something']])];
 }
 
 const ADDING_NOTE_MS = 3_000;
@@ -214,9 +224,8 @@ async function offer(f: FlowCtx, draft: ImportDraft): Promise<ImportResult> {
     return { out: [buttons(`Quick check 👀 Your shop is called *${named}*, but this file looks like *${TYPE_WORDS[m.found]}*. Did you send the right file?`, [['imp:mine', "Yes, it's my stock"], ['imp:other', 'Send another file'], ['imp:rename', 'Change shop name']])], created: 0 };
   }
   await saveDraft(f, { ...draft, checked: true });
-  const out = await preview(f, draft);
-  const n = draft.photoCount ?? 0;
-  return { out: draft.photosId && n ? [...out, `📷 Your file has ${n} product photo${n === 1 ? '' : 's'}. I'm matching them to your products now and will add them in about a minute. You don't need to wait: tap *Add all* whenever you're ready.`] : out, created: 0 };
+  // Photos from the file are matched in the background with no message either way.
+  return { out: await preview(f, draft), created: 0 };
 }
 
 async function answerCheck(f: FlowCtx, input: Input, text: string): Promise<ImportResult | null> {
@@ -257,6 +266,15 @@ async function answerCheck(f: FlowCtx, input: Input, text: string): Promise<Impo
 // message isn't a bulk upload, so the caller carries on as usual.
 export async function handleImport(f: FlowCtx, input: Input, text: string, accessToken: string | undefined, notify: (o: Out) => Promise<unknown>, react?: (emoji: string) => Promise<unknown>): Promise<ImportResult | null> {
   if (input.choiceId === 'imp:all') return apply(f, notify);
+  if (input.choiceId === 'imp:list') {
+    if (!f.state.importDraft?.items.length) return { out: ['That list was already added or cancelled. Send it again if you need to.'], created: 0 };
+    return { out: await fullList(f, f.state.importDraft), created: 0 };
+  }
+  // [Change something]: saved first, then fixed in words ("Zobo 700", "delete Zobo").
+  if (input.choiceId === 'imp:fix') {
+    const r = await apply(f, notify);
+    return r.created || r.out.length ? { ...r, out: [...r.out, 'To change a price send it, e.g. *Zobo 700*. To remove one: *delete Zobo*.'] } : r;
+  }
   if (input.choiceId === 'imp:cancel') { await saveDraft(f, null); return { out: ['Cancelled. Nothing was added.'], created: 0 }; }
   const checked = await answerCheck(f, input, text);
   if (checked) return checked;
@@ -288,9 +306,14 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
   }
   if (!f.deps.llm?.readCatalog || !accessToken) return { out: [`I can't read files or photos of lists right now. Paste your list as a message instead, one product per line, e.g.\n${example(f.business)}`], created: 0 };
 
-  await notify(input.document ? `📄 Reading ${input.document.filename}… this can take a few seconds.` : '📷 Reading your menu… this can take a few seconds.');
+  await notify('Reading it now…');
+  // A failed read (download, the AI busy, a slow first call) is tried once more before the owner hears
+  // about it; each failure is logged with its stage.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+  let stage = 'download';
   try {
     const media = await fetchMedia(f.cfg, f.deps, accessToken, file.id);
+    stage = 'read';
     if (media.bytes.byteLength > MAX_CATALOG_BYTES) return { out: ['That file is too big (over 15 MB). Send a smaller PDF or a photo of each page.'], created: 0 };
     const mimeType = input.document ? input.document.mimeType : media.mimeType;
     const cats = (await listCategories(f.db, f.business.id)).map(c => c.name);
@@ -330,10 +353,10 @@ export async function handleImport(f: FlowCtx, input: Input, text: string, acces
     }
     return await offer(f, draft);
   } catch (e) {
-    const error = String(e instanceof Error ? e.message : e);
-    log('warn', 'catalog_read_failed', { businessId: f.business.id, error: error.slice(0, 160) });
-    // Busy or slow AI service: not the owner's file, so say so.
-    if (/GEMINI_FAILED: (429|500|503|timeout)/.test(error)) return { out: ['The reader is busy right now. Please send the same file again in a minute.'], created: 0 };
-    return { out: ["Sorry, I couldn't read that. Try again, send a clearer PDF or photo, or paste the list as a message."], created: 0 };
+    log('warn', 'catalog_read_failed', { businessId: f.business.id, attempt, stage, mime: input.document?.mimeType ?? 'image', error: String(e instanceof Error ? e.message : e).slice(0, 160) });
+    if (attempt === 1) await new Promise(r => setTimeout(r, 1500));
   }
+  }
+  // Still nothing: a way forward that always works.
+  return { out: [`I couldn't read that one. Could you paste the list as text instead? e.g. *${example(f.business)}*`], created: 0 };
 }

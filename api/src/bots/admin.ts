@@ -26,7 +26,7 @@ import { loadMemory, remember, saveMemory } from './agent-memory';
 import { debugNote, recordAgentTurn } from './agent-stats';
 import { waiting } from './owner-home';
 import { ACTION_TOOLS, adminContext, adminSystem, adminTools2, applyUndo, confirmPrompt, mustConfirm, type AdminHelpers, type Undo } from './admin-agent';
-import { firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
+import { connectButton, firstOnboarding, handleOnboarding, normalise, resumeOnboarding } from './onboarding';
 import { addProduct, handleProductInput, parseProduct, type FlowCtx, type ProductFlowState } from './products-flow';
 import { handleImport } from './catalog-import';
 import { answerZoneImport, startZoneImport, ZONES_ASK } from './zones-flow';
@@ -38,6 +38,7 @@ import { getOwner, switchShop } from '../services/owners';
 import { exitTest, runTest, startTest, TEST_EXIT, TEST_START } from './test-mode';
 import { handleSettings } from './settings';
 import { handleShops } from './shops';
+import { matchButton, type ButtonOption } from './button-words';
 
 const CONFIRM_MINUTES = 10;
 
@@ -79,6 +80,15 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
     text = heard;
     voice = true;
   }
+  // Words for a waiting button ("yeah, add them", "ok", "nah leave it") are that tap, before anything
+  // else reads the message (bots/button-words.ts). Buttons older than six hours don't count.
+  const waitingButtons = (conv as { lastButtons?: { at: string; options: ButtonOption[] } | null }).lastButtons;
+  // A command ("hours whenever", "products", "delete zobo") is never read as a button.
+  const isCommand = (t: string) => !!matchAction(t) || (() => { const cmd = parseAdminCommand(t); return !!cmd && !['greet', 'help'].includes(cmd.tool); })();
+  if (!input.choiceId && text.trim() && !input.imageId && !input.document && waitingButtons?.options?.length && Date.now() - Date.parse(waitingButtons.at) < 6 * 3600_000 && !isCommand(text)) {
+    const id = matchButton(text, waitingButtons.options);
+    if (id) { input.choiceId = id; log('info', 'button_words', { choice: id.split(':')[0] }); }
+  }
   const choiceId = input.choiceId;
   if (choiceId === 'yes' || choiceId === 'no') text = choiceId;
 
@@ -103,9 +113,12 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
   const testing = (conv as { testMode?: { businessId: string } | null }).testMode;
   if (testing) {
     if (choiceId === 'test:exit' || choiceId === 'act:exittest' || (!choiceId && TEST_EXIT.test(text.trim()))) {
-      const ready = ob?.step === 'ready';
+      // Set up but not connected yet: back to the [Connect my number] message.
+      const tested = (await db.get(db.doc(C.businesses, testing.businessId))) as Business | null;
+      const ready = !ob && tested?.status === 'onboarding';
       await exitTest(ctx, ready, reply, { quiet: !ready && !!business });
-      if (!ready && business) { const tb = await makeToolCtx(ctx, deps, business, null); return runAction(actionById('menu')!, { ...tb, admin: ctx, reply, setAwaiting: async () => {}, arg: null }); }
+      if (ready && tested) return reply(await connectButton(db, cfg, tested));
+      if (business) { const tb = await makeToolCtx(ctx, deps, business, null); return runAction(actionById('menu')!, { ...tb, admin: ctx, reply, setAwaiting: async () => {}, arg: null }); }
       return;
     }
     return runTest(ctx, deps, testing.businessId);
@@ -134,7 +147,7 @@ export async function handleAdmin(ctx: AdminContext, deps: BotDeps) {
       if (res !== 'pass' || !business) return;
     }
     // A command in the middle of signup (PRODUCTS, delete X, FEE…): answer it, then back to the step.
-    resume = !!ob && ob.stage !== 'live';
+    resume = !!ob && ob.stage !== 'live' && ob.step !== 'ready'; // at "ready" the owner just uses the Admin Bot
   }
   if (!business || business.status === 'deleted') return;
   let held = false; // a YES/NO question was just asked: don't repeat the signup step under it

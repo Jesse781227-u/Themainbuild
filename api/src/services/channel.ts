@@ -154,6 +154,15 @@ export async function resolveInstagramSender(db: Firestore, cfg: Config, busines
   return { igAccountId: String(conn.igAccountId), accessToken: decrypt(String(conn.accessTokenEncrypted), cfg) };
 }
 
+// The reply buttons or list rows in a message ({ id, title }); none for text, links and media.
+export function buttonsIn(content: OutboundContent): { id: string; title: string }[] {
+  if (content.type !== 'interactive') return [];
+  const i = content.interactive as { type?: string; action?: { buttons?: { reply?: { id: string; title: string } }[]; sections?: { rows?: { id: string; title: string }[] }[] } };
+  if (i.type === 'button') return (i.action?.buttons ?? []).map(b => b.reply).filter((r): r is { id: string; title: string } => !!r?.id).map(r => ({ id: r.id, title: r.title }));
+  if (i.type === 'list') return (i.action?.sections ?? []).flatMap(s => s.rows ?? []).map(r => ({ id: r.id, title: r.title }));
+  return [];
+}
+
 export async function send(db: Firestore, cfg: Config, transport: Transport, args: {
   from: { adminBot: true } | { businessId: string }; conversationId: string; to: string; content: OutboundContent; now?: Date;
 }) {
@@ -170,6 +179,12 @@ export async function send(db: Firestore, cfg: Config, transport: Transport, arg
   // A shop number's free-form messages use its free monthly allowance (Smart Reach routes by it).
   if ('businessId' in args.from && args.content.type !== 'template' && args.content.type !== 'reaction') await countServiceMessage(db, args.from.businessId, args.now).catch(() => undefined);
   log('info', 'message_sent', { conversationId: args.conversationId, to: maskPhone(args.to), type: args.content.type });
+  // The owner chat: the buttons now waiting for an answer, so a typed "yeah, add them" can mean the
+  // tap (bots/button-words.ts). A message without buttons clears them.
+  if ('adminBot' in args.from && args.content.type !== 'reaction') {
+    const options = buttonsIn(args.content);
+    await db.set(db.doc(C.conversations, args.conversationId), { lastButtons: options.length ? { at: (args.now ?? new Date()).toISOString(), options } : null }, { merge: true }).catch(() => undefined);
+  }
   // Local testing: keep what would have been sent, so the /dev chat page can show it.
   if (cfg.RELAY_ENV === 'development' && cfg.META_SEND_MODE === 'log') {
     const at = (args.now ?? new Date()).toISOString();

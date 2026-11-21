@@ -38,7 +38,7 @@ export async function handleShops(ctx: AdminContext, business: Business, choiceI
   if (choiceId === 'newshop:yes') {
     const ob = firstOnboarding({ adding: true });
     await db.set(db.doc(C.conversations, ctx.conversationId), { onboarding: { ...ob, lastSeenAt: new Date().toISOString() }, productDraft: null, awaiting: null, editingProductId: null, importDraft: null }, { merge: true });
-    await reply("*Step 1 of 6* · What's the new shop or branch called?");
+    await reply("What's the new shop or branch called?");
     return true;
   }
   return false;

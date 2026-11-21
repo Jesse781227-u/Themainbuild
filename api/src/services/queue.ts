@@ -51,8 +51,10 @@ export async function handleQueueBatch(batch: MessageBatchLike<QueueJob>, env: E
         else msg.ack();
       } else if (job.kind === 'matchPhotos') {
         const llm = deps.llm !== undefined ? deps.llm : geminiProvider(cfg, doFetch);
+        // Silent either way (the owner's rule): matched photos are attached; unmatched ones wait for
+        // the photos nudge after go-live.
         const done = await matchImportPhotos(db, llm, env.PRODUCT_IMAGES, job.id);
-        if (done) await notifyOwner(db, { enqueue: jobs => enqueue(env, jobs) } as BotDeps, { id: done.businessId, ownerPhone: done.ownerPhone }, 'photos_matched', done.text, job.id);
+        if (done) log('info', 'photos_matched', { businessId: done.businessId, result: done.text.slice(0, 80) });
         msg.ack();
       } else {
         msg.ack();

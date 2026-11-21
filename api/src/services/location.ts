@@ -66,6 +66,8 @@ export function parseLocation(raw: string): Location {
 }
 
 export const knownCity = (s: string) => CITIES[s.trim().toLowerCase().replace(/\s+state$/, '')] ?? null;
+// An area Relay knows (with its city): "Gbagada" → "Lagos". Unknown areas are read back to check.
+export const knownArea = (s: string) => AREAS[s.trim().toLowerCase()] ?? (ALIASES[s.trim().toLowerCase()] ? AREAS[ALIASES[s.trim().toLowerCase()].toLowerCase()] ?? null : null);
 
 // "12 Herbert Macaulay Way, Yaba, Lagos — near Tejuosho Market"
 export function describeLocation(l: Partial<Location>) {

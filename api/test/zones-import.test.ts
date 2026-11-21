@@ -110,35 +110,37 @@ test('owner: a photo of the list is read by the AI (delivery mode), names tidied
   const notes: unknown[] = [];
   const out = (await startZoneImport(z, { text: '', choiceId: null, imageId: 'img-zones', audioId: null, document: null } as never, '', async o => { notes.push(o); }))!;
   assert.deepEqual(purposes, ['delivery']);
-  assert.match(String(notes[0]), /Reading your delivery list/);
+  assert.equal(String(notes[0]), 'Reading it now…');
   assert.match(String(out[0]), /^📍 \*2 delivery areas\*, ₦3,000 to ₦3,500:\n• Ikeja GRA: ₦3,500\n• Yaba: ₦3,000$/);
   assert.equal((await doc('conversations', 'zones-photo-test')).zoneDraft.zones.length, 2);
 });
 
-test('signup: the delivery price step also takes the whole list, then moves on', async () => {
-  const bot = new Bot();
-  const from = '2348036660001';
+// Signup (v3) up to "Do you deliver?", with the shop in Ikeja.
+async function toDelivery(bot: Bot, from: string, shop: string) {
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
-  await say('hi'); await say('Zones Shop');
+  await say('hi'); await say(shop);
   const card = await say('Gift box 5000');
   const pick = card.flatMap(m => m.options).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
   if (pick) await say('Category', pick);
   await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', 'btype:other');
-  if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
-  await say('Lagos, Ikeja'); await say('No pickup address', 'loc:nostreet'); await say('Yes', 'loc:ok');
-  await say('8am-9pm'); last = await say('Yes, every day', 'hrs:same');
-  if (last.some(m => m.options.some(id => id.startsWith('prep:')))) await say('30–60 min', 'prep:1');
-  const ask = await say('Pickup & delivery', 'dl:both');
-  assert.match(ask.at(-1)!.text, /Have a full list of areas and prices\? Paste it or send the spreadsheet, PDF or photo\./);
-  const review = await say(TABLE);
-  assert.match(review[0].text, /^📍 \*66 delivery areas\*/);
-  const next = await say('Save all', 'zimp:add');
-  assert.match(next[0].text, /^✅ Saved 66 delivery areas/);
-  assert.ok(next.some(m => m.options.includes('is:yes')), 'on to "other states?"');
+  return say('Ikeja, Lagos · 8am-9pm');
+}
+
+test('signup: the whole list at "Do you deliver?" is saved straight away (no Save/Cancel), then the fee', async () => {
+  const bot = new Bot();
+  const from = '2348036660001';
+  const ask = await toDelivery(bot, from, 'Zones Shop');
+  assert.match(ask.at(-1)!.text, /Do you deliver\? Send your area price list/);
+  const next = await bot.send('admin', { from, text: TABLE, name: 'Tayo' });
+  assert.equal(next.length, 1);
+  assert.match(next[0].text, /^Saved 66 areas, ₦1,000–₦7,000\. I fixed \d+ spellings \(like [^)]+\)\. Send \*DELIVERY\* anytime to check or edit them\.\n\nLast thing:/);
+  assert.doesNotMatch(next[0].text, /Abule Egba/, 'no full list here (DELIVERY shows it)');
   const owner = await doc('ownerPhones', `+${from}`);
   assert.equal((await listZones(db, owner.businessId)).length, 66);
+  const biz = await doc('businesses', owner.businessId);
+  assert.deepEqual([biz.fulfilment, biz.shipsInterstate], ['both', false]);
+  const delivery = await bot.send('admin', { from, text: 'delivery', name: 'Tayo' });
+  assert.match(delivery.map(m => m.text).join('\n'), /Ebute Metta/, 'DELIVERY shows the areas, spellings fixed');
 });
 
 test('zones: a list pasted with its line breaks lost is split back into lines', () => {
@@ -150,29 +152,17 @@ test('zones: a list pasted with its line breaks lost is split back into lines', 
   assert.deepEqual(parseZoneList('Yaba: 3000 Ikeja - 2500 Ajah: 6k')!.map(r => [r.name, r.feeKobo]), [['Yaba', 300_000], ['Ikeja', 250_000], ['Ajah', 600_000]]);
 });
 
-test('signup: the full list also works at "elsewhere in the city?", even squashed into one line', async () => {
+test('signup: a list squashed into one line is saved; the shop\'s own area missing from it is asked once', async () => {
   const bot = new Bot();
   const from = '2348036660002';
+  await toDelivery(bot, from, 'City Zones Shop');
   const say = (text: string, choice?: string) => bot.send('admin', { from, text, choice, name: 'Tayo' });
-  await say('hi'); await say('City Zones Shop');
-  const card = await say('Gift box 5000');
-  const pick = card.flatMap(m => m.options).find(id => id.startsWith('pcat:') && id !== 'pcat:new');
-  if (pick) await say('Category', pick);
-  await say("That's all", 'prod:done');
-  let last = await say('Looks right', 'ok:yes');
-  if (last.some(m => m.options.some(id => id.startsWith('btype:')))) last = await say('Type', 'btype:other');
-  if (last.some(m => m.options.includes('ph:skip'))) last = await say('Skip for now', 'ph:skip');
-  await say('Lagos, Ikeja'); await say('No pickup address', 'loc:nostreet'); await say('Yes', 'loc:ok');
-  await say('8am-9pm'); last = await say('Yes, every day', 'hrs:same');
-  if (last.some(m => m.options.some(id => id.startsWith('prep:')))) await say('30–60 min', 'prep:1');
-  await say('Pickup & delivery', 'dl:both');
-  const city = await say('1500');
-  assert.match(city.at(-1)!.text, /And elsewhere in Lagos\?[\s\S]*Or paste your full list/);
-  const review = await say('Abule Egba: ₦5,000 Ago Palace: ₦4,500 Ajah: ₦6,000 Yaba: ₦3,000');
-  assert.match(review[0].text, /^📍 \*4 delivery areas\*, ₦3,000 to ₦6,000:/);
-  const next = await say('Save all', 'zimp:replace');
-  assert.match(next[0].text, /^✅ Saved 4 delivery areas/);
-  assert.ok(next.some(m => m.options.includes('is:yes')));
+  const own = await say('Abule Egba: ₦5,000 Ago Palace: ₦4,500 Ajah: ₦6,000 Yaba: ₦3,000');
+  assert.equal(own[0].text, 'Saved 4 areas, ₦3,000–₦6,000. Send *DELIVERY* anytime to check or edit them.\n\nHow much is delivery around Ikeja? Type 0 if it\'s free.');
+  const fee = await say('1500');
+  assert.match(fee[0].text, /^✅ ₦1,500 around Ikeja\.\n\nLast thing:/);
+  const owner = await doc('ownerPhones', `+${from}`);
+  assert.equal((await listZones(db, owner.businessId)).length, 5);
 });
 
 test('zones: a PDF list is read from its own text, without the AI; two columns on a line split', async () => {
