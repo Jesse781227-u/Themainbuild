@@ -20,4 +20,6 @@ META_ES_CONFIG_ID=
 META_SEND_MODE=log
 # AI: without these keys the bots still work on plain commands, and voice notes are refused politely.
 GEMINI_API_KEY=
+# Groq free tier (console.groq.com/keys): tried first for chats; Gemini after, and for menus and photos.
+GROQ_API_KEY=
 OPENAI_API_KEY=

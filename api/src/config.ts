@@ -48,6 +48,11 @@ const schema = z.object({
   // or Facebook Login → graph.facebook.com) once the Instagram permission is approved (Y9).
   INSTAGRAM_GRAPH_HOST: z.string().default('graph.instagram.com'),
   GEMINI_API_KEY: optionalString,
+  // Groq's free tier (services/ai-openai.ts): when set, conversations and quick choices try Groq
+  // first and Gemini after; menus, PDFs and photos stay with Gemini.
+  GROQ_API_KEY: optionalString,
+  GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
+  GROQ_FALLBACK_MODEL: z.string().default('llama-3.3-70b-versatile'),
   // TODO(jesse): confirm the Gemini model to use in production.
   GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
   // Tried in order when the main model is busy or too slow (comma separated).

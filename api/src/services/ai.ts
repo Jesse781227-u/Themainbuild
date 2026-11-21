@@ -201,7 +201,8 @@ export function geminiProvider(cfg: Pick<Config, 'GEMINI_API_KEY' | 'GEMINI_MODE
         // call of a step carries all its parts, the others are already in it.
         else if (t.role === 'call') {
           if (Array.isArray(t.raw)) for (const part of t.raw) push('model', part);
-          else if (!(t.raw && (t.raw as { sameStep?: boolean }).sameStep)) push('model', t.raw ?? { functionCall: { name: t.name, args: t.args } });
+          // (a call another provider made, e.g. Groq in the chain, is rebuilt from its name and args)
+          else if (!(t.raw && (t.raw as { sameStep?: boolean }).sameStep)) push('model', (t.raw as { functionCall?: unknown } | undefined)?.functionCall ? t.raw : { functionCall: { name: t.name, args: t.args } });
         }
         else push('user', { functionResponse: { name: t.name, response: { result: t.result } } });
       }

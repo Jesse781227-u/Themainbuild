@@ -3,7 +3,7 @@
 #   npx wrangler secret put <NAME> --env <staging|production>
 # FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY, TOKEN_ENCRYPTION_KEY,
 # META_APP_SECRET, META_VERIFY_TOKEN, ADMIN_BOT_PHONE_NUMBER_ID, ADMIN_BOT_ACCESS_TOKEN,
-# BACHS_API_KEY, BACHS_WEBHOOK_SECRET.
+# BACHS_API_KEY, BACHS_WEBHOOK_SECRET, GEMINI_API_KEY, GROQ_API_KEY (optional), OPENAI_API_KEY.
 # Local development reads them from api/.dev.vars (git-ignored; copy .dev.vars.example).
 #
 # Bindings are not inherited by named environments, so each one repeats them.

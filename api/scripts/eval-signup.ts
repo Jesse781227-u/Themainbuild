@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { geminiProvider } from '../src/services/ai';
+import { chainProviders, groqProvider } from '../src/services/ai-openai';
 import { Bot, clearFirestore, env } from '../test/helpers';
 import { getConfig } from '../src/config';
 
@@ -55,8 +56,12 @@ const SIGNUPS: Record<string, Say[]> = {
 };
 
 async function main() {
-  if (!vars.GEMINI_API_KEY) throw new Error('Set GEMINI_API_KEY in api/.dev.vars.');
-  const llm = geminiProvider({ GEMINI_API_KEY: vars.GEMINI_API_KEY, GEMINI_MODEL: arg('model') ?? vars.GEMINI_MODEL ?? 'gemini-3.7-flash', GEMINI_FALLBACK_MODEL: vars.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-latest,gemini-3.1-flash-lite' });
+  if (!vars.GEMINI_API_KEY && !vars.GROQ_API_KEY) throw new Error('Set GROQ_API_KEY or GEMINI_API_KEY in api/.dev.vars.');
+  const gemini = geminiProvider({ GEMINI_API_KEY: vars.GEMINI_API_KEY, GEMINI_MODEL: arg('model') ?? vars.GEMINI_MODEL ?? 'gemini-3.7-flash', GEMINI_FALLBACK_MODEL: vars.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-latest,gemini-3.1-flash-lite' });
+  // Groq first when its key is in .dev.vars (--only-gemini to skip it), like the app.
+  const groq = process.argv.includes('--only-gemini') ? null : groqProvider({ GROQ_API_KEY: vars.GROQ_API_KEY, GROQ_MODEL: vars.GROQ_MODEL ?? 'openai/gpt-oss-120b', GROQ_FALLBACK_MODEL: vars.GROQ_FALLBACK_MODEL ?? 'llama-3.3-70b-versatile' });
+  const llm = chainProviders([groq, gemini]);
+  console.log(groq ? 'AI: Groq first, then Gemini' : 'AI: Gemini only');
   Object.assign(getConfig(env), { SIGNUP_AGENT_TIMEOUT_MS: 20_000 }); // the free tier is slow at times
   const pace = Number(arg('pace') ?? 4000);
   const only = arg('only')?.split(',');

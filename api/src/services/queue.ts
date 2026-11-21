@@ -6,6 +6,7 @@ import type { Env, MessageBatchLike, QueueJob } from '../env';
 import { log } from '../lib/logger';
 import { transportFor, type Transport } from './channel';
 import { geminiProvider, openAiTranscriber, type LLMProvider, type Transcriber } from './ai';
+import { chainProviders, groqProvider } from './ai-openai';
 import { createBotHandlers } from '../bots';
 import { claimEvent, markFailed, markProcessed } from './inbound';
 import { processOutbox } from './outbox';
@@ -24,7 +25,7 @@ export async function handleQueueBatch(batch: MessageBatchLike<QueueJob>, env: E
   const transport = deps.transport ?? transportFor(cfg, doFetch);
   const handlers = deps.handlers ?? createBotHandlers({
     transport, fetch: doFetch, images: env.PRODUCT_IMAGES, now: deps.now,
-    llm: deps.llm !== undefined ? deps.llm : geminiProvider(cfg, doFetch),
+    llm: deps.llm !== undefined ? deps.llm : chainProviders([groqProvider(cfg, doFetch), geminiProvider(cfg, doFetch)]), // Groq's free tier first, then Gemini
     transcriber: deps.transcriber !== undefined ? deps.transcriber : openAiTranscriber(cfg, doFetch),
     enqueue: jobs => enqueue(env, jobs),
   });
